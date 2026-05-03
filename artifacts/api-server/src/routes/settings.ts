@@ -70,6 +70,27 @@ settingsRouter.get("/integrations", authenticate, authorize("SETTINGS", "view"),
   } catch (err) { _req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
+// KYC Gate toggle (uses integration_status row "KYC_GATE")
+settingsRouter.get("/kyc-gate", authenticate, authorize("SETTINGS", "view"), async (_req, res) => {
+  try {
+    const [row] = await db.select().from(integrationStatusTable).where(eq(integrationStatusTable.name, "KYC_GATE"));
+    res.json({ success: true, data: { enabled: !!row?.enabled } });
+  } catch (err) { _req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
+});
+
+settingsRouter.put("/kyc-gate", authenticate, authorize("SETTINGS", "edit"), async (req, res) => {
+  try {
+    const enabled = !!req.body?.enabled;
+    const [existing] = await db.select().from(integrationStatusTable).where(eq(integrationStatusTable.name, "KYC_GATE"));
+    if (existing) {
+      await db.update(integrationStatusTable).set({ enabled, updatedAt: new Date() }).where(eq(integrationStatusTable.name, "KYC_GATE"));
+    } else {
+      await db.insert(integrationStatusTable).values({ id: newId(), name: "KYC_GATE", enabled, updatedAt: new Date() });
+    }
+    res.json({ success: true, data: { enabled } });
+  } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
+});
+
 // Audit log (SUPER_ADMIN only)
 settingsRouter.get("/audit-log", authenticate, authorize("AUDIT_LOG", "view"), async (_req, res) => {
   try {

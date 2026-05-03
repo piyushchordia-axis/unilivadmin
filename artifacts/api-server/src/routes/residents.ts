@@ -5,6 +5,7 @@ import { eq, sql, ilike, or, and, inArray } from "drizzle-orm";
 import { authenticate } from "../middlewares/auth.js";
 import { getPagination, buildMeta } from "../lib/paginate.js";
 import { newId } from "../lib/id.js";
+import { isKycGateEnabled, residentMeetsActivationRequirements } from "./kyc-esign.js";
 
 const router = Router();
 
@@ -49,6 +50,13 @@ router.get("/", authenticate, async (req, res) => {
 router.post("/", authenticate, async (req, res) => {
   try {
     const body = req.body;
+    const requestedStatus = body.status || "ACTIVE";
+    if (requestedStatus === "ACTIVE" && (await isKycGateEnabled())) {
+      return res.status(400).json({
+        success: false,
+        error: "KYC gate is enabled: new residents cannot be created with status ACTIVE. Create with status NOTICE_PERIOD or CHECKED_OUT, then complete KYC + e-sign before activating.",
+      });
+    }
     const [row] = await db.insert(residentsTable).values({
       id: newId(),
       propertyId: body.propertyId,
@@ -70,7 +78,7 @@ router.post("/", authenticate, async (req, res) => {
       planType: body.planType,
       monthlyRent: body.monthlyRent?.toString(),
       securityDeposit: body.securityDeposit?.toString(),
-      status: body.status || "ACTIVE",
+      status: requestedStatus,
       updatedAt: new Date(),
     }).returning();
     res.status(201).json({ success: true, data: await enrichResident(row) });
@@ -94,6 +102,13 @@ router.get("/:id", authenticate, async (req, res) => {
 router.put("/:id", authenticate, async (req, res) => {
   try {
     const body = req.body;
+    if (body?.status === "ACTIVE" && (await isKycGateEnabled())) {
+      const check = await residentMeetsActivationRequirements(req.params["id"]!);
+      if (!check.ok) {
+        res.status(400).json({ success: false, error: `Cannot activate resident: ${check.reason}` });
+        return;
+      }
+    }
     const updateData: Record<string, unknown> = { updatedAt: new Date() };
     for (const [k, v] of Object.entries(body)) {
       if (["dob","checkInDate","checkOutDate"].includes(k) && v) updateData[k === "dob" ? "dob" : k === "checkInDate" ? "checkInDate" : "checkOutDate"] = new Date(v as string);

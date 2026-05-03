@@ -48,6 +48,8 @@ import {
   Download,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { ResidentKycTab } from "./resident-kyc-tab";
+import { ResidentEsignTab } from "./resident-esign-tab";
 import { CheckoutModal } from "@/components/checkout-modal";
 import jsPDF from "jspdf";
 
@@ -215,6 +217,8 @@ export default function ResidentDetail() {
           <TabsTrigger value="payments">Payments</TabsTrigger>
           <TabsTrigger value="complaints">Complaints</TabsTrigger>
           <TabsTrigger value="documents">Documents</TabsTrigger>
+          <TabsTrigger value="kyc" data-testid="tab-kyc">KYC</TabsTrigger>
+          <TabsTrigger value="esign" data-testid="tab-esign">E-sign</TabsTrigger>
         </TabsList>
 
         <TabsContent value="profile" className="mt-6">
@@ -374,6 +378,14 @@ export default function ResidentDetail() {
               <FileText className="w-4 h-4 mr-2" /> Generate Agreement
             </Button>
           </div>
+        </TabsContent>
+
+        <TabsContent value="kyc" className="mt-6">
+          <ResidentKycTab residentId={id} />
+        </TabsContent>
+
+        <TabsContent value="esign" className="mt-6">
+          <ResidentEsignTab residentId={id} residentName={resident.name} />
         </TabsContent>
       </Tabs>
 

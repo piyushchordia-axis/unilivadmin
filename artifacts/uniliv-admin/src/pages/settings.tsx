@@ -194,6 +194,49 @@ function IntegrationsTab() {
   );
 }
 
+function KycGateTab({ canEdit }: { canEdit: boolean }) {
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  const { data } = useQuery<{ data: { enabled: boolean } }>({
+    queryKey: ["/settings/kyc-gate"], queryFn: () => apiFetch("/settings/kyc-gate"),
+  });
+  const enabled = !!data?.data?.enabled;
+  const update = useMutation({
+    mutationFn: (next: boolean) => apiFetch("/settings/kyc-gate", { method: "PUT", body: JSON.stringify({ enabled: next }) }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["/settings/kyc-gate"] }); toast({ title: "Saved" }); },
+    onError: (e: Error) => toast({ title: e.message, variant: "destructive" }),
+  });
+  return (
+    <Card>
+      <CardHeader><CardTitle>Resident Activation Gate</CardTitle></CardHeader>
+      <CardContent className="space-y-4">
+        <p className="text-sm text-muted-foreground">
+          When enabled, residents cannot be set to <strong>ACTIVE</strong> until they have at least one
+          verified KYC record and one signed e-sign agreement.
+        </p>
+        <div className="flex items-center justify-between p-3 border rounded">
+          <div>
+            <div className="font-medium text-sm">Require verified KYC + signed agreement before activation</div>
+            <div className="text-xs text-muted-foreground">Affects all resident PUTs that set status=ACTIVE.</div>
+          </div>
+          <div className="flex items-center gap-3">
+            <Badge variant={enabled ? "default" : "outline"} data-testid="badge-kyc-gate">{enabled ? "Enabled" : "Disabled"}</Badge>
+            <Button
+              size="sm"
+              variant={enabled ? "destructive" : "default"}
+              disabled={!canEdit || update.isPending}
+              onClick={() => update.mutate(!enabled)}
+              data-testid="button-toggle-kyc-gate"
+            >
+              {enabled ? "Disable" : "Enable"}
+            </Button>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function Settings() {
   const { can } = usePermissions();
   const canEdit = can("SETTINGS", "edit");
@@ -207,12 +250,14 @@ export default function Settings() {
           <TabsTrigger value="routing">Routing</TabsTrigger>
           <TabsTrigger value="notifications">Notifications</TabsTrigger>
           <TabsTrigger value="integrations">Integrations</TabsTrigger>
+          <TabsTrigger value="kyc-gate" data-testid="tab-kyc-gate">KYC Gate</TabsTrigger>
         </TabsList>
         <TabsContent value="general"><GeneralTab /></TabsContent>
         <TabsContent value="sla"><SLATab canEdit={canEdit} /></TabsContent>
         <TabsContent value="routing"><RoutingTab canEdit={canEdit} /></TabsContent>
         <TabsContent value="notifications"><NotificationsTab /></TabsContent>
         <TabsContent value="integrations"><IntegrationsTab /></TabsContent>
+        <TabsContent value="kyc-gate"><KycGateTab canEdit={canEdit} /></TabsContent>
       </Tabs>
     </>
   );

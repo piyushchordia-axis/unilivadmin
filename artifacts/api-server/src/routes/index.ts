@@ -17,6 +17,7 @@ import { templatesRouter, commsRouter } from "./communications.js";
 import { notificationsRouter } from "./notifications.js";
 import { executiveRouter } from "./executive.js";
 import { settingsRouter } from "./settings.js";
+import { kycRouter, esignRouter, esignPublicRouter } from "./kyc-esign.js";
 
 const router: IRouter = Router();
 
@@ -53,5 +54,8 @@ router.use("/communications", commsRouter);
 router.use("/notifications", notificationsRouter);
 router.use("/executive", executiveRouter);
 router.use("/settings", settingsRouter);
+router.use(kycRouter);
+router.use(esignRouter);
+router.use("/esign", esignPublicRouter);
 
 export default router;

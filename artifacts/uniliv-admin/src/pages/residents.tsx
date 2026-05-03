@@ -20,6 +20,9 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Plus, Eye, Users, UserCheck, UserX, AlertTriangle, Search, Download, Receipt } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { apiFetch } from "@/lib/api-fetch";
+import { Badge } from "@/components/ui/badge";
 import { useLocation } from "wouter";
 import { ResidentFormModal } from "@/components/resident-form-modal";
 import { BulkRentModal } from "@/components/bulk-rent-modal";
@@ -106,6 +109,11 @@ export default function Residents() {
     },
     { accessorKey: "status", header: "Status", cell: ({ row }: any) => <StatusBadge status={row.original.status} /> },
     {
+      id: "compliance",
+      header: "KYC / E-sign",
+      cell: ({ row }: any) => <ComplianceCell residentId={row.original.id} />,
+    },
+    {
       id: "actions",
       header: "Actions",
       cell: ({ row }: any) => (
@@ -181,6 +189,33 @@ export default function Residents() {
 
       <ResidentFormModal open={createOpen} onOpenChange={setCreateOpen} />
       <BulkRentModal open={bulkOpen} onOpenChange={setBulkOpen} />
+    </div>
+  );
+}
+
+function ComplianceCell({ residentId }: { residentId: string }) {
+  const { data: kyc } = useQuery<{ data: Array<{ status: string }> }>({
+    queryKey: ["kyc", residentId],
+    queryFn: () => apiFetch(`/residents/${residentId}/kyc`),
+    staleTime: 60_000,
+  });
+  const { data: esign } = useQuery<{ data: Array<{ status: string }> }>({
+    queryKey: ["esign", residentId],
+    queryFn: () => apiFetch(`/residents/${residentId}/esign`),
+    staleTime: 60_000,
+  });
+  const kycVerified = (kyc?.data || []).some((r) => r.status === "VERIFIED");
+  const kycPending = !kycVerified && (kyc?.data || []).some((r) => r.status === "PENDING");
+  const esignSigned = (esign?.data || []).some((r) => r.status === "SIGNED");
+  const esignPending = !esignSigned && (esign?.data || []).some((r) => ["PENDING", "VIEWED"].includes(r.status));
+  return (
+    <div className="flex gap-1">
+      <Badge variant={kycVerified ? "success" : kycPending ? "warning" : "outline"} className="text-[10px]">
+        KYC {kycVerified ? "✓" : kycPending ? "…" : "—"}
+      </Badge>
+      <Badge variant={esignSigned ? "success" : esignPending ? "warning" : "outline"} className="text-[10px]">
+        Sign {esignSigned ? "✓" : esignPending ? "…" : "—"}
+      </Badge>
     </div>
   );
 }

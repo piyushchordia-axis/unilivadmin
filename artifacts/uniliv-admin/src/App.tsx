@@ -10,6 +10,7 @@ import { useAuthStore } from "@/lib/store";
 
 // Pages
 import Login from "@/pages/login";
+import EsignSignPage from "@/pages/esign-sign";
 import Dashboard from "@/pages/dashboard";
 import Properties from "@/pages/properties";
 import PropertyDetail from "@/pages/property-detail";
@@ -72,6 +73,7 @@ function Router() {
   return (
     <Switch>
       <Route path="/login" component={Login} />
+      <Route path="/esign/sign/:token" component={EsignSignPage} />
       <Route path="/">{() => <ProtectedRoute component={Dashboard} />}</Route>
       <Route path="/properties">{() => <ProtectedRoute component={Properties} />}</Route>
       <Route path="/properties/:id">{() => <ProtectedRoute component={PropertyDetail} />}</Route>
