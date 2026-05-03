@@ -1,0 +1,127 @@
+  Build Kitchen Operations, Sales CRM, and Learning & Development modules.
+  
+  ═══════════════════════════════════════════════════════
+  KITCHEN — RECIPES (/kitchen/recipes)
+  ═══════════════════════════════════════════════════════
+  LIST: Name, Category, Meal Type (B/L/S/D), Veg/Non-Veg tag, Allergens chips, Active
+  ADD/EDIT RECIPE FormModal:
+  - Name*, Category (Breakfast/Lunch/Snack/Dinner/Beverage), Meal Type*, Is Veg toggle
+  - Allergens multi-select: Gluten, Dairy, Nuts, Egg, Soy, Seafood, None
+  - Ingredients (dynamic rows): Ingredient Name, Quantity, Unit, Vendor-supplied toggle
+  - Preparation method (textarea)
+  - Photo upload
+  
+  ═══════════════════════════════════════════════════════
+  KITCHEN — MENU PLANNING (/kitchen/menu)
+  ═══════════════════════════════════════════════════════
+  - Property selector at top (each property has independent menu)
+  - Week calendar grid (Mon–Sun × Breakfast/Lunch/Snack/Dinner)
+  - Each cell shows recipe name (if planned) or 'Click to add' placeholder
+  - Click cell → opens recipe picker (searchable dropdown of recipes by meal type)
+  - Week navigation: prev/next week buttons
+  - 'Publish Menu' button: status = PUBLISHED → visible to residents in mobile app
+  - 'Copy Last Week' button: duplicates previous week's plan as new draft
+  - 'Generate Indent' button: calculates required raw materials based on
+    menu × expected headcount (from property occupancy) → creates procurement indent
+  
+  DAILY PRODUCTION VIEW:
+  - Today's menu for selected property: each meal slot → recipe → ingredient list
+  - Dispatch log: mark each meal slot as dispatched with time and quantity
+  - Wastage log: remaining quantity after service
+  - Food receiving: log raw material delivery confirmation (item, qty, expiry)
+  
+  KITCHEN ANALYTICS:
+  - Feedback trends: avg rating by recipe (bar chart, last 4 weeks)
+  - Wastage trends: kg wasted per week
+  - Menu diversity: veg vs non-veg vs special count
+  
+  ═══════════════════════════════════════════════════════
+  SALES CRM (/sales)
+  ═══════════════════════════════════════════════════════
+  PRIMARY VIEW — KANBAN PIPELINE:
+  - Columns: New | Contacted | Visit Scheduled | Visit Done | Negotiating | Converted | Lost
+  - Each card: Lead name, property interested in, source tag, days in stage, follow-up date badge
+    Red badge if follow-up date is past
+  - Drag to move stage
+  - 'Add Lead' button on top
+  
+  ADD LEAD FormModal:
+  - Name*, Phone*, Email, Source* (Website/WhatsApp/Instagram/Cold Call/Referral/College/Other)
+  - Property Interested In (dropdown), Budget range, Move-in date (approx)
+  - Assign To (sales staff dropdown — auto-assign if only one)
+  - Notes
+  
+  LEAD DETAIL SLIDE-OVER:
+  - Lead info, source badge, assigned to avatar
+  - Stage progress bar
+  - 'Schedule Visit' button: date/time picker → sets visitDate, stage → VISIT_SCHEDULED
+    Sends confirmation SMS to lead via Twilio
+  - 'Visit Done' button → opens outcome modal:
+    Interested (Yes/Maybe/No), Feedback, Reason if No
+  - 'Generate Quotation' button: room type + plan → generates PDF quote
+  - 'Convert to Resident' button (active when stage = NEGOTIATING or later):
+    Opens resident onboarding pre-filled with lead data → creates Resident record
+    Lead stage → CONVERTED, convertedAt = now
+  - 'Mark Lost' button: requires lost reason (Price/Location/Amenities/Timing/Competitor/Other)
+  - Activity log: all stage changes, notes, calls logged chronologically
+  - 'Add Note' button: appends timestamped note to activity log
+  - 'Set Follow-up' button: date + reminder note
+  
+  SALES LIST VIEW (toggle):
+  - DataTable with all filters: Property, Stage, Source, Assigned To, Date Range
+  - Export CSV
+  
+  SALES DASHBOARD (/sales/dashboard):
+  - My Pipeline (for sales exec) or All Staff (for admin)
+  - Funnel chart: lead count at each stage
+  - Conversion rate: leads → converted %
+  - By source: bar chart of lead volume by source
+  - Individual performance table: exec name, assigned, converted, rate
+  
+  PROPERTY LEADS (/sales/property-leads):
+  - Scouting tracker for property acquisition team
+  - Cards view: each property lead as card on map (use Leaflet.js with OpenStreetMap)
+  - Add Lead: Name/Address*, City*, Owner Name/Phone, Total Area, Asking Rent, Bed Count, Stage
+  - Stage flow: Scouting → Site Visit → Feasibility → Management Review → Deal Closed → Rejected
+  - Upload photos and documents per property lead
+  - Financial viability inputs: expected occupancy %, rent per bed →
+    auto-calculates projected monthly revenue, opex estimate, EBITDA
+  
+  ═══════════════════════════════════════════════════════
+  LEARNING & DEVELOPMENT (/lnd)
+  ═══════════════════════════════════════════════════════
+  CONTENT LIBRARY (/lnd/courses):
+  - Grid of course cards: thumbnail/icon, title, category, mandatory badge, expiry date
+  - Filters: Category, Target Role, Mandatory Only
+  - 'Add Course' FormModal:
+    Title*, Description*, Category*, Target Roles (multi-select), Is Mandatory toggle,
+    Expiry Date, Content Type (Video/PDF/SCORM)
+    File upload → stores to Supabase Storage (video URL, PDF URL)
+    Thumbnail upload
+  
+  COURSE DETAIL PAGE (/lnd/courses/:id):
+  - Course info header, assigned employee count, completion rate donut
+  - Enrollments tab: table of enrolled employees — name, progress %, completed (Y/N), score
+  - 'Enroll Employees' button: multi-select employees by role/department → bulk enroll
+  - 'Send Reminder' button: email/SMS to all incomplete enrollments
+  
+  EMPLOYEE LEARNING PORTAL (filtered view for employees):
+  - My Courses: assigned and available courses
+  - Progress bars per course
+  - 'Continue' button links to content viewer
+  
+  CONTENT VIEWER:
+  - PDF: embedded PDF viewer (PDF.js) — no download button shown
+  - Video: HTML5 video player — no download attribute, max playback 1.5x
+  - Both: watermark overlay with employee name + ID in corner
+  - Progress tracked: on video — 80% watched = marked complete
+    On PDF — scrolled to end = marked complete
+  - Quiz tab (if quiz added to course): MCQ questions, submit for scoring
+    Minimum pass score check, show pass/fail, allow retake if failed
+  
+  L&D REPORTS:
+  - Completion rate by department (bar chart)
+  - Mandatory course compliance: % completed across all mandatory courses
+  - Certificate list: all completed + certified employees with download
+  
+  Build all three modules with real APIs. All charts with Recharts.

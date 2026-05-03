@@ -33,6 +33,8 @@ import Kitchen from "@/pages/kitchen";
 import MenuPlanning from "@/pages/menu-planning";
 import Leads from "@/pages/leads";
 import Courses from "@/pages/courses";
+import CourseDetail from "@/pages/course-detail";
+import SalesDashboard from "@/pages/sales-dashboard";
 import PropertyLeads from "@/pages/property-leads";
 import Ledger from "@/pages/ledger";
 import Payments from "@/pages/payments";
@@ -82,7 +84,6 @@ function Router() {
       <Route path="/attendance">{() => <ProtectedRoute component={Attendance} />}</Route>
       <Route path="/leaves">{() => <ProtectedRoute component={Leaves} />}</Route>
       <Route path="/recruitment">{() => <ProtectedRoute component={Recruitment} />}</Route>
-      <Route path="/courses">{() => <ProtectedRoute component={Courses} />}</Route>
       
       <Route path="/vendors">{() => <ProtectedRoute component={Vendors} />}</Route>
       <Route path="/vendors/:id">{() => <ProtectedRoute component={VendorDetail} />}</Route>
@@ -96,7 +97,10 @@ function Router() {
       <Route path="/menu-planning">{() => <ProtectedRoute component={MenuPlanning} />}</Route>
       
       <Route path="/leads">{() => <ProtectedRoute component={Leads} />}</Route>
+      <Route path="/sales/dashboard">{() => <ProtectedRoute component={SalesDashboard} />}</Route>
       <Route path="/property-leads">{() => <ProtectedRoute component={PropertyLeads} />}</Route>
+      <Route path="/courses">{() => <ProtectedRoute component={Courses} />}</Route>
+      <Route path="/courses/:id">{() => <ProtectedRoute component={CourseDetail} />}</Route>
       
       <Route path="/ledger">{() => <ProtectedRoute component={Ledger} />}</Route>
       <Route path="/payments">{() => <ProtectedRoute component={Payments} />}</Route>

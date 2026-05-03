@@ -1,0 +1,149 @@
+Build the final layer: analytics, role-based access control, notifications,
+  and production polish.
+  
+  ═══════════════════════════════════════════════════════
+  ROLE-BASED ACCESS CONTROL
+  ═══════════════════════════════════════════════════════
+  Implement on BOTH frontend and backend:
+  
+  Role → Allowed modules (sidebar shows only these):
+  
+  SUPER_ADMIN: ALL modules, ALL properties
+  HR_MANAGER: Employees, Recruitment, L&D, Settings (users only)
+  OPERATIONS_MANAGER: Properties, Residents, Complaints, Laundry, Communications
+    (only their assigned property unless SUPER_ADMIN)
+  PROCUREMENT_MANAGER: Vendors, Indents, Purchase Orders, GRN, Inventory
+  KITCHEN_MANAGER: Recipes, Menu Planning, Kitchen dashboard, Inventory (read-only)
+  PROJECTS_MANAGER: Property Leads, Finance (read-only), Procurement (read-only)
+  PROPERTY_ACQUISITION: Property Leads only
+  FINANCE: Residents (ledger + payments), Finance dashboards, Procurement (read-only)
+  SALES_EXECUTIVE: Sales CRM (own leads only), Property Leads (read-only)
+  WARDEN: Properties (own only), Residents (own property), Complaints (own property),
+    Laundry (own property), Communications (view + send to own property)
+  VENDOR_RESTRICTED: [future phase — placeholder in sidebar]
+  AUDIT_READONLY: All modules, read-only (no create/edit/delete buttons shown)
+  
+  Frontend implementation:
+  - usePermissions() hook: returns { canView, canCreate, canEdit, canDelete } for current route
+  - Wrap every action button with permission check
+  - Sidebar filters navigation items based on role
+  - Route guard: redirect to /403 if user navigates to unauthorized route
+  - 403 page: friendly 'Access Denied' page with back button
+  
+  Backend implementation:
+  - authorize() middleware on all routes: accepts allowed roles array
+  - Property scoping: if user has propertyId, all queries filtered to their property
+    (except SUPER_ADMIN and roles with multi-property access)
+  
+  ═══════════════════════════════════════════════════════
+  USERS & ROLES MANAGEMENT (/settings/users)
+  ═══════════════════════════════════════════════════════
+  - DataTable: Name, Email, Role badge, Property (if scoped), Status, Last Login, Actions
+  - 'Add User' FormModal: Name*, Email*, Role*, Property (optional, for scoped roles),
+    Temp password (auto-generated, shown once, user must change on first login)
+  - Edit: change role, property assignment, active status
+  - Deactivate (soft delete) — cannot hard delete users
+  - First-login password change enforcement: if user.firstLogin = true → redirect to /change-password
+  
+  ═══════════════════════════════════════════════════════
+  NOTIFICATION SYSTEM
+  ═══════════════════════════════════════════════════════
+  Create Notification model in Prisma:
+    id, userId, title, body, type, link, isRead, createdAt
+  
+  Types of auto-generated notifications:
+  - COMPLAINT_SLA_BREACH: to assignedTo user + their manager
+  - PAYMENT_OVERDUE: to operations manager of that property (generated daily at 9am)
+  - LEAVE_APPROVAL_PENDING: to manager when employee applies leave
+  - INDENT_APPROVAL_PENDING: to procurement manager when indent submitted
+  - LOW_STOCK: to procurement manager when item below min stock
+  - DOCUMENT_EXPIRY: to admin when vendor compliance doc expiring in 30 days
+  - LEASE_RENEWAL: to property acquisition when property agreement expiry < 60 days
+  
+  Implementation:
+  - createNotification(userId, {title, body, type, link}) utility function
+  - Call this from relevant service functions (complaint SLA checker, etc.)
+  - GET /api/notifications → returns last 20 for current user
+  - PATCH /api/notifications/:id/read → mark read
+  - PATCH /api/notifications/read-all → mark all read
+  - Bell icon in topbar: live unread count (polling every 30s with React Query refetchInterval)
+  - Notification dropdown: list of notifications, click → navigate to link, mark as read
+  
+  ═══════════════════════════════════════════════════════
+  EXECUTIVE ANALYTICS DASHBOARD (/dashboard/executive)
+  ═══════════════════════════════════════════════════════
+  (Visible to SUPER_ADMIN and FINANCE roles)
+  
+  Row 1 — 6 KPI cards:
+    Total Properties | Total Residents | Occupancy % | Revenue This Month |
+    Outstanding Dues | Open Complaints
+  
+  Row 2 — Revenue chart:
+    Area chart: Monthly revenue (rent + food + laundry) for last 12 months
+    Stacked by revenue type
+  
+  Row 3 — 3 charts:
+    Occupancy by Property (horizontal bar) |
+    Complaint Resolution Rate — donut (resolved/total this month) |
+    Lead Conversion Funnel — funnel chart
+  
+  Row 4 — HR snapshot:
+    Headcount by department (bar) | Attrition this year (line) | Leave today count
+  
+  Row 5 — tables:
+    Top 5 overdue residents (name, property, amount, days overdue)
+    Top 5 SLA-breached complaints (ticket, property, category, breach duration)
+  
+  All data from dedicated /api/dashboard/* endpoints. Filterable by property.
+  
+  ═══════════════════════════════════════════════════════
+  SETTINGS & CONFIGURATION (/settings)
+  ═══════════════════════════════════════════════════════
+  Tabs: General | SLA Config | Complaint Routing | Notifications | Integrations
+  
+  SLA Config: Table of category → SLA hours (editable in-place)
+  Complaint Routing: Property × Category → Assigned User (dropdown) — saved as config
+  Notification Settings: Toggle which notification types are active
+  Integrations: Show status of: Razorpay (connected/not), Twilio, SMTP — with test button
+  
+  ═══════════════════════════════════════════════════════
+  PRODUCTION POLISH — apply to the entire application
+  ═══════════════════════════════════════════════════════
+  1. LOADING STATES: Every page has skeleton loaders while fetching
+  2. ERROR STATES: Network errors show toast (react-hot-toast) + retry option
+  3. EMPTY STATES: Every empty table/list has illustration + helpful message + CTA
+  4. FORM FEEDBACK: Submit buttons show spinner, disabled during submit
+     Success shows green toast, error shows red toast with message
+  5. RESPONSIVE: All pages work on tablets (768px+). Sidebar collapses to icon-only on tablet.
+  6. KEYBOARD NAVIGATION: All modals closeable with Escape key
+  7. BREADCRUMBS: On all detail pages (e.g. Residents > John Doe > Ledger)
+  8. PRINT STYLES: /residents/:id/ledger has print button → clean printable ledger
+  9. EXPORT: Every DataTable has 'Export CSV' that downloads current filtered data
+  10. SEARCH: Global search in topbar searches residents, employees, complaints simultaneously
+  11. AUDIT LOG: Every create/update/delete action logs to an audit_log table:
+      { userId, action, entity, entityId, changes (JSON diff), timestamp }
+      Viewable in /settings/audit-log (SUPER_ADMIN only)
+  12. SESSION EXPIRY: Show 'Session expiring in 5 min' banner, click to extend
+  13. DARK MODE: Toggle in topbar — persists to localStorage
+  14. FAVICON: 'U' in orange circle
+  15. PAGE TITLES: Each page sets document.title = 'Page Name | Uniliv Admin'
+  
+  ═══════════════════════════════════════════════════════
+  DEPLOYMENT CONFIGURATION
+  ═══════════════════════════════════════════════════════
+  Configure Replit deployment:
+  - Build command: npm run build (builds client → server/public, builds server)
+  - Run command: node server/dist/index.js
+  - Health check endpoint: GET /api/health → { status: 'ok', timestamp }
+  - Serve client build from Express: app.use(express.static('public'))
+    Catch-all route: serve index.html for all non-API routes (SPA routing)
+  - Set all required environment variables in Replit Secrets
+  - Add CORS: allow Replit deployment URL in production
+  
+  Create a README.md with:
+  - Setup instructions (clone, npm install, env vars, prisma migrate, seed)
+  - All environment variables listed with descriptions
+  - Module overview table
+  - Default login credentials
+  
+  This is the final prompt. After this, the complete Uniliv Admin Portal is production-ready.
