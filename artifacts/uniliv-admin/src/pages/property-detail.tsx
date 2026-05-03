@@ -959,7 +959,7 @@ export default function PropertyDetail() {
             ) : (
               <Card>
                 <CardContent className="p-0">
-                  <DataTable<BookingDto, unknown>
+                  <DataTable
                     columns={bookingColumns({
                       onEdit: (b) => {
                         setEditingBooking(b);
