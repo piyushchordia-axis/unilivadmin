@@ -1,8 +1,9 @@
 # UNILIV Admin Portal — Full Project Documentation
 
 A multi-property co-living management platform covering operations, residents, complaints,
-laundry, HRMS, recruitment, learning & development, procurement, kitchen, sales CRM, finance, and
-executive analytics. Built as a pnpm monorepo with React + Vite (web), Express + Drizzle (API), and
+laundry, HRMS, recruitment, learning & development, procurement, kitchen, sales CRM, finance,
+KYC + e-sign, facility/electricity/IoT operations, bookings for nightly stays, and executive
+analytics. Built as a pnpm monorepo with React + Vite (web), Express + Drizzle (API), and
 PostgreSQL.
 
 ---
@@ -255,9 +256,9 @@ in the relevant route handlers.
 Schema lives in `lib/db/src/schema/` and is split into 7 files:
 
 ### core.ts
-`properties`, `rooms`, `users`, `refreshTokens`, `residents`, `ledgerEntries`, `payments`,
-`complaints`, `complaintEvents`, `escalations`, `laundryBatches`, `messageTemplates`,
-`announcements`, `communicationLogs`.
+`properties` (+ `portfolioType`, `portfolioAttributes`), `rooms`, `users`, `refreshTokens`,
+`residents`, `ledgerEntries`, `payments`, `complaints`, `complaintEvents`, `escalations`,
+`laundryBatches`, `messageTemplates`, `announcements`, `communicationLogs`, `bookings`.
 
 ### hrms.ts
 `employees`, `attendance`, `leaves`, `leaveBalances`, `performanceNotes`, `jobRequisitions`,
@@ -279,11 +280,24 @@ Schema lives in `lib/db/src/schema/` and is split into 7 files:
 ### system.ts
 `notifications`, `auditLog`, `slaConfig`, `complaintRouting`, `integrationStatus`.
 
+### kyc.ts
+`kycRequests`, `kycEvents`, `esignRequests`, `esignEvents` (with `signedPdf` text column).
+
+### finance.ts
+`billingCycles`, `billingRuns`, `reminderRules`, `reminderLogs`, `bankImports`,
+`bankStatementLines`, `expenseCategories`, `expenses`, `expenseTransitions`.
+
+### operations.ts
+`facilityAssets`, `facilitySchedules`, `facilityLogs`, `electricityTariffs`, `electricityMeters`,
+`electricityReadings`, `residentAttendance`, `outPasses`, `iotDevices`, `iotReadings`.
+
 ### Enums
 
 `property_status`, `room_type`, `room_status`, `user_role`, `resident_status`, `ledger_type`,
 `payment_mode`, `payment_status`, `complaint_category`, `complaint_status`, `priority`,
-`laundry_status`.
+`laundry_status`, `portfolio_type` (CO_LIVING, STUDENT_HOUSING, SERVICED_APARTMENTS, PG,
+COLLEGE_HOSTEL, COWORKING, MANAGED_OFFICE), `booking_status`, `rate_period`, `kyc_status`,
+`esign_status`.
 
 ### Conventions
 
@@ -298,6 +312,10 @@ Schema lives in `lib/db/src/schema/` and is split into 7 files:
 pnpm --filter @workspace/db run push        # interactive
 pnpm --filter @workspace/db run push-force  # CI / force apply
 ```
+
+Numbered SQL migrations live under `lib/db/migrations/` (e.g. `0001_portfolio_types.sql`,
+`0002_finance_automation.sql`, `0004_bookings.sql`) for production-style apply via the post-merge
+script. See `lib/db/migrations/README.md` for the workflow.
 
 ---
 
@@ -343,6 +361,7 @@ All routes guarded by `authorize("EXECUTIVE_DASHBOARD", "view")`.
 | GET | `/executive/headcount`             | Headcount by department + leaves today |
 | GET | `/executive/top-overdue`           | Top 5 overdue residents |
 | GET | `/executive/top-sla-breached`      | Top 5 breached complaints |
+| GET | `/executive/portfolio-breakdown`   | Per-portfolio-type counts + occupancy |
 
 ### Notifications
 
@@ -435,6 +454,49 @@ broadcast messages, including `POST /communications/preview` and `POST /communic
 
 - Full user CRUD; `PUT /users/:id` for role/property/active changes.
 
+### KYC & E-sign — `/residents/:id/kyc`, `/residents/:id/esign`, `/kyc`, `/esign`
+
+- `GET|POST /residents/:id/kyc` — list / create KYC request (accepts `idImageFront`,
+  `idImageBack`, `selfieImage` as base64 dataURLs).
+- `POST /kyc/:id/verify` — admin verify with `{status: VERIFIED|REJECTED|REOPENED, rejectionReason?}`.
+- `GET /kyc/:id`, `GET /kyc/:id/events` — KYC detail + audit trail.
+- `GET|POST /residents/:id/esign` — list / create e-sign request.
+- `GET /esign/:id` — admin detail with signer URL.
+- `GET /esign/:id/pdf` — download generated PDF (signed document with embedded signature).
+- `POST /esign/:id/void` — void an unsigned request.
+- `GET|POST /esign/sign/:token` — public signer page (no auth, token-gated).
+- `GET|PUT /settings/kyc-gate` — toggle the activation gate.
+
+### Bookings — `/bookings` (nightly / weekly stays)
+
+- `GET /bookings` — list with filters (property, room, status, date range).
+- `POST /bookings` — create with overlap protection (CONFIRMED + CHECKED_IN, exclusive bounds).
+- `GET /bookings/:id`, `PUT /bookings/:id`, `DELETE /bookings/:id` (soft-cancel → status=CANCELLED).
+- `GET /bookings/availability?propertyId&from&to` — 14-day availability grid by room.
+- Invoice computation pulls nightly/weekly rates from the property's `portfolio_attributes`.
+
+### Finance automation — `/billing-cycles`, `/reminders`, `/banking`, `/expenses`
+
+- `GET|POST /billing-cycles`, `GET /billing-cycles/:id/runs`, `POST /billing-cycles/:id/run`
+  — recurring MONTHLY / WEEKLY / CUSTOM_DAYS billing with scheduler catch-up.
+- `GET|POST /reminders/rules`, `GET /reminders/logs`, `POST /reminders/send/:residentId`
+  — INAPP / EMAIL / SMS reminder dispatch (writes to `notifications` + `communication_logs`).
+- `POST /banking/imports` — CSV import; `POST /banking/lines/:id/reconcile`
+  — match a statement line to a ledger entry (auto-flips ledger to RECONCILED).
+- `GET|POST /expenses`, `POST /expenses/:id/transition` — expense state machine
+  (DRAFT → SUBMITTED → APPROVED → PAID / REJECTED) with audit and approval gating.
+- `GET|POST /expense-categories`.
+
+### Operations — `/facility`, `/electricity`, `/resident-attendance`, `/out-passes`, `/iot`
+
+- Facility: `/facility/assets`, `/facility/schedules`, `/facility/logs` (preventive maintenance).
+- Electricity: `/electricity/tariffs`, `/electricity/meters` (with room/resident assignment),
+  `/electricity/readings` (+ bulk upload mapping meterNo→meterId), `POST /electricity/post-to-ledger`.
+- Resident attendance: `POST /resident-attendance/mark` with `items[]` payload, 120-day history.
+- Out-passes: `POST /out-passes`, `PUT /out-passes/:id` (approve/reject), `POST /out-passes/:id/return`.
+- IoT: `/iot/devices`, `GET /iot/latest` (joined with property/room), `/iot/readings`,
+  `POST /iot-ingestion` (ingestion endpoint).
+
 > The full per-route surface is generated from `lib/api-spec/openapi.yaml`. Run codegen to
 > refresh React Query hooks: `pnpm --filter @workspace/api-spec run codegen`.
 
@@ -474,6 +536,15 @@ wrapped in `<ProtectedRoute>` (auth check) → `<Layout>` (chrome) → `<PageGua
 | `/ledger`                    | `pages/ledger`             | LEDGER |
 | `/payments`                  | `pages/payments`           | PAYMENTS |
 | `/users`                     | `pages/users`              | USERS |
+| `/billing-cycles`            | `pages/billing-cycles`     | LEDGER |
+| `/reminders`                 | `pages/reminders`          | LEDGER |
+| `/banking`                   | `pages/banking`            | PAYMENTS |
+| `/expenses`                  | `pages/expenses`           | LEDGER |
+| `/facility`                  | `pages/facility`           | PROPERTIES |
+| `/electricity`               | `pages/electricity`        | PROPERTIES |
+| `/resident-attendance`       | `pages/resident-attendance`| RESIDENTS |
+| `/iot`                       | `pages/iot`                | PROPERTIES |
+| `/esign/sign/:token`         | `pages/esign-sign`         | (public — outside ProtectedRoute) |
 | `/settings`                  | `pages/settings`           | SETTINGS |
 | `/403`                       | `pages/forbidden`          | (any) |
 | `*`                          | `pages/not-found`          | (any) |
@@ -484,13 +555,29 @@ wrapped in `<ProtectedRoute>` (auth check) → `<Layout>` (chrome) → `<PageGua
 
 ### Operations
 
-- **Properties**: Property catalog with capacity, occupancy %, address, status. Property leads
-  pipeline tracks acquisition (sourcing → due diligence → onboarded).
+- **Properties**: Property catalog with capacity, occupancy %, address, status, and a
+  first-class `portfolioType` (CO_LIVING, STUDENT_HOUSING, SERVICED_APARTMENTS, PG, COLLEGE_HOSTEL,
+  COWORKING, MANAGED_OFFICE) plus a `portfolioAttributes` JSON for type-specific fields
+  (institution, academic year, gender, meal plan, nightly/weekly rate, desk/private offices, seat
+  capacity, lease term). The property form, list filter, detail page, and the executive
+  Portfolio Breakdown chart all consume these. Helper at `src/lib/portfolio-types.ts`.
 - **Rooms**: Room inventory per property with type (single/double/triple/quad), bed count, status.
 - **Residents**: Multi-step onboarding (personal → KYC → room assignment → agreement). Per-resident
-  ledger, payment history, complaints. Bulk rent charging across a property. Client-side PDF
-  generation for agreements and receipts (jsPDF). Checkout flow with security-deposit
-  reconciliation.
+  ledger, payment history, complaints, KYC + e-sign tabs, attendance and out-pass history. Bulk
+  rent charging across a property. Client-side PDF generation for agreements and receipts (jsPDF).
+  Checkout flow with security-deposit reconciliation. Compliance badges on the residents list
+  surface KYC and e-sign status.
+- **Bookings (Serviced Apartments)**: Nightly/weekly stays with a `bookings` table, exclusive-bounds
+  overlap protection (allows back-to-back same-day stays), 14-day availability grid, and live
+  invoice preview using the property's nightly/weekly rates. Visible only when
+  `portfolioType = SERVICED_APARTMENTS`. Cancel is a soft DELETE preserving audit.
+- **Facility**: Assets, preventive maintenance schedules, and maintenance logs.
+- **Electricity**: Tariffs, meters with room/resident assignment, readings (with bulk upload
+  mapping `meterNo → meterId`), and `POST /electricity/post-to-ledger` to convert consumption to
+  ledger entries.
+- **Resident Attendance**: Daily roster with bulk mark via `items[]` payload and 120-day history.
+- **Out-Pass**: Create / approve-reject / return-mark workflow.
+- **IoT**: Devices, latest snapshots (joined with property/room), and an ingestion endpoint.
 - **Complaints**: Tickets with category, priority, SLA tracking, escalation timeline,
   routing rules from Settings. Auto-generates SLA-breach notifications.
 - **Laundry**: Pickup/delivery batches, charges fed into the resident ledger.
@@ -531,8 +618,33 @@ wrapped in `<ProtectedRoute>` (auth check) → `<Layout>` (chrome) → `<PageGua
 ### Finance
 
 - **Ledger**: Per-resident debit/credit ledger across rent, food, laundry, utilities, deposits.
+  Entries created by recurring billing runs are tagged with an "Auto" badge.
 - **Payments**: Manual entry + Razorpay-ready (gated by env vars). Status transitions PENDING →
   SUCCESS / FAILED / REFUNDED.
+- **Billing Cycles**: Recurring rent / charges with MONTHLY, WEEKLY, and CUSTOM_DAYS cadences.
+  A scheduler catches up missed runs on startup. Each run produces a `billing_runs` audit row.
+- **Reminders**: Configurable rules (days-overdue, channel) dispatched via INAPP / EMAIL / SMS.
+  Dispatched messages write to both `notifications` and `communication_logs` and are visible in a
+  per-resident reminders tab with manual send/resend.
+- **Banking**: CSV import (PDF/Excel queued as a follow-up); statement-line reconciliation matches
+  rows to ledger entries and auto-flips the ledger entry to RECONCILED.
+- **Expenses**: Category, approval state machine (DRAFT → SUBMITTED → APPROVED → PAID / REJECTED)
+  with transition guards and an audit trail.
+
+### Compliance
+
+- **Digital KYC**: KYC requests with admin verify, optional ID front/back/selfie image upload
+  (4MB cap, base64 dataURLs, thumbnail rendering), pluggable provider adapter
+  (`lib/kyc-providers.ts`, `ManualKYCProvider` stub), and a full audit log
+  (`kyc_events`: CREATED / VERIFIED / REJECTED / REOPENED with actor, IP, UA).
+- **E-Sign**: Token-gated public signer page (`/esign/sign/:token`) with HTML5 canvas (mouse +
+  touch). On sign, a PDF is generated via `pdf-lib` (document body + embedded signature image +
+  signer name / IP / UTC timestamp), stored as base64 on `signed_pdf`, and downloadable via
+  `GET /esign/:id/pdf`. Audit events: CREATED, VIEWED, SIGNED, EXPIRED, VOIDED.
+- **Activation Gate**: Configurable `integration_status` row "KYC_GATE" (toggle in Settings →
+  KYC Gate). When enabled, both `POST /residents` (create-with-ACTIVE) and
+  `PUT /residents/:id` (status=ACTIVE) require a verified KYC and at least one signed e-sign
+  agreement, otherwise return 422.
 
 ---
 
@@ -597,13 +709,15 @@ Implementation: `artifacts/uniliv-admin/src/pages/executive-dashboard.tsx` consu
 
 Settings page (`/settings`) has 5 tabs:
 
-| Tab            | Function |
-|----------------|----------|
-| General        | Org name, currency, timezone, support email |
-| SLA            | Editable hours per complaint category |
-| Routing        | Property × category → assignee dropdown |
-| Notifications  | Toggle which notification types are active (localStorage) |
-| Integrations   | Razorpay / Twilio / SMTP status (driven by env vars) |
+| Tab               | Function |
+|-------------------|----------|
+| General           | Org name, currency, timezone, support email |
+| SLA               | Editable hours per complaint category |
+| Routing           | Property × category → assignee dropdown |
+| Notifications     | Toggle which notification types are active (localStorage) |
+| Integrations      | Razorpay / Twilio / SMTP status (driven by env vars) |
+| Tariff Management | Electricity tariffs (per-property unit price + slabs) |
+| KYC Gate          | Toggle the resident-activation KYC + e-sign gate |
 
 `SUPER_ADMIN`-only audit log is exposed at `GET /api/settings/audit-log` for future inclusion in
 Settings → Audit tab.
