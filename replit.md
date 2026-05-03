@@ -1,27 +1,132 @@
-# Workspace
+# UNILIV ADMIN
+
+A complete multi-property co-living management platform built as a full-stack monorepo web application.
 
 ## Overview
 
-pnpm workspace monorepo using TypeScript. Each package manages its own dependencies.
+UNILIV Admin is an operations command center for managing student/young-professional co-living properties. It covers all 12+ operational modules: Properties, Rooms, Residents, Complaints, HRMS, Procurement, Kitchen, Sales/CRM, L&D, Property Acquisition, Users, and Announcements.
 
-## Stack
+## Architecture
 
-- **Monorepo tool**: pnpm workspaces
-- **Node.js version**: 24
-- **Package manager**: pnpm
-- **TypeScript version**: 5.9
-- **API framework**: Express 5
-- **Database**: PostgreSQL + Drizzle ORM
-- **Validation**: Zod (`zod/v4`), `drizzle-zod`
-- **API codegen**: Orval (from OpenAPI spec)
-- **Build**: esbuild (CJS bundle)
+### Stack
+- **Frontend**: React + Vite + TypeScript, Tailwind CSS + shadcn/ui, Zustand (auth), TanStack Query, Recharts, wouter (routing), Lucide icons
+- **Backend**: Express 5, Drizzle ORM, PostgreSQL, JWT auth (jsonwebtoken + bcryptjs)
+- **API Client**: Orval-generated React Query hooks from OpenAPI spec
 
-## Key Commands
+### Monorepo Structure
+```
+artifacts/
+  api-server/          # Express backend (port 8080, path: /api)
+  uniliv-admin/        # React+Vite frontend (port 21571, path: /)
+lib/
+  db/                  # Drizzle ORM schema + DB connection
+  api-spec/            # OpenAPI spec (openapi.yaml)
+  api-zod/             # Generated Zod schemas
+  api-client-react/    # Generated React Query hooks + custom-fetch
+scripts/
+  src/seed.ts          # Database seeder
+```
 
-- `pnpm run typecheck` — full typecheck across all packages
-- `pnpm run build` — typecheck + build all packages
-- `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from OpenAPI spec
-- `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
-- `pnpm --filter @workspace/api-server run dev` — run API server locally
+### Database Schema (PostgreSQL via Drizzle)
+- **core.ts**: properties, rooms, users, residents, ledger_entries, payments, complaints, escalations, announcements, refresh_tokens
+- **hrms.ts**: employees, attendance, leaves, job_requisitions, candidates
+- **procurement.ts**: vendors, indents, purchase_orders, grns, inventory
+- **kitchen.ts**: recipes, menu_plans
+- **sales.ts**: leads, property_leads
+- **lnd.ts**: courses, course_enrollments
 
-See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details.
+## Authentication
+
+- JWT-based: access token (15min) + refresh token (7d, httpOnly cookie)
+- Access token stored in localStorage as `uniliv_token`
+- Auth token getter wired in `main.tsx` via `setAuthTokenGetter`
+- Admin credentials: `admin@uniliv.com` / `Admin@123`
+- All API routes protected by `authenticate` middleware
+
+## API Routes
+
+All routes under `/api/`:
+- `POST /api/auth/login` — login, returns accessToken
+- `POST /api/auth/logout` — logout
+- `POST /api/auth/refresh` — refresh token
+- `GET /api/auth/me` — current user
+- `GET/POST /api/dashboard/stats` — dashboard KPIs
+- `GET /api/dashboard/charts` — chart data
+- `GET/POST/PUT/DELETE /api/properties`
+- `GET/POST/PUT/DELETE /api/rooms`
+- `GET/POST/PUT/DELETE /api/residents`
+- `GET/POST /api/residents/:id/ledger`
+- `GET/POST /api/residents/:id/payments`
+- `GET/POST/PUT /api/complaints`
+- `POST /api/escalations`
+- `GET/POST/PUT/DELETE /api/employees`
+- `GET/POST/PUT /api/attendance`
+- `GET/POST/PUT /api/leaves`
+- `GET/POST /api/job-requisitions`
+- `GET/POST/PUT /api/candidates`
+- `GET/POST/PUT /api/vendors`
+- `GET/POST/PUT /api/indents`
+- `GET/POST/PUT /api/purchase-orders`
+- `GET/POST /api/grn`
+- `GET/POST/PUT /api/inventory`
+- `GET/POST/PUT/DELETE /api/recipes`
+- `GET/POST/PUT /api/menu-plans`
+- `GET/POST/PUT/DELETE /api/leads`
+- `GET/POST/PUT /api/property-leads`
+- `GET/POST/PUT /api/courses`
+- `GET/POST/PUT /api/enrollments`
+- `GET/POST/PUT/DELETE /api/users`
+- `GET/POST/DELETE /api/announcements`
+
+## Frontend Pages
+
+- `/login` — Login page with JWT auth
+- `/` — Dashboard with stats cards and Recharts charts
+- `/properties` — Property list with occupancy badges
+- `/properties/:id` — Property detail with rooms grid
+- `/rooms` — Room inventory with status filters
+- `/residents` — Resident directory with search and status badges
+- `/residents/:id` — Resident detail with ledger & payments tabs
+- `/complaints` — Complaint tracker with priority indicators
+- `/employees` — HRMS employee directory
+- `/employees/:id` — Employee detail page
+- `/attendance` — Attendance marking table
+- `/leaves` — Leave requests with approve/reject
+- `/recruitment` — Job requisitions + candidate pipeline
+- `/vendors` — Vendor directory with ratings
+- `/indents` — Indent requests workflow
+- `/purchase-orders` — PO list
+- `/inventory` — Inventory with low-stock warnings
+- `/kitchen` — Recipes and menu plans
+- `/leads` — CRM lead pipeline
+- `/courses` — L&D course library
+- `/property-leads` — Property acquisition pipeline
+- `/users` — User management
+- `/settings` — Settings placeholder
+
+## Development
+
+```bash
+# Install dependencies
+pnpm install
+
+# Push DB schema
+cd lib/db && pnpm run push
+
+# Seed database
+pnpm --filter @workspace/scripts run seed
+
+# Start API server (auto-managed by Replit workflow)
+# Start frontend (auto-managed by Replit workflow)
+
+# Regenerate API client after OpenAPI spec changes
+pnpm --filter @workspace/api-spec run codegen
+```
+
+## Key Implementation Notes
+
+- `lib/api-zod/src/index.ts` must only export `from "./generated/api"` (not types) — orval codegen otherwise creates duplicate exports
+- The API client uses `setAuthTokenGetter` in `main.tsx` to auto-attach JWT tokens
+- wouter routes use children-as-function syntax: `<Route path="/">{() => <ProtectedRoute component={Dashboard} />}</Route>`
+- Drizzle `numeric` columns must be converted to `Number()` before returning in API responses
+- All numeric DB fields (amounts, ctc, askingRent) stored as `text` in DB but returned as `number` in API

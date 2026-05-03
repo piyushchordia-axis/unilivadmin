@@ -3,20 +3,36 @@ info:
   # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: UNILIV Admin API specification
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
-    description: Health operations
+  - name: auth
+  - name: properties
+  - name: rooms
+  - name: residents
+  - name: complaints
+  - name: employees
+  - name: attendance
+  - name: leaves
+  - name: hrRecruitment
+  - name: procurement
+  - name: kitchen
+  - name: sales
+  - name: lnd
+  - name: propertyAcquisition
+  - name: dashboard
+  - name: users
+  - name: announcements
+
 paths:
   /healthz:
     get:
       operationId: healthCheck
       tags: [health]
       summary: Health check
-      description: Returns server health status
       responses:
         "200":
           description: Healthy
@@ -24,13 +40,3783 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+
+  # ─── AUTH ────────────────────────────────────────────
+  /auth/login:
+    post:
+      operationId: login
+      tags: [auth]
+      summary: Login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginBody"
+      responses:
+        "200":
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResponse"
+
+  /auth/refresh:
+    post:
+      operationId: refreshToken
+      tags: [auth]
+      summary: Refresh access token
+      responses:
+        "200":
+          description: Token refreshed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResponse"
+
+  /auth/logout:
+    post:
+      operationId: logout
+      tags: [auth]
+      summary: Logout
+      responses:
+        "200":
+          description: Logged out
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
+  /auth/me:
+    get:
+      operationId: getMe
+      tags: [auth]
+      summary: Get current user profile
+      responses:
+        "200":
+          description: User profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserResponse"
+
+  # ─── DASHBOARD ────────────────────────────────────────
+  /dashboard/stats:
+    get:
+      operationId: getDashboardStats
+      tags: [dashboard]
+      summary: Get dashboard statistics
+      parameters:
+        - in: query
+          name: propertyId
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Dashboard stats
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardStatsResponse"
+
+  /dashboard/charts:
+    get:
+      operationId: getDashboardCharts
+      tags: [dashboard]
+      summary: Get dashboard chart data
+      parameters:
+        - in: query
+          name: propertyId
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Dashboard charts
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardChartsResponse"
+
+  # ─── PROPERTIES ───────────────────────────────────────
+  /properties:
+    get:
+      operationId: getProperties
+      tags: [properties]
+      summary: List properties
+      parameters:
+        - $ref: "#/components/parameters/PageParam"
+        - $ref: "#/components/parameters/LimitParam"
+        - $ref: "#/components/parameters/SearchParam"
+      responses:
+        "200":
+          description: Properties list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PropertiesListResponse"
+    post:
+      operationId: createProperty
+      tags: [properties]
+      summary: Create property
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePropertyBody"
+      responses:
+        "201":
+          description: Property created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PropertyResponse"
+
+  /properties/{id}:
+    get:
+      operationId: getProperty
+      tags: [properties]
+      summary: Get property by ID
+      parameters:
+        - $ref: "#/components/parameters/IdParam"
+      responses:
+        "200":
+          description: Property
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PropertyResponse"
+    put:
+      operationId: updateProperty
+      tags: [properties]
+      summary: Update property
+      parameters:
+        - $ref: "#/components/parameters/IdParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePropertyBody"
+      responses:
+        "200":
+          description: Property updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PropertyResponse"
+    delete:
+      operationId: deleteProperty
+      tags: [properties]
+      summary: Delete property
+      parameters:
+        - $ref: "#/components/parameters/IdParam"
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
+  # ─── ROOMS ────────────────────────────────────────────
+  /rooms:
+    get:
+      operationId: getRooms
+      tags: [rooms]
+      summary: List rooms
+      parameters:
+        - $ref: "#/components/parameters/PageParam"
+        - $ref: "#/components/parameters/LimitParam"
+        - $ref: "#/components/parameters/SearchParam"
+        - $ref: "#/components/parameters/PropertyIdParam"
+      responses:
+        "200":
+          description: Rooms list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RoomsListResponse"
+    post:
+      operationId: createRoom
+      tags: [rooms]
+      summary: Create room
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateRoomBody"
+      responses:
+        "201":
+          description: Room created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RoomResponse"
+
+  /rooms/{id}:
+    get:
+      operationId: getRoom
+      tags: [rooms]
+      summary: Get room by ID
+      parameters:
+        - $ref: "#/components/parameters/IdParam"
+      responses:
+        "200":
+          description: Room
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RoomResponse"
+    put:
+      operationId: updateRoom
+      tags: [rooms]
+      summary: Update room
+      parameters:
+        - $ref: "#/components/parameters/IdParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateRoomBody"
+      responses:
+        "200":
+          description: Room updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RoomResponse"
+    delete:
+      operationId: deleteRoom
+      tags: [rooms]
+      summary: Delete room
+      parameters:
+        - $ref: "#/components/parameters/IdParam"
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
+  # ─── RESIDENTS ────────────────────────────────────────
+  /residents:
+    get:
+      operationId: getResidents
+      tags: [residents]
+      summary: List residents
+      parameters:
+        - $ref: "#/components/parameters/PageParam"
+        - $ref: "#/components/parameters/LimitParam"
+        - $ref: "#/components/parameters/SearchParam"
+        - $ref: "#/components/parameters/PropertyIdParam"
+        - in: query
+          name: status
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Residents list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResidentsListResponse"
+    post:
+      operationId: createResident
+      tags: [residents]
+      summary: Create resident
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateResidentBody"
+      responses:
+        "201":
+          description: Resident created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResidentResponse"
+
+  /residents/{id}:
+    get:
+      operationId: getResident
+      tags: [residents]
+      summary: Get resident by ID
+      parameters:
+        - $ref: "#/components/parameters/IdParam"
+      responses:
+        "200":
+          description: Resident
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResidentResponse"
+    put:
+      operationId: updateResident
+      tags: [residents]
+      summary: Update resident
+      parameters:
+        - $ref: "#/components/parameters/IdParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateResidentBody"
+      responses:
+        "200":
+          description: Resident updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResidentResponse"
+    delete:
+      operationId: deleteResident
+      tags: [residents]
+      summary: Delete resident
+      parameters:
+        - $ref: "#/components/parameters/IdParam"
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
+  /residents/{id}/ledger:
+    get:
+      operationId: getResidentLedger
+      tags: [residents]
+      summary: Get resident ledger entries
+      parameters:
+        - $ref: "#/components/parameters/IdParam"
+      responses:
+        "200":
+          description: Ledger entries
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LedgerListResponse"
+    post:
+      operationId: createLedgerEntry
+      tags: [residents]
+      summary: Create ledger entry
+      parameters:
+        - $ref: "#/components/parameters/IdParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateLedgerEntryBody"
+      responses:
+        "201":
+          description: Ledger entry created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LedgerEntryResponse"
+
+  /residents/{id}/payments:
+    get:
+      operationId: getResidentPayments
+      tags: [residents]
+      summary: Get resident payments
+      parameters:
+        - $ref: "#/components/parameters/IdParam"
+      responses:
+        "200":
+          description: Payments list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaymentsListResponse"
+    post:
+      operationId: createPayment
+      tags: [residents]
+      summary: Create payment
+      parameters:
+        - $ref: "#/components/parameters/IdParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePaymentBody"
+      responses:
+        "201":
+          description: Payment created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaymentResponse"
+
+  # ─── COMPLAINTS ───────────────────────────────────────
+  /complaints:
+    get:
+      operationId: getComplaints
+      tags: [complaints]
+      summary: List complaints
+      parameters:
+        - $ref: "#/components/parameters/PageParam"
+        - $ref: "#/components/parameters/LimitParam"
+        - $ref: "#/components/parameters/SearchParam"
+        - $ref: "#/components/parameters/PropertyIdParam"
+        - in: query
+          name: status
+          schema:
+            type: string
+        - in: query
+          name: priority
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Complaints list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComplaintsListResponse"
+    post:
+      operationId: createComplaint
+      tags: [complaints]
+      summary: Create complaint
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateComplaintBody"
+      responses:
+        "201":
+          description: Complaint created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComplaintResponse"
+
+  /complaints/{id}:
+    get:
+      operationId: getComplaint
+      tags: [complaints]
+      summary: Get complaint by ID
+      parameters:
+        - $ref: "#/components/parameters/IdParam"
+      responses:
+        "200":
+          description: Complaint
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComplaintResponse"
+    put:
+      operationId: updateComplaint
+      tags: [complaints]
+      summary: Update complaint
+      parameters:
+        - $ref: "#/components/parameters/IdParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateComplaintBody"
+      responses:
+        "200":
+          description: Complaint updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComplaintResponse"
+
+  /escalations:
+    post:
+      operationId: createEscalation
+      tags: [complaints]
+      summary: Create escalation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateEscalationBody"
+      responses:
+        "201":
+          description: Escalation created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EscalationResponse"
+
+  # ─── EMPLOYEES ────────────────────────────────────────
+  /employees:
+    get:
+      operationId: getEmployees
+      tags: [employees]
+      summary: List employees
+      parameters:
+        - $ref: "#/components/parameters/PageParam"
+        - $ref: "#/components/parameters/LimitParam"
+        - $ref: "#/components/parameters/SearchParam"
+        - $ref: "#/components/parameters/PropertyIdParam"
+        - in: query
+          name: department
+          schema:
+            type: string
+        - in: query
+          name: status
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Employees list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmployeesListResponse"
+    post:
+      operationId: createEmployee
+      tags: [employees]
+      summary: Create employee
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateEmployeeBody"
+      responses:
+        "201":
+          description: Employee created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmployeeResponse"
+
+  /employees/{id}:
+    get:
+      operationId: getEmployee
+      tags: [employees]
+      summary: Get employee by ID
+      parameters:
+        - $ref: "#/components/parameters/IdParam"
+      responses:
+        "200":
+          description: Employee
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmployeeResponse"
+    put:
+      operationId: updateEmployee
+      tags: [employees]
+      summary: Update employee
+      parameters:
+        - $ref: "#/components/parameters/IdParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateEmployeeBody"
+      responses:
+        "200":
+          description: Employee updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmployeeResponse"
+    delete:
+      operationId: deleteEmployee
+      tags: [employees]
+      summary: Delete employee
+      parameters:
+        - $ref: "#/components/parameters/IdParam"
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
+  # ─── ATTENDANCE ───────────────────────────────────────
+  /attendance:
+    get:
+      operationId: getAttendance
+      tags: [attendance]
+      summary: List attendance records
+      parameters:
+        - $ref: "#/components/parameters/PageParam"
+        - $ref: "#/components/parameters/LimitParam"
+        - in: query
+          name: employeeId
+          schema:
+            type: string
+        - in: query
+          name: date
+          schema:
+            type: string
+        - in: query
+          name: month
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Attendance records
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AttendanceListResponse"
+    post:
+      operationId: markAttendance
+      tags: [attendance]
+      summary: Mark attendance
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAttendanceBody"
+      responses:
+        "201":
+          description: Attendance marked
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AttendanceResponse"
+
+  /attendance/{id}:
+    put:
+      operationId: updateAttendance
+      tags: [attendance]
+      summary: Update attendance
+      parameters:
+        - $ref: "#/components/parameters/IdParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAttendanceBody"
+      responses:
+        "200":
+          description: Attendance updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AttendanceResponse"
+
+  # ─── LEAVES ───────────────────────────────────────────
+  /leaves:
+    get:
+      operationId: getLeaves
+      tags: [leaves]
+      summary: List leave requests
+      parameters:
+        - $ref: "#/components/parameters/PageParam"
+        - $ref: "#/components/parameters/LimitParam"
+        - in: query
+          name: employeeId
+          schema:
+            type: string
+        - in: query
+          name: status
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Leave requests list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LeavesListResponse"
+    post:
+      operationId: createLeave
+      tags: [leaves]
+      summary: Create leave request
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateLeaveBody"
+      responses:
+        "201":
+          description: Leave request created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LeaveResponse"
+
+  /leaves/{id}:
+    put:
+      operationId: updateLeave
+      tags: [leaves]
+      summary: Approve/reject leave
+      parameters:
+        - $ref: "#/components/parameters/IdParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateLeaveBody"
+      responses:
+        "200":
+          description: Leave updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LeaveResponse"
+
+  # ─── RECRUITMENT ──────────────────────────────────────
+  /job-requisitions:
+    get:
+      operationId: getJobRequisitions
+      tags: [hrRecruitment]
+      summary: List job requisitions
+      parameters:
+        - $ref: "#/components/parameters/PageParam"
+        - $ref: "#/components/parameters/LimitParam"
+      responses:
+        "200":
+          description: Job requisitions list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobRequisitionsListResponse"
+    post:
+      operationId: createJobRequisition
+      tags: [hrRecruitment]
+      summary: Create job requisition
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateJobRequisitionBody"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobRequisitionResponse"
+
+  /candidates:
+    get:
+      operationId: getCandidates
+      tags: [hrRecruitment]
+      summary: List candidates
+      parameters:
+        - $ref: "#/components/parameters/PageParam"
+        - $ref: "#/components/parameters/LimitParam"
+        - $ref: "#/components/parameters/SearchParam"
+        - in: query
+          name: stage
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Candidates list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CandidatesListResponse"
+    post:
+      operationId: createCandidate
+      tags: [hrRecruitment]
+      summary: Create candidate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCandidateBody"
+      responses:
+        "201":
+          description: Candidate created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CandidateResponse"
+
+  /candidates/{id}:
+    put:
+      operationId: updateCandidate
+      tags: [hrRecruitment]
+      summary: Update candidate
+      parameters:
+        - $ref: "#/components/parameters/IdParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCandidateBody"
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CandidateResponse"
+
+  # ─── VENDORS ──────────────────────────────────────────
+  /vendors:
+    get:
+      operationId: getVendors
+      tags: [procurement]
+      summary: List vendors
+      parameters:
+        - $ref: "#/components/parameters/PageParam"
+        - $ref: "#/components/parameters/LimitParam"
+        - $ref: "#/components/parameters/SearchParam"
+      responses:
+        "200":
+          description: Vendors list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VendorsListResponse"
+    post:
+      operationId: createVendor
+      tags: [procurement]
+      summary: Create vendor
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateVendorBody"
+      responses:
+        "201":
+          description: Vendor created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VendorResponse"
+
+  /vendors/{id}:
+    get:
+      operationId: getVendor
+      tags: [procurement]
+      summary: Get vendor
+      parameters:
+        - $ref: "#/components/parameters/IdParam"
+      responses:
+        "200":
+          description: Vendor
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VendorResponse"
+    put:
+      operationId: updateVendor
+      tags: [procurement]
+      summary: Update vendor
+      parameters:
+        - $ref: "#/components/parameters/IdParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateVendorBody"
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VendorResponse"
+
+  # ─── INDENTS ──────────────────────────────────────────
+  /indents:
+    get:
+      operationId: getIndents
+      tags: [procurement]
+      summary: List indents
+      parameters:
+        - $ref: "#/components/parameters/PageParam"
+        - $ref: "#/components/parameters/LimitParam"
+        - $ref: "#/components/parameters/PropertyIdParam"
+        - in: query
+          name: status
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Indents list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IndentsListResponse"
+    post:
+      operationId: createIndent
+      tags: [procurement]
+      summary: Create indent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateIndentBody"
+      responses:
+        "201":
+          description: Indent created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IndentResponse"
+
+  /indents/{id}:
+    put:
+      operationId: updateIndent
+      tags: [procurement]
+      summary: Update indent
+      parameters:
+        - $ref: "#/components/parameters/IdParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateIndentBody"
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IndentResponse"
+
+  # ─── PURCHASE ORDERS ──────────────────────────────────
+  /purchase-orders:
+    get:
+      operationId: getPurchaseOrders
+      tags: [procurement]
+      summary: List purchase orders
+      parameters:
+        - $ref: "#/components/parameters/PageParam"
+        - $ref: "#/components/parameters/LimitParam"
+        - in: query
+          name: status
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Purchase orders list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PurchaseOrdersListResponse"
+    post:
+      operationId: createPurchaseOrder
+      tags: [procurement]
+      summary: Create purchase order
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePurchaseOrderBody"
+      responses:
+        "201":
+          description: PO created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PurchaseOrderResponse"
+
+  /purchase-orders/{id}:
+    put:
+      operationId: updatePurchaseOrder
+      tags: [procurement]
+      summary: Update purchase order
+      parameters:
+        - $ref: "#/components/parameters/IdParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePurchaseOrderBody"
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PurchaseOrderResponse"
+
+  # ─── GRN ──────────────────────────────────────────────
+  /grn:
+    get:
+      operationId: getGRNs
+      tags: [procurement]
+      summary: List GRNs
+      parameters:
+        - $ref: "#/components/parameters/PageParam"
+        - $ref: "#/components/parameters/LimitParam"
+      responses:
+        "200":
+          description: GRNs list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GRNsListResponse"
+    post:
+      operationId: createGRN
+      tags: [procurement]
+      summary: Create GRN
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateGRNBody"
+      responses:
+        "201":
+          description: GRN created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GRNResponse"
+
+  # ─── INVENTORY ────────────────────────────────────────
+  /inventory:
+    get:
+      operationId: getInventory
+      tags: [procurement]
+      summary: List inventory items
+      parameters:
+        - $ref: "#/components/parameters/PageParam"
+        - $ref: "#/components/parameters/LimitParam"
+        - $ref: "#/components/parameters/SearchParam"
+        - $ref: "#/components/parameters/PropertyIdParam"
+        - in: query
+          name: category
+          schema:
+            type: string
+        - in: query
+          name: lowStock
+          schema:
+            type: boolean
+      responses:
+        "200":
+          description: Inventory list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InventoryListResponse"
+    post:
+      operationId: createInventoryItem
+      tags: [procurement]
+      summary: Create inventory item
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateInventoryItemBody"
+      responses:
+        "201":
+          description: Item created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InventoryItemResponse"
+
+  /inventory/{id}:
+    put:
+      operationId: updateInventoryItem
+      tags: [procurement]
+      summary: Update inventory item
+      parameters:
+        - $ref: "#/components/parameters/IdParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateInventoryItemBody"
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InventoryItemResponse"
+
+  # ─── KITCHEN ──────────────────────────────────────────
+  /recipes:
+    get:
+      operationId: getRecipes
+      tags: [kitchen]
+      summary: List recipes
+      parameters:
+        - $ref: "#/components/parameters/PageParam"
+        - $ref: "#/components/parameters/LimitParam"
+        - $ref: "#/components/parameters/SearchParam"
+      responses:
+        "200":
+          description: Recipes list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecipesListResponse"
+    post:
+      operationId: createRecipe
+      tags: [kitchen]
+      summary: Create recipe
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateRecipeBody"
+      responses:
+        "201":
+          description: Recipe created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecipeResponse"
+
+  /recipes/{id}:
+    put:
+      operationId: updateRecipe
+      tags: [kitchen]
+      summary: Update recipe
+      parameters:
+        - $ref: "#/components/parameters/IdParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateRecipeBody"
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecipeResponse"
+    delete:
+      operationId: deleteRecipe
+      tags: [kitchen]
+      summary: Delete recipe
+      parameters:
+        - $ref: "#/components/parameters/IdParam"
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
+  /menu-plans:
+    get:
+      operationId: getMenuPlans
+      tags: [kitchen]
+      summary: List menu plans
+      parameters:
+        - $ref: "#/components/parameters/PageParam"
+        - $ref: "#/components/parameters/LimitParam"
+        - $ref: "#/components/parameters/PropertyIdParam"
+      responses:
+        "200":
+          description: Menu plans list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MenuPlansListResponse"
+    post:
+      operationId: createMenuPlan
+      tags: [kitchen]
+      summary: Create menu plan
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateMenuPlanBody"
+      responses:
+        "201":
+          description: Menu plan created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MenuPlanResponse"
+
+  /menu-plans/{id}:
+    put:
+      operationId: updateMenuPlan
+      tags: [kitchen]
+      summary: Update menu plan
+      parameters:
+        - $ref: "#/components/parameters/IdParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateMenuPlanBody"
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MenuPlanResponse"
+
+  # ─── LEADS / CRM ──────────────────────────────────────
+  /leads:
+    get:
+      operationId: getLeads
+      tags: [sales]
+      summary: List leads
+      parameters:
+        - $ref: "#/components/parameters/PageParam"
+        - $ref: "#/components/parameters/LimitParam"
+        - $ref: "#/components/parameters/SearchParam"
+        - $ref: "#/components/parameters/PropertyIdParam"
+        - in: query
+          name: stage
+          schema:
+            type: string
+        - in: query
+          name: assignedTo
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Leads list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LeadsListResponse"
+    post:
+      operationId: createLead
+      tags: [sales]
+      summary: Create lead
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateLeadBody"
+      responses:
+        "201":
+          description: Lead created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LeadResponse"
+
+  /leads/{id}:
+    get:
+      operationId: getLead
+      tags: [sales]
+      summary: Get lead by ID
+      parameters:
+        - $ref: "#/components/parameters/IdParam"
+      responses:
+        "200":
+          description: Lead
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LeadResponse"
+    put:
+      operationId: updateLead
+      tags: [sales]
+      summary: Update lead
+      parameters:
+        - $ref: "#/components/parameters/IdParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateLeadBody"
+      responses:
+        "200":
+          description: Lead updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LeadResponse"
+    delete:
+      operationId: deleteLead
+      tags: [sales]
+      summary: Delete lead
+      parameters:
+        - $ref: "#/components/parameters/IdParam"
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
+  # ─── L&D ──────────────────────────────────────────────
+  /courses:
+    get:
+      operationId: getCourses
+      tags: [lnd]
+      summary: List courses
+      parameters:
+        - $ref: "#/components/parameters/PageParam"
+        - $ref: "#/components/parameters/LimitParam"
+        - $ref: "#/components/parameters/SearchParam"
+      responses:
+        "200":
+          description: Courses list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CoursesListResponse"
+    post:
+      operationId: createCourse
+      tags: [lnd]
+      summary: Create course
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCourseBody"
+      responses:
+        "201":
+          description: Course created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CourseResponse"
+
+  /courses/{id}:
+    put:
+      operationId: updateCourse
+      tags: [lnd]
+      summary: Update course
+      parameters:
+        - $ref: "#/components/parameters/IdParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCourseBody"
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CourseResponse"
+
+  /enrollments:
+    get:
+      operationId: getEnrollments
+      tags: [lnd]
+      summary: List enrollments
+      parameters:
+        - $ref: "#/components/parameters/PageParam"
+        - $ref: "#/components/parameters/LimitParam"
+        - in: query
+          name: courseId
+          schema:
+            type: string
+        - in: query
+          name: employeeId
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Enrollments list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnrollmentsListResponse"
+    post:
+      operationId: createEnrollment
+      tags: [lnd]
+      summary: Create enrollment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateEnrollmentBody"
+      responses:
+        "201":
+          description: Enrollment created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnrollmentResponse"
+
+  /enrollments/{id}:
+    put:
+      operationId: updateEnrollment
+      tags: [lnd]
+      summary: Update enrollment progress
+      parameters:
+        - $ref: "#/components/parameters/IdParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateEnrollmentBody"
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnrollmentResponse"
+
+  # ─── PROPERTY ACQUISITION ─────────────────────────────
+  /property-leads:
+    get:
+      operationId: getPropertyLeads
+      tags: [propertyAcquisition]
+      summary: List property leads
+      parameters:
+        - $ref: "#/components/parameters/PageParam"
+        - $ref: "#/components/parameters/LimitParam"
+        - $ref: "#/components/parameters/SearchParam"
+        - in: query
+          name: stage
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Property leads list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PropertyLeadsListResponse"
+    post:
+      operationId: createPropertyLead
+      tags: [propertyAcquisition]
+      summary: Create property lead
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePropertyLeadBody"
+      responses:
+        "201":
+          description: Property lead created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PropertyLeadResponse"
+
+  /property-leads/{id}:
+    put:
+      operationId: updatePropertyLead
+      tags: [propertyAcquisition]
+      summary: Update property lead
+      parameters:
+        - $ref: "#/components/parameters/IdParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePropertyLeadBody"
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PropertyLeadResponse"
+
+  # ─── USERS ────────────────────────────────────────────
+  /users:
+    get:
+      operationId: getUsers
+      tags: [users]
+      summary: List users
+      parameters:
+        - $ref: "#/components/parameters/PageParam"
+        - $ref: "#/components/parameters/LimitParam"
+        - $ref: "#/components/parameters/SearchParam"
+        - in: query
+          name: role
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Users list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UsersListResponse"
+    post:
+      operationId: createUser
+      tags: [users]
+      summary: Create user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateUserBody"
+      responses:
+        "201":
+          description: User created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserResponse"
+
+  /users/{id}:
+    put:
+      operationId: updateUser
+      tags: [users]
+      summary: Update user
+      parameters:
+        - $ref: "#/components/parameters/IdParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateUserBody"
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserResponse"
+    delete:
+      operationId: deleteUser
+      tags: [users]
+      summary: Delete user
+      parameters:
+        - $ref: "#/components/parameters/IdParam"
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
+  # ─── ANNOUNCEMENTS ────────────────────────────────────
+  /announcements:
+    get:
+      operationId: getAnnouncements
+      tags: [announcements]
+      summary: List announcements
+      parameters:
+        - $ref: "#/components/parameters/PageParam"
+        - $ref: "#/components/parameters/LimitParam"
+        - $ref: "#/components/parameters/PropertyIdParam"
+      responses:
+        "200":
+          description: Announcements list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AnnouncementsListResponse"
+    post:
+      operationId: createAnnouncement
+      tags: [announcements]
+      summary: Create announcement
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAnnouncementBody"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AnnouncementResponse"
+
+  /announcements/{id}:
+    delete:
+      operationId: deleteAnnouncement
+      tags: [announcements]
+      summary: Delete announcement
+      parameters:
+        - $ref: "#/components/parameters/IdParam"
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
 components:
+  parameters:
+    IdParam:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+    PageParam:
+      name: page
+      in: query
+      schema:
+        type: integer
+        default: 1
+    LimitParam:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        default: 20
+    SearchParam:
+      name: search
+      in: query
+      schema:
+        type: string
+    PropertyIdParam:
+      name: propertyId
+      in: query
+      schema:
+        type: string
+
   schemas:
     HealthStatus:
       type: object
       properties:
         status:
           type: string
-      required:
-        - status
+      required: [status]
 
+    SuccessResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+      required: [success]
+
+    PaginationMeta:
+      type: object
+      properties:
+        total:
+          type: integer
+        page:
+          type: integer
+        limit:
+          type: integer
+        totalPages:
+          type: integer
+      required: [total, page, limit, totalPages]
+
+    # ─── AUTH ─────────────────────────────────────────────
+    LoginBody:
+      type: object
+      properties:
+        email:
+          type: string
+        password:
+          type: string
+      required: [email, password]
+
+    LoginResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        accessToken:
+          type: string
+        user:
+          $ref: "#/components/schemas/UserDto"
+      required: [success, accessToken, user]
+
+    # ─── USER ─────────────────────────────────────────────
+    UserDto:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        email:
+          type: string
+        phone:
+          type: string
+          nullable: true
+        role:
+          type: string
+        propertyId:
+          type: string
+          nullable: true
+        isActive:
+          type: boolean
+        lastLogin:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+      required: [id, name, email, role, isActive, createdAt]
+
+    UserResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          $ref: "#/components/schemas/UserDto"
+      required: [success, data]
+
+    UsersListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/UserDto"
+        meta:
+          $ref: "#/components/schemas/PaginationMeta"
+      required: [success, data, meta]
+
+    CreateUserBody:
+      type: object
+      properties:
+        name:
+          type: string
+        email:
+          type: string
+        phone:
+          type: string
+        password:
+          type: string
+        role:
+          type: string
+        propertyId:
+          type: string
+      required: [name, email, password, role]
+
+    UpdateUserBody:
+      type: object
+      properties:
+        name:
+          type: string
+        phone:
+          type: string
+        role:
+          type: string
+        propertyId:
+          type: string
+        isActive:
+          type: boolean
+
+    # ─── DASHBOARD ────────────────────────────────────────
+    DashboardStats:
+      type: object
+      properties:
+        totalProperties:
+          type: integer
+        totalResidents:
+          type: integer
+        totalBeds:
+          type: integer
+        occupiedBeds:
+          type: integer
+        occupancyRate:
+          type: number
+        openComplaints:
+          type: integer
+        criticalComplaints:
+          type: integer
+        totalEmployees:
+          type: integer
+        pendingLeaves:
+          type: integer
+        newLeadsThisMonth:
+          type: integer
+        convertedLeadsThisMonth:
+          type: integer
+        revenueThisMonth:
+          type: number
+        pendingPayments:
+          type: number
+        lowStockItems:
+          type: integer
+      required: [totalProperties, totalResidents, totalBeds, occupiedBeds, occupancyRate, openComplaints, criticalComplaints, totalEmployees, pendingLeaves, newLeadsThisMonth, convertedLeadsThisMonth, revenueThisMonth, pendingPayments, lowStockItems]
+
+    DashboardStatsResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          $ref: "#/components/schemas/DashboardStats"
+      required: [success, data]
+
+    ChartDataPoint:
+      type: object
+      properties:
+        label:
+          type: string
+        value:
+          type: number
+      required: [label, value]
+
+    DashboardCharts:
+      type: object
+      properties:
+        occupancyTrend:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChartDataPoint"
+        complaintsByCategory:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChartDataPoint"
+        revenueTrend:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChartDataPoint"
+        leadsByStage:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChartDataPoint"
+        attendanceThisMonth:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChartDataPoint"
+      required: [occupancyTrend, complaintsByCategory, revenueTrend, leadsByStage, attendanceThisMonth]
+
+    DashboardChartsResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          $ref: "#/components/schemas/DashboardCharts"
+      required: [success, data]
+
+    # ─── PROPERTY ─────────────────────────────────────────
+    PropertyDto:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        address:
+          type: string
+        city:
+          type: string
+        state:
+          type: string
+        pincode:
+          type: string
+        lat:
+          type: number
+          nullable: true
+        lng:
+          type: number
+          nullable: true
+        totalBeds:
+          type: integer
+        status:
+          type: string
+        wardenId:
+          type: string
+          nullable: true
+        phone:
+          type: string
+          nullable: true
+        email:
+          type: string
+          nullable: true
+        amenities:
+          type: array
+          items:
+            type: string
+        occupiedBeds:
+          type: integer
+        createdAt:
+          type: string
+        updatedAt:
+          type: string
+      required: [id, name, address, city, state, pincode, totalBeds, status, amenities, occupiedBeds, createdAt, updatedAt]
+
+    PropertyResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          $ref: "#/components/schemas/PropertyDto"
+      required: [success, data]
+
+    PropertiesListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/PropertyDto"
+        meta:
+          $ref: "#/components/schemas/PaginationMeta"
+      required: [success, data, meta]
+
+    CreatePropertyBody:
+      type: object
+      properties:
+        name:
+          type: string
+        address:
+          type: string
+        city:
+          type: string
+        state:
+          type: string
+        pincode:
+          type: string
+        lat:
+          type: number
+        lng:
+          type: number
+        totalBeds:
+          type: integer
+        status:
+          type: string
+        wardenId:
+          type: string
+        phone:
+          type: string
+        email:
+          type: string
+        amenities:
+          type: array
+          items:
+            type: string
+      required: [name, address, city, state, pincode, totalBeds]
+
+    # ─── ROOM ─────────────────────────────────────────────
+    RoomDto:
+      type: object
+      properties:
+        id:
+          type: string
+        propertyId:
+          type: string
+        number:
+          type: string
+        floor:
+          type: integer
+        wing:
+          type: string
+          nullable: true
+        type:
+          type: string
+        capacity:
+          type: integer
+        status:
+          type: string
+        occupancy:
+          type: integer
+        createdAt:
+          type: string
+      required: [id, propertyId, number, floor, type, capacity, status, occupancy, createdAt]
+
+    RoomResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          $ref: "#/components/schemas/RoomDto"
+      required: [success, data]
+
+    RoomsListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/RoomDto"
+        meta:
+          $ref: "#/components/schemas/PaginationMeta"
+      required: [success, data, meta]
+
+    CreateRoomBody:
+      type: object
+      properties:
+        propertyId:
+          type: string
+        number:
+          type: string
+        floor:
+          type: integer
+        wing:
+          type: string
+        type:
+          type: string
+        capacity:
+          type: integer
+        status:
+          type: string
+      required: [propertyId, number, floor, type, capacity]
+
+    # ─── RESIDENT ─────────────────────────────────────────
+    ResidentDto:
+      type: object
+      properties:
+        id:
+          type: string
+        propertyId:
+          type: string
+        roomId:
+          type: string
+          nullable: true
+        name:
+          type: string
+        email:
+          type: string
+        phone:
+          type: string
+        dob:
+          type: string
+          nullable: true
+        gender:
+          type: string
+          nullable: true
+        photo:
+          type: string
+          nullable: true
+        college:
+          type: string
+          nullable: true
+        course:
+          type: string
+          nullable: true
+        parentName:
+          type: string
+          nullable: true
+        parentPhone:
+          type: string
+          nullable: true
+        dietaryPref:
+          type: array
+          items:
+            type: string
+        checkInDate:
+          type: string
+          nullable: true
+        checkOutDate:
+          type: string
+          nullable: true
+        planType:
+          type: string
+          nullable: true
+        monthlyRent:
+          type: number
+          nullable: true
+        securityDeposit:
+          type: number
+          nullable: true
+        status:
+          type: string
+        createdAt:
+          type: string
+        propertyName:
+          type: string
+          nullable: true
+        roomNumber:
+          type: string
+          nullable: true
+      required: [id, propertyId, name, email, phone, dietaryPref, status, createdAt]
+
+    ResidentResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          $ref: "#/components/schemas/ResidentDto"
+      required: [success, data]
+
+    ResidentsListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/ResidentDto"
+        meta:
+          $ref: "#/components/schemas/PaginationMeta"
+      required: [success, data, meta]
+
+    CreateResidentBody:
+      type: object
+      properties:
+        propertyId:
+          type: string
+        roomId:
+          type: string
+        name:
+          type: string
+        email:
+          type: string
+        phone:
+          type: string
+        dob:
+          type: string
+        gender:
+          type: string
+        college:
+          type: string
+        course:
+          type: string
+        parentName:
+          type: string
+        parentPhone:
+          type: string
+        parentEmail:
+          type: string
+        dietaryPref:
+          type: array
+          items:
+            type: string
+        checkInDate:
+          type: string
+        checkOutDate:
+          type: string
+        planType:
+          type: string
+        monthlyRent:
+          type: number
+        securityDeposit:
+          type: number
+        status:
+          type: string
+      required: [propertyId, name, email, phone]
+
+    # ─── LEDGER ───────────────────────────────────────────
+    LedgerEntryDto:
+      type: object
+      properties:
+        id:
+          type: string
+        residentId:
+          type: string
+        type:
+          type: string
+        amount:
+          type: number
+        description:
+          type: string
+        dueDate:
+          type: string
+          nullable: true
+        isPaid:
+          type: boolean
+        paidOn:
+          type: string
+          nullable: true
+        reference:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+      required: [id, residentId, type, amount, description, isPaid, createdAt]
+
+    LedgerEntryResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          $ref: "#/components/schemas/LedgerEntryDto"
+      required: [success, data]
+
+    LedgerListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/LedgerEntryDto"
+      required: [success, data]
+
+    CreateLedgerEntryBody:
+      type: object
+      properties:
+        type:
+          type: string
+        amount:
+          type: number
+        description:
+          type: string
+        dueDate:
+          type: string
+        isPaid:
+          type: boolean
+        reference:
+          type: string
+      required: [type, amount, description]
+
+    # ─── PAYMENT ──────────────────────────────────────────
+    PaymentDto:
+      type: object
+      properties:
+        id:
+          type: string
+        residentId:
+          type: string
+        amount:
+          type: number
+        mode:
+          type: string
+        status:
+          type: string
+        reference:
+          type: string
+          nullable: true
+        notes:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+      required: [id, residentId, amount, mode, status, createdAt]
+
+    PaymentResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          $ref: "#/components/schemas/PaymentDto"
+      required: [success, data]
+
+    PaymentsListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/PaymentDto"
+      required: [success, data]
+
+    CreatePaymentBody:
+      type: object
+      properties:
+        amount:
+          type: number
+        mode:
+          type: string
+        status:
+          type: string
+        reference:
+          type: string
+        notes:
+          type: string
+      required: [amount, mode]
+
+    # ─── COMPLAINT ────────────────────────────────────────
+    ComplaintDto:
+      type: object
+      properties:
+        id:
+          type: string
+        propertyId:
+          type: string
+        residentId:
+          type: string
+          nullable: true
+        ticketNo:
+          type: string
+        category:
+          type: string
+        subCategory:
+          type: string
+          nullable: true
+        title:
+          type: string
+        description:
+          type: string
+        status:
+          type: string
+        priority:
+          type: string
+        assignedTo:
+          type: string
+          nullable: true
+        slaHours:
+          type: integer
+        slaDeadline:
+          type: string
+          nullable: true
+        slaBreach:
+          type: boolean
+        resolvedAt:
+          type: string
+          nullable: true
+        rating:
+          type: integer
+          nullable: true
+        residentName:
+          type: string
+          nullable: true
+        propertyName:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+      required: [id, propertyId, ticketNo, category, title, description, status, priority, slaHours, slaBreach, createdAt]
+
+    ComplaintResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          $ref: "#/components/schemas/ComplaintDto"
+      required: [success, data]
+
+    ComplaintsListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/ComplaintDto"
+        meta:
+          $ref: "#/components/schemas/PaginationMeta"
+      required: [success, data, meta]
+
+    CreateComplaintBody:
+      type: object
+      properties:
+        propertyId:
+          type: string
+        residentId:
+          type: string
+        category:
+          type: string
+        subCategory:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+        priority:
+          type: string
+        assignedTo:
+          type: string
+        slaHours:
+          type: integer
+      required: [propertyId, category, title, description]
+
+    UpdateComplaintBody:
+      type: object
+      properties:
+        status:
+          type: string
+        priority:
+          type: string
+        assignedTo:
+          type: string
+        resolutionNote:
+          type: string
+        rating:
+          type: integer
+
+    EscalationDto:
+      type: object
+      properties:
+        id:
+          type: string
+        complaintId:
+          type: string
+        level:
+          type: integer
+        escalatedTo:
+          type: string
+        reason:
+          type: string
+        createdAt:
+          type: string
+      required: [id, complaintId, level, escalatedTo, reason, createdAt]
+
+    EscalationResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          $ref: "#/components/schemas/EscalationDto"
+      required: [success, data]
+
+    CreateEscalationBody:
+      type: object
+      properties:
+        complaintId:
+          type: string
+        level:
+          type: integer
+        escalatedTo:
+          type: string
+        reason:
+          type: string
+      required: [complaintId, level, escalatedTo, reason]
+
+    # ─── EMPLOYEE ─────────────────────────────────────────
+    EmployeeDto:
+      type: object
+      properties:
+        id:
+          type: string
+        employeeCode:
+          type: string
+        name:
+          type: string
+        email:
+          type: string
+        phone:
+          type: string
+        dob:
+          type: string
+          nullable: true
+        gender:
+          type: string
+          nullable: true
+        photo:
+          type: string
+          nullable: true
+        department:
+          type: string
+        designation:
+          type: string
+        propertyId:
+          type: string
+          nullable: true
+        managerId:
+          type: string
+          nullable: true
+        joiningDate:
+          type: string
+        ctc:
+          type: number
+          nullable: true
+        status:
+          type: string
+        createdAt:
+          type: string
+      required: [id, employeeCode, name, email, phone, department, designation, joiningDate, status, createdAt]
+
+    EmployeeResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          $ref: "#/components/schemas/EmployeeDto"
+      required: [success, data]
+
+    EmployeesListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/EmployeeDto"
+        meta:
+          $ref: "#/components/schemas/PaginationMeta"
+      required: [success, data, meta]
+
+    CreateEmployeeBody:
+      type: object
+      properties:
+        name:
+          type: string
+        email:
+          type: string
+        phone:
+          type: string
+        dob:
+          type: string
+        gender:
+          type: string
+        department:
+          type: string
+        designation:
+          type: string
+        propertyId:
+          type: string
+        managerId:
+          type: string
+        joiningDate:
+          type: string
+        ctc:
+          type: number
+        bankAccount:
+          type: string
+        ifscCode:
+          type: string
+        panNumber:
+          type: string
+        status:
+          type: string
+      required: [name, email, phone, department, designation, joiningDate]
+
+    # ─── ATTENDANCE ───────────────────────────────────────
+    AttendanceDto:
+      type: object
+      properties:
+        id:
+          type: string
+        employeeId:
+          type: string
+        date:
+          type: string
+        status:
+          type: string
+        inTime:
+          type: string
+          nullable: true
+        outTime:
+          type: string
+          nullable: true
+        notes:
+          type: string
+          nullable: true
+        employeeName:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+      required: [id, employeeId, date, status, createdAt]
+
+    AttendanceResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          $ref: "#/components/schemas/AttendanceDto"
+      required: [success, data]
+
+    AttendanceListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/AttendanceDto"
+        meta:
+          $ref: "#/components/schemas/PaginationMeta"
+      required: [success, data, meta]
+
+    CreateAttendanceBody:
+      type: object
+      properties:
+        employeeId:
+          type: string
+        date:
+          type: string
+        status:
+          type: string
+        inTime:
+          type: string
+        outTime:
+          type: string
+        notes:
+          type: string
+      required: [employeeId, date, status]
+
+    # ─── LEAVE ────────────────────────────────────────────
+    LeaveDto:
+      type: object
+      properties:
+        id:
+          type: string
+        employeeId:
+          type: string
+        type:
+          type: string
+        fromDate:
+          type: string
+        toDate:
+          type: string
+        days:
+          type: number
+        reason:
+          type: string
+        status:
+          type: string
+        approvedBy:
+          type: string
+          nullable: true
+        employeeName:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+        updatedAt:
+          type: string
+      required: [id, employeeId, type, fromDate, toDate, days, reason, status, createdAt, updatedAt]
+
+    LeaveResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          $ref: "#/components/schemas/LeaveDto"
+      required: [success, data]
+
+    LeavesListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/LeaveDto"
+        meta:
+          $ref: "#/components/schemas/PaginationMeta"
+      required: [success, data, meta]
+
+    CreateLeaveBody:
+      type: object
+      properties:
+        employeeId:
+          type: string
+        type:
+          type: string
+        fromDate:
+          type: string
+        toDate:
+          type: string
+        days:
+          type: number
+        reason:
+          type: string
+      required: [employeeId, type, fromDate, toDate, days, reason]
+
+    UpdateLeaveBody:
+      type: object
+      properties:
+        status:
+          type: string
+        approvedBy:
+          type: string
+
+    # ─── RECRUITMENT ──────────────────────────────────────
+    JobRequisitionDto:
+      type: object
+      properties:
+        id:
+          type: string
+        role:
+          type: string
+        department:
+          type: string
+        headcount:
+          type: integer
+        status:
+          type: string
+        candidateCount:
+          type: integer
+        createdAt:
+          type: string
+        updatedAt:
+          type: string
+      required: [id, role, department, headcount, status, candidateCount, createdAt, updatedAt]
+
+    JobRequisitionResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          $ref: "#/components/schemas/JobRequisitionDto"
+      required: [success, data]
+
+    JobRequisitionsListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/JobRequisitionDto"
+        meta:
+          $ref: "#/components/schemas/PaginationMeta"
+      required: [success, data, meta]
+
+    CreateJobRequisitionBody:
+      type: object
+      properties:
+        role:
+          type: string
+        department:
+          type: string
+        headcount:
+          type: integer
+        status:
+          type: string
+      required: [role, department, headcount]
+
+    CandidateDto:
+      type: object
+      properties:
+        id:
+          type: string
+        jobRequisitionId:
+          type: string
+          nullable: true
+        name:
+          type: string
+        email:
+          type: string
+        phone:
+          type: string
+        resumeUrl:
+          type: string
+          nullable: true
+        source:
+          type: string
+          nullable: true
+        stage:
+          type: string
+        bgvStatus:
+          type: string
+          nullable: true
+        offerStatus:
+          type: string
+          nullable: true
+        notes:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+      required: [id, name, email, phone, stage, createdAt]
+
+    CandidateResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          $ref: "#/components/schemas/CandidateDto"
+      required: [success, data]
+
+    CandidatesListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/CandidateDto"
+        meta:
+          $ref: "#/components/schemas/PaginationMeta"
+      required: [success, data, meta]
+
+    CreateCandidateBody:
+      type: object
+      properties:
+        jobRequisitionId:
+          type: string
+        name:
+          type: string
+        email:
+          type: string
+        phone:
+          type: string
+        resumeUrl:
+          type: string
+        source:
+          type: string
+        stage:
+          type: string
+        notes:
+          type: string
+      required: [name, email, phone]
+
+    # ─── VENDOR ───────────────────────────────────────────
+    VendorDto:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        gstin:
+          type: string
+          nullable: true
+        pan:
+          type: string
+          nullable: true
+        phone:
+          type: string
+        email:
+          type: string
+          nullable: true
+        address:
+          type: string
+          nullable: true
+        categories:
+          type: array
+          items:
+            type: string
+        rating:
+          type: number
+          nullable: true
+        status:
+          type: string
+        createdAt:
+          type: string
+      required: [id, name, phone, categories, status, createdAt]
+
+    VendorResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          $ref: "#/components/schemas/VendorDto"
+      required: [success, data]
+
+    VendorsListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/VendorDto"
+        meta:
+          $ref: "#/components/schemas/PaginationMeta"
+      required: [success, data, meta]
+
+    CreateVendorBody:
+      type: object
+      properties:
+        name:
+          type: string
+        gstin:
+          type: string
+        pan:
+          type: string
+        phone:
+          type: string
+        email:
+          type: string
+        address:
+          type: string
+        categories:
+          type: array
+          items:
+            type: string
+        bankAccount:
+          type: string
+        ifscCode:
+          type: string
+        rating:
+          type: number
+        status:
+          type: string
+      required: [name, phone]
+
+    # ─── INDENT ───────────────────────────────────────────
+    IndentDto:
+      type: object
+      properties:
+        id:
+          type: string
+        propertyId:
+          type: string
+        department:
+          type: string
+        items:
+          type: array
+          items:
+            type: object
+        status:
+          type: string
+        urgency:
+          type: string
+        purpose:
+          type: string
+          nullable: true
+        budgetHead:
+          type: string
+          nullable: true
+        approvedBy:
+          type: string
+          nullable: true
+        createdBy:
+          type: string
+        createdAt:
+          type: string
+      required: [id, propertyId, department, items, status, urgency, createdBy, createdAt]
+
+    IndentResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          $ref: "#/components/schemas/IndentDto"
+      required: [success, data]
+
+    IndentsListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/IndentDto"
+        meta:
+          $ref: "#/components/schemas/PaginationMeta"
+      required: [success, data, meta]
+
+    CreateIndentBody:
+      type: object
+      properties:
+        propertyId:
+          type: string
+        department:
+          type: string
+        items:
+          type: array
+          items:
+            type: object
+        urgency:
+          type: string
+        purpose:
+          type: string
+        budgetHead:
+          type: string
+        status:
+          type: string
+      required: [propertyId, department, items]
+
+    # ─── PURCHASE ORDER ───────────────────────────────────
+    PurchaseOrderDto:
+      type: object
+      properties:
+        id:
+          type: string
+        poNumber:
+          type: string
+        vendorId:
+          type: string
+        propertyId:
+          type: string
+          nullable: true
+        items:
+          type: array
+          items:
+            type: object
+        totalAmount:
+          type: number
+        status:
+          type: string
+        approvedBy:
+          type: string
+          nullable: true
+        deliveryDate:
+          type: string
+          nullable: true
+        notes:
+          type: string
+          nullable: true
+        vendorName:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+      required: [id, poNumber, vendorId, items, totalAmount, status, createdAt]
+
+    PurchaseOrderResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          $ref: "#/components/schemas/PurchaseOrderDto"
+      required: [success, data]
+
+    PurchaseOrdersListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/PurchaseOrderDto"
+        meta:
+          $ref: "#/components/schemas/PaginationMeta"
+      required: [success, data, meta]
+
+    CreatePurchaseOrderBody:
+      type: object
+      properties:
+        vendorId:
+          type: string
+        propertyId:
+          type: string
+        items:
+          type: array
+          items:
+            type: object
+        totalAmount:
+          type: number
+        status:
+          type: string
+        deliveryDate:
+          type: string
+        notes:
+          type: string
+      required: [vendorId, items, totalAmount]
+
+    # ─── GRN ──────────────────────────────────────────────
+    GRNDto:
+      type: object
+      properties:
+        id:
+          type: string
+        grnNumber:
+          type: string
+        poId:
+          type: string
+        propertyId:
+          type: string
+        items:
+          type: array
+          items:
+            type: object
+        status:
+          type: string
+        qcNotes:
+          type: string
+          nullable: true
+        receivedBy:
+          type: string
+        createdAt:
+          type: string
+      required: [id, grnNumber, poId, propertyId, items, status, receivedBy, createdAt]
+
+    GRNResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          $ref: "#/components/schemas/GRNDto"
+      required: [success, data]
+
+    GRNsListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/GRNDto"
+        meta:
+          $ref: "#/components/schemas/PaginationMeta"
+      required: [success, data, meta]
+
+    CreateGRNBody:
+      type: object
+      properties:
+        poId:
+          type: string
+        propertyId:
+          type: string
+        items:
+          type: array
+          items:
+            type: object
+        status:
+          type: string
+        qcNotes:
+          type: string
+        receivedBy:
+          type: string
+      required: [poId, propertyId, items, receivedBy]
+
+    # ─── INVENTORY ────────────────────────────────────────
+    InventoryItemDto:
+      type: object
+      properties:
+        id:
+          type: string
+        propertyId:
+          type: string
+          nullable: true
+        name:
+          type: string
+        sku:
+          type: string
+          nullable: true
+        category:
+          type: string
+        unit:
+          type: string
+        currentStock:
+          type: number
+        minStock:
+          type: number
+        expiryDate:
+          type: string
+          nullable: true
+        unitCost:
+          type: number
+          nullable: true
+        location:
+          type: string
+          nullable: true
+        isAsset:
+          type: boolean
+        assetTag:
+          type: string
+          nullable: true
+        condition:
+          type: string
+          nullable: true
+        isLowStock:
+          type: boolean
+        createdAt:
+          type: string
+      required: [id, name, category, unit, currentStock, minStock, isAsset, isLowStock, createdAt]
+
+    InventoryItemResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          $ref: "#/components/schemas/InventoryItemDto"
+      required: [success, data]
+
+    InventoryListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/InventoryItemDto"
+        meta:
+          $ref: "#/components/schemas/PaginationMeta"
+      required: [success, data, meta]
+
+    CreateInventoryItemBody:
+      type: object
+      properties:
+        propertyId:
+          type: string
+        name:
+          type: string
+        sku:
+          type: string
+        category:
+          type: string
+        unit:
+          type: string
+        currentStock:
+          type: number
+        minStock:
+          type: number
+        expiryDate:
+          type: string
+        unitCost:
+          type: number
+        location:
+          type: string
+        isAsset:
+          type: boolean
+        assetTag:
+          type: string
+        condition:
+          type: string
+      required: [name, category, unit]
+
+    # ─── RECIPE ───────────────────────────────────────────
+    RecipeDto:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        category:
+          type: string
+        mealType:
+          type: string
+        ingredients:
+          type: array
+          items:
+            type: object
+        method:
+          type: string
+          nullable: true
+        allergens:
+          type: array
+          items:
+            type: string
+        isVeg:
+          type: boolean
+        isActive:
+          type: boolean
+        createdAt:
+          type: string
+      required: [id, name, category, mealType, ingredients, allergens, isVeg, isActive, createdAt]
+
+    RecipeResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          $ref: "#/components/schemas/RecipeDto"
+      required: [success, data]
+
+    RecipesListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/RecipeDto"
+        meta:
+          $ref: "#/components/schemas/PaginationMeta"
+      required: [success, data, meta]
+
+    CreateRecipeBody:
+      type: object
+      properties:
+        name:
+          type: string
+        category:
+          type: string
+        mealType:
+          type: string
+        ingredients:
+          type: array
+          items:
+            type: object
+        method:
+          type: string
+        allergens:
+          type: array
+          items:
+            type: string
+        isVeg:
+          type: boolean
+        isActive:
+          type: boolean
+      required: [name, category, mealType, ingredients]
+
+    # ─── MENU PLAN ────────────────────────────────────────
+    MenuPlanDto:
+      type: object
+      properties:
+        id:
+          type: string
+        propertyId:
+          type: string
+        weekStart:
+          type: string
+        slots:
+          type: object
+        status:
+          type: string
+        createdAt:
+          type: string
+      required: [id, propertyId, weekStart, slots, status, createdAt]
+
+    MenuPlanResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          $ref: "#/components/schemas/MenuPlanDto"
+      required: [success, data]
+
+    MenuPlansListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/MenuPlanDto"
+        meta:
+          $ref: "#/components/schemas/PaginationMeta"
+      required: [success, data, meta]
+
+    CreateMenuPlanBody:
+      type: object
+      properties:
+        propertyId:
+          type: string
+        weekStart:
+          type: string
+        slots:
+          type: object
+        status:
+          type: string
+      required: [propertyId, weekStart, slots]
+
+    # ─── LEAD ─────────────────────────────────────────────
+    LeadDto:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        phone:
+          type: string
+        email:
+          type: string
+          nullable: true
+        source:
+          type: string
+        propertyId:
+          type: string
+          nullable: true
+        stage:
+          type: string
+        assignedTo:
+          type: string
+          nullable: true
+        visitDate:
+          type: string
+          nullable: true
+        visitDone:
+          type: boolean
+        lostReason:
+          type: string
+          nullable: true
+        notes:
+          type: string
+          nullable: true
+        followUpAt:
+          type: string
+          nullable: true
+        convertedAt:
+          type: string
+          nullable: true
+        propertyName:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+      required: [id, name, phone, source, stage, visitDone, createdAt]
+
+    LeadResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          $ref: "#/components/schemas/LeadDto"
+      required: [success, data]
+
+    LeadsListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/LeadDto"
+        meta:
+          $ref: "#/components/schemas/PaginationMeta"
+      required: [success, data, meta]
+
+    CreateLeadBody:
+      type: object
+      properties:
+        name:
+          type: string
+        phone:
+          type: string
+        email:
+          type: string
+        source:
+          type: string
+        propertyId:
+          type: string
+        stage:
+          type: string
+        assignedTo:
+          type: string
+        visitDate:
+          type: string
+        notes:
+          type: string
+        followUpAt:
+          type: string
+      required: [name, phone, source]
+
+    # ─── COURSE ───────────────────────────────────────────
+    CourseDto:
+      type: object
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+          nullable: true
+        category:
+          type: string
+        targetRoles:
+          type: array
+          items:
+            type: string
+        contentUrl:
+          type: string
+          nullable: true
+        contentType:
+          type: string
+        isMandatory:
+          type: boolean
+        expiryDate:
+          type: string
+          nullable: true
+        isActive:
+          type: boolean
+        enrollmentCount:
+          type: integer
+        createdAt:
+          type: string
+      required: [id, title, category, targetRoles, contentType, isMandatory, isActive, enrollmentCount, createdAt]
+
+    CourseResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          $ref: "#/components/schemas/CourseDto"
+      required: [success, data]
+
+    CoursesListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/CourseDto"
+        meta:
+          $ref: "#/components/schemas/PaginationMeta"
+      required: [success, data, meta]
+
+    CreateCourseBody:
+      type: object
+      properties:
+        title:
+          type: string
+        description:
+          type: string
+        category:
+          type: string
+        targetRoles:
+          type: array
+          items:
+            type: string
+        contentUrl:
+          type: string
+        contentType:
+          type: string
+        isMandatory:
+          type: boolean
+        expiryDate:
+          type: string
+        isActive:
+          type: boolean
+      required: [title, category, contentType]
+
+    # ─── ENROLLMENT ───────────────────────────────────────
+    EnrollmentDto:
+      type: object
+      properties:
+        id:
+          type: string
+        courseId:
+          type: string
+        employeeId:
+          type: string
+        progress:
+          type: number
+        completed:
+          type: boolean
+        completedAt:
+          type: string
+          nullable: true
+        score:
+          type: integer
+          nullable: true
+        courseTitle:
+          type: string
+          nullable: true
+        employeeName:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+      required: [id, courseId, employeeId, progress, completed, createdAt]
+
+    EnrollmentResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          $ref: "#/components/schemas/EnrollmentDto"
+      required: [success, data]
+
+    EnrollmentsListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/EnrollmentDto"
+        meta:
+          $ref: "#/components/schemas/PaginationMeta"
+      required: [success, data, meta]
+
+    CreateEnrollmentBody:
+      type: object
+      properties:
+        courseId:
+          type: string
+        employeeId:
+          type: string
+      required: [courseId, employeeId]
+
+    UpdateEnrollmentBody:
+      type: object
+      properties:
+        progress:
+          type: number
+        completed:
+          type: boolean
+        score:
+          type: integer
+
+    # ─── PROPERTY LEAD ────────────────────────────────────
+    PropertyLeadDto:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        address:
+          type: string
+        city:
+          type: string
+        lat:
+          type: number
+          nullable: true
+        lng:
+          type: number
+          nullable: true
+        ownerName:
+          type: string
+          nullable: true
+        ownerPhone:
+          type: string
+          nullable: true
+        totalArea:
+          type: number
+          nullable: true
+        askingRent:
+          type: number
+          nullable: true
+        bedCount:
+          type: integer
+          nullable: true
+        stage:
+          type: string
+        notes:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+      required: [id, name, address, city, stage, createdAt]
+
+    PropertyLeadResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          $ref: "#/components/schemas/PropertyLeadDto"
+      required: [success, data]
+
+    PropertyLeadsListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/PropertyLeadDto"
+        meta:
+          $ref: "#/components/schemas/PaginationMeta"
+      required: [success, data, meta]
+
+    CreatePropertyLeadBody:
+      type: object
+      properties:
+        name:
+          type: string
+        address:
+          type: string
+        city:
+          type: string
+        lat:
+          type: number
+        lng:
+          type: number
+        ownerName:
+          type: string
+        ownerPhone:
+          type: string
+        totalArea:
+          type: number
+        askingRent:
+          type: number
+        bedCount:
+          type: integer
+        stage:
+          type: string
+        notes:
+          type: string
+      required: [name, address, city]
+
+    # ─── ANNOUNCEMENT ─────────────────────────────────────
+    AnnouncementDto:
+      type: object
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        content:
+          type: string
+        propertyId:
+          type: string
+          nullable: true
+        targetRoles:
+          type: array
+          items:
+            type: string
+        createdBy:
+          type: string
+        createdAt:
+          type: string
+      required: [id, title, content, targetRoles, createdBy, createdAt]
+
+    AnnouncementResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          $ref: "#/components/schemas/AnnouncementDto"
+      required: [success, data]
+
+    AnnouncementsListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/AnnouncementDto"
+        meta:
+          $ref: "#/components/schemas/PaginationMeta"
+      required: [success, data, meta]
+
+    CreateAnnouncementBody:
+      type: object
+      properties:
+        title:
+          type: string
+        content:
+          type: string
+        propertyId:
+          type: string
+        targetRoles:
+          type: array
+          items:
+            type: string
+      required: [title, content]

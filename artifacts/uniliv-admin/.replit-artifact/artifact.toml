@@ -1,0 +1,31 @@
+kind = "web"
+previewPath = "/"
+title = "UNILIV Admin"
+version = "1.0.0"
+id = "artifacts/uniliv-admin"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 21571
+
+[services.development]
+run = "pnpm --filter @workspace/uniliv-admin run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/uniliv-admin", "run", "build" ]
+publicDir = "artifacts/uniliv-admin/dist/public"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "21571"
+BASE_PATH = "/"

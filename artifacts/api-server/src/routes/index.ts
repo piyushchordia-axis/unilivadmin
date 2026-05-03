@@ -1,8 +1,44 @@
 import { Router, type IRouter } from "express";
-import healthRouter from "./health";
+import healthRouter from "./health.js";
+import authRouter from "./auth.js";
+import dashboardRouter from "./dashboard.js";
+import propertiesRouter from "./properties.js";
+import roomsRouter from "./rooms.js";
+import residentsRouter from "./residents.js";
+import complaintsRouter from "./complaints.js";
+import { employeeRouter, attendanceRouter, leavesRouter, recruitmentRouter } from "./employees.js";
+import { vendorRouter, indentRouter, poRouter, grnRouter, inventoryRouter } from "./procurement.js";
+import { recipesRouter, menuPlansRouter } from "./kitchen.js";
+import { leadsRouter, propertyLeadsRouter } from "./sales.js";
+import { coursesRouter, enrollmentsRouter } from "./lnd.js";
+import { usersRouter, announcementsRouter } from "./users.js";
 
 const router: IRouter = Router();
 
 router.use(healthRouter);
+router.use("/auth", authRouter);
+router.use("/dashboard", dashboardRouter);
+router.use("/properties", propertiesRouter);
+router.use("/rooms", roomsRouter);
+router.use("/residents", residentsRouter);
+router.use("/complaints", complaintsRouter);
+router.use("/escalations", complaintsRouter);
+router.use("/employees", employeeRouter);
+router.use("/attendance", attendanceRouter);
+router.use("/leaves", leavesRouter);
+router.use(recruitmentRouter);
+router.use("/vendors", vendorRouter);
+router.use("/indents", indentRouter);
+router.use("/purchase-orders", poRouter);
+router.use("/grn", grnRouter);
+router.use("/inventory", inventoryRouter);
+router.use("/recipes", recipesRouter);
+router.use("/menu-plans", menuPlansRouter);
+router.use("/leads", leadsRouter);
+router.use("/property-leads", propertyLeadsRouter);
+router.use("/courses", coursesRouter);
+router.use("/enrollments", enrollmentsRouter);
+router.use("/users", usersRouter);
+router.use("/announcements", announcementsRouter);
 
 export default router;

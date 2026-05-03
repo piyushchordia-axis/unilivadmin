@@ -1,0 +1,583 @@
+  You are building UNILIV ADMIN — a complete multi-property co-living
+  management web application. Build this as a production-grade full-stack
+  application with the following exact specifications.
+  
+  ═══════════════════════════════════════════════════════
+  TECH STACK — USE EXACTLY THESE, NO SUBSTITUTIONS
+  ═══════════════════════════════════════════════════════
+  Frontend: React 18 + Vite + TypeScript
+  Styling: Tailwind CSS + shadcn/ui components
+  State: Zustand (global) + React Query (server state)
+  Forms: React Hook Form + Zod validation
+  Tables: TanStack Table v8
+  Charts: Recharts
+  Icons: Lucide React
+  Date handling: date-fns
+  Backend: Node.js + Express.js
+  ORM: Prisma
+  Database: PostgreSQL (via Supabase — use env var DATABASE_URL)
+  Auth: JWT (access token 15min + refresh token 7 days)
+  File Storage: Supabase Storage (env var SUPABASE_URL, SUPABASE_ANON_KEY)
+  Email: Nodemailer (env var SMTP_HOST, SMTP_USER, SMTP_PASS)
+  SMS: Twilio (env var TWILIO_SID, TWILIO_TOKEN, TWILIO_FROM)
+  PDF Generation: Puppeteer
+  Payment: Razorpay (env var RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET)
+  
+  ═══════════════════════════════════════════════════════
+  FOLDER STRUCTURE — CREATE EXACTLY THIS
+  ═══════════════════════════════════════════════════════
+  uniliv-admin/
+  ├── client/                    # React frontend
+  │   ├── src/
+  │   │   ├── components/
+  │   │   │   ├── ui/            # shadcn components
+  │   │   │   ├── layout/        # Sidebar, Topbar, PageWrapper
+  │   │   │   ├── forms/         # Reusable form components
+  │   │   │   └── tables/        # Reusable table components
+  │   │   ├── pages/
+  │   │   │   ├── auth/          # Login, ForgotPassword
+  │   │   │   ├── dashboard/     # Home dashboard
+  │   │   │   ├── properties/    # Property management
+  │   │   │   ├── residents/     # Resident management
+  │   │   │   ├── complaints/    # Complaint management
+  │   │   │   ├── hrms/          # HR module
+  │   │   │   ├── procurement/   # Procurement + Inventory
+  │   │   │   ├── kitchen/       # Kitchen + food ops
+  │   │   │   ├── sales/         # CRM + lead management
+  │   │   │   ├── lnd/           # Learning & Development
+  │   │   │   ├── finance/       # Finance module
+  │   │   │   └── settings/      # Roles, users, config
+  │   │   ├── hooks/             # Custom React hooks
+  │   │   ├── store/             # Zustand stores
+  │   │   ├── api/               # React Query API calls
+  │   │   ├── types/             # TypeScript types
+  │   │   ├── lib/               # Utilities, helpers
+  │   │   └── App.tsx
+  │   ├── index.html
+  │   └── package.json
+  ├── server/                    # Express backend
+  │   ├── src/
+  │   │   ├── routes/            # One file per module
+  │   │   ├── controllers/       # Business logic
+  │   │   ├── middleware/        # Auth, validation, errors
+  │   │   ├── services/          # Email, SMS, PDF, storage
+  │   │   ├── prisma/
+  │   │   │   └── schema.prisma  # Database schema
+  │   │   └── index.ts           # Express app entry
+  │   └── package.json
+  ├── .env                       # Environment variables
+  └── package.json               # Root scripts
+  
+  ═══════════════════════════════════════════════════════
+  DATABASE SCHEMA — PRISMA (schema.prisma)
+  ═══════════════════════════════════════════════════════
+  Create ALL of the following models with ALL fields listed.
+  Use UUID for all IDs. Add createdAt, updatedAt to every model.
+  
+  // ─── CORE ────────────────────────────────────────────
+  model Property {
+    id          String    @id @default(uuid())
+    name        String
+    address     String
+    city        String
+    state       String
+    pincode     String
+    lat         Float?
+    lng         Float?
+    totalBeds   Int
+    status      PropertyStatus @default(ACTIVE)
+    wardenId    String?
+    phone       String?
+    email       String?
+    amenities   String[]
+    rooms       Room[]
+    residents   Resident[]
+    complaints  Complaint[]
+    staff       User[]     @relation("PropertyStaff")
+    createdAt   DateTime   @default(now())
+    updatedAt   DateTime   @updatedAt
+  }
+  enum PropertyStatus { ACTIVE INACTIVE UNDER_RENOVATION }
+  
+  model Room {
+    id          String     @id @default(uuid())
+    propertyId  String
+    property    Property   @relation(fields: [propertyId], references: [id])
+    number      String
+    floor       Int
+    wing        String?
+    type        RoomType
+    capacity    Int
+    status      RoomStatus @default(VACANT)
+    residents   Resident[]
+    createdAt   DateTime   @default(now())
+    updatedAt   DateTime   @updatedAt
+  }
+  enum RoomType { SINGLE DOUBLE TRIPLE DORMITORY }
+  enum RoomStatus { VACANT OCCUPIED MAINTENANCE RESERVED }
+  
+  model User {
+    id            String    @id @default(uuid())
+    name          String
+    email         String    @unique
+    phone         String?
+    passwordHash  String
+    role          UserRole
+    propertyId    String?
+    property      Property? @relation("PropertyStaff", fields: [propertyId], references: [id])
+    isActive      Boolean   @default(true)
+    lastLogin     DateTime?
+    refreshTokens RefreshToken[]
+    createdAt     DateTime  @default(now())
+    updatedAt     DateTime  @updatedAt
+  }
+  enum UserRole {
+    SUPER_ADMIN HR_MANAGER OPERATIONS_MANAGER PROCUREMENT_MANAGER
+    KITCHEN_MANAGER PROJECTS_MANAGER PROPERTY_ACQUISITION FINANCE
+    SALES_EXECUTIVE WARDEN VENDOR_RESTRICTED AUDIT_READONLY
+  }
+  
+  model RefreshToken {
+    id        String   @id @default(uuid())
+    userId    String
+    user      User     @relation(fields: [userId], references: [id])
+    token     String   @unique
+    expiresAt DateTime
+    createdAt DateTime @default(now())
+  }
+  
+  model Resident {
+    id               String    @id @default(uuid())
+    propertyId       String
+    property         Property  @relation(fields: [propertyId], references: [id])
+    roomId           String?
+    room             Room?     @relation(fields: [roomId], references: [id])
+    name             String
+    email            String
+    phone            String
+    dob              DateTime?
+    gender           String?
+    photo            String?
+    college          String?
+    course           String?
+    parentName       String?
+    parentPhone      String?
+    parentEmail      String?
+    emergencyContact String?
+    dietaryPref      String[]
+    allergies        String[]
+    checkInDate      DateTime?
+    checkOutDate     DateTime?
+    planType         String?
+    monthlyRent      Decimal?
+    securityDeposit  Decimal?
+    status           ResidentStatus @default(ACTIVE)
+    docStatus        Json?
+    ledgerEntries    LedgerEntry[]
+    payments         Payment[]
+    complaints       Complaint[]
+    createdAt        DateTime   @default(now())
+    updatedAt        DateTime   @updatedAt
+  }
+  enum ResidentStatus { ACTIVE CHECKED_OUT NOTICE_PERIOD }
+  
+  model LedgerEntry {
+    id          String      @id @default(uuid())
+    residentId  String
+    resident    Resident    @relation(fields: [residentId], references: [id])
+    type        LedgerType
+    amount      Decimal
+    description String
+    dueDate     DateTime?
+    isPaid      Boolean     @default(false)
+    paidOn      DateTime?
+    reference   String?
+    createdBy   String?
+    createdAt   DateTime    @default(now())
+    updatedAt   DateTime    @updatedAt
+  }
+  enum LedgerType { RENT UTILITY FOOD LAUNDRY PENALTY ADJUSTMENT INCENTIVE DEPOSIT }
+  
+  model Payment {
+    id              String        @id @default(uuid())
+    residentId      String
+    resident        Resident      @relation(fields: [residentId], references: [id])
+    amount          Decimal
+    mode            PaymentMode
+    status          PaymentStatus @default(PENDING)
+    razorpayOrderId String?
+    razorpayPayId   String?
+    reference       String?
+    notes           String?
+    createdAt       DateTime      @default(now())
+    updatedAt       DateTime      @updatedAt
+  }
+  enum PaymentMode { UPI NETBANKING CARD CASH BANK_TRANSFER }
+  enum PaymentStatus { PENDING SUCCESS FAILED REFUNDED }
+  
+  model Complaint {
+    id           String           @id @default(uuid())
+    propertyId   String
+    property     Property         @relation(fields: [propertyId], references: [id])
+    residentId   String?
+    resident     Resident?        @relation(fields: [residentId], references: [id])
+    ticketNo     String           @unique
+    category     ComplaintCategory
+    subCategory  String?
+    title        String
+    description  String
+    photos       String[]
+    status       ComplaintStatus  @default(OPEN)
+    priority     Priority         @default(MEDIUM)
+    assignedTo   String?
+    slaHours     Int              @default(24)
+    slaDeadline  DateTime?
+    slaBreach    Boolean          @default(false)
+    resolvedAt   DateTime?
+    resolutionNote String?
+    rating       Int?
+    escalations  Escalation[]
+    createdAt    DateTime         @default(now())
+    updatedAt    DateTime         @updatedAt
+  }
+  enum ComplaintCategory { ELECTRICAL PLUMBING HOUSEKEEPING INTERNET SECURITY FOOD LAUNDRY OTHER }
+  enum ComplaintStatus { OPEN ASSIGNED IN_PROGRESS RESOLVED CLOSED REOPENED }
+  enum Priority { LOW MEDIUM HIGH CRITICAL }
+  
+  model Escalation {
+    id          String    @id @default(uuid())
+    complaintId String
+    complaint   Complaint @relation(fields: [complaintId], references: [id])
+    level       Int
+    escalatedTo String
+    reason      String
+    createdAt   DateTime  @default(now())
+  }
+  
+  // ─── HRMS ─────────────────────────────────────────────
+  model Employee {
+    id            String      @id @default(uuid())
+    employeeCode  String      @unique
+    name          String
+    email         String      @unique
+    phone         String
+    dob           DateTime?
+    gender        String?
+    photo         String?
+    department    String
+    designation   String
+    propertyId    String?
+    managerId     String?
+    joiningDate   DateTime
+    ctc           Decimal?
+    bankAccount   String?
+    ifscCode      String?
+    panNumber     String?
+    pfNumber      String?
+    esicNumber    String?
+    status        EmployeeStatus @default(ACTIVE)
+    attendance    Attendance[]
+    leaves        Leave[]
+    createdAt     DateTime    @default(now())
+    updatedAt     DateTime    @updatedAt
+  }
+  enum EmployeeStatus { ACTIVE INACTIVE ON_LEAVE EXITED }
+  
+  model Attendance {
+    id         String           @id @default(uuid())
+    employeeId String
+    employee   Employee         @relation(fields: [employeeId], references: [id])
+    date       DateTime         @db.Date
+    status     AttendanceStatus
+    inTime     DateTime?
+    outTime    DateTime?
+    notes      String?
+    createdAt  DateTime         @default(now())
+  }
+  enum AttendanceStatus { PRESENT ABSENT HALF_DAY WFH ON_LEAVE }
+  
+  model Leave {
+    id         String      @id @default(uuid())
+    employeeId String
+    employee   Employee    @relation(fields: [employeeId], references: [id])
+    type       LeaveType
+    fromDate   DateTime
+    toDate     DateTime
+    days       Float
+    reason     String
+    status     LeaveStatus @default(PENDING)
+    approvedBy String?
+    createdAt  DateTime    @default(now())
+    updatedAt  DateTime    @updatedAt
+  }
+  enum LeaveType { CL SL EL PL COMP_OFF }
+  enum LeaveStatus { PENDING APPROVED REJECTED CANCELLED }
+  
+  model JobRequisition {
+    id          String    @id @default(uuid())
+    role        String
+    department  String
+    headcount   Int
+    status      String    @default("OPEN")
+    candidates  Candidate[]
+    createdAt   DateTime  @default(now())
+    updatedAt   DateTime  @updatedAt
+  }
+  
+  model Candidate {
+    id              String    @id @default(uuid())
+    jobRequisitionId String?
+    jobRequisition  JobRequisition? @relation(fields: [jobRequisitionId], references: [id])
+    name            String
+    email           String
+    phone           String
+    resumeUrl       String?
+    source          String?
+    stage           String    @default("APPLIED")
+    bgvStatus       String?
+    offerStatus     String?
+    notes           String?
+    createdAt       DateTime  @default(now())
+    updatedAt       DateTime  @updatedAt
+  }
+  
+  // ─── PROCUREMENT ──────────────────────────────────────
+  model Vendor {
+    id           String    @id @default(uuid())
+    name         String
+    gstin        String?
+    pan          String?
+    phone        String
+    email        String?
+    address      String?
+    categories   String[]
+    bankAccount  String?
+    ifscCode     String?
+    rating       Float?
+    status       String    @default("ACTIVE")
+    purchaseOrders PurchaseOrder[]
+    createdAt    DateTime  @default(now())
+    updatedAt    DateTime  @updatedAt
+  }
+  
+  model Indent {
+    id          String       @id @default(uuid())
+    propertyId  String
+    department  String
+    items       Json
+    status      IndentStatus @default(DRAFT)
+    urgency     String       @default("NORMAL")
+    purpose     String?
+    budgetHead  String?
+    approvedBy  String?
+    poId        String?
+    createdBy   String
+    createdAt   DateTime     @default(now())
+    updatedAt   DateTime     @updatedAt
+  }
+  enum IndentStatus { DRAFT SUBMITTED APPROVED REJECTED PO_RAISED DELIVERED }
+  
+  model PurchaseOrder {
+    id           String     @id @default(uuid())
+    poNumber     String     @unique
+    vendorId     String
+    vendor       Vendor     @relation(fields: [vendorId], references: [id])
+    propertyId   String?
+    items        Json
+    totalAmount  Decimal
+    status       POStatus   @default(DRAFT)
+    approvedBy   String?
+    deliveryDate DateTime?
+    grnId        String?
+    notes        String?
+    createdAt    DateTime   @default(now())
+    updatedAt    DateTime   @updatedAt
+  }
+  enum POStatus { DRAFT SENT ACKNOWLEDGED PARTIAL_DELIVERY DELIVERED CANCELLED }
+  
+  model GRN {
+    id          String    @id @default(uuid())
+    grnNumber   String    @unique
+    poId        String
+    propertyId  String
+    items       Json
+    status      String    @default("PENDING_QC")
+    qcNotes     String?
+    photos      String[]
+    receivedBy  String
+    createdAt   DateTime  @default(now())
+    updatedAt   DateTime  @updatedAt
+  }
+  
+  model InventoryItem {
+    id            String    @id @default(uuid())
+    propertyId    String?
+    name          String
+    sku           String?
+    category      String
+    unit          String
+    currentStock  Decimal   @default(0)
+    minStock      Decimal   @default(0)
+    expiryDate    DateTime?
+    unitCost      Decimal?
+    location      String?
+    isAsset       Boolean   @default(false)
+    assetTag      String?
+    condition     String?
+    createdAt     DateTime  @default(now())
+    updatedAt     DateTime  @updatedAt
+  }
+  
+  // ─── KITCHEN ──────────────────────────────────────────
+  model Recipe {
+    id          String    @id @default(uuid())
+    name        String
+    category    String
+    mealType    String
+    ingredients Json
+    method      String?
+    allergens   String[]
+    isVeg       Boolean   @default(true)
+    isActive    Boolean   @default(true)
+    createdAt   DateTime  @default(now())
+    updatedAt   DateTime  @updatedAt
+  }
+  
+  model MenuPlan {
+    id         String    @id @default(uuid())
+    propertyId String
+    weekStart  DateTime
+    slots      Json
+    status     String    @default("DRAFT")
+    createdAt  DateTime  @default(now())
+    updatedAt  DateTime  @updatedAt
+  }
+  
+  // ─── SALES / CRM ──────────────────────────────────────
+  model Lead {
+    id          String     @id @default(uuid())
+    name        String
+    phone       String
+    email       String?
+    source      LeadSource
+    propertyId  String?
+    stage       LeadStage  @default(NEW)
+    assignedTo  String?
+    visitDate   DateTime?
+    visitDone   Boolean    @default(false)
+    lostReason  String?
+    notes       String?
+    followUpAt  DateTime?
+    convertedAt DateTime?
+    residentId  String?
+    createdAt   DateTime   @default(now())
+    updatedAt   DateTime   @updatedAt
+  }
+  enum LeadSource { WEBSITE WHATSAPP INSTAGRAM COLD_CALL REFERRAL COLLEGE OTHER }
+  enum LeadStage { NEW CONTACTED VISIT_SCHEDULED VISIT_DONE NEGOTIATING CONVERTED LOST }
+  
+  // ─── L&D ──────────────────────────────────────────────
+  model Course {
+    id           String     @id @default(uuid())
+    title        String
+    description  String?
+    category     String
+    targetRoles  String[]
+    contentUrl   String?
+    contentType  String
+    isMandatory  Boolean    @default(false)
+    expiryDate   DateTime?
+    isActive     Boolean    @default(true)
+    enrollments  CourseEnrollment[]
+    createdAt    DateTime   @default(now())
+    updatedAt    DateTime   @updatedAt
+  }
+  
+  model CourseEnrollment {
+    id          String    @id @default(uuid())
+    courseId    String
+    course      Course    @relation(fields: [courseId], references: [id])
+    employeeId  String
+    progress    Float     @default(0)
+    completed   Boolean   @default(false)
+    completedAt DateTime?
+    score       Int?
+    createdAt   DateTime  @default(now())
+    updatedAt   DateTime  @updatedAt
+  }
+  
+  // ─── PROPERTY ACQUISITION ─────────────────────────────
+  model PropertyLead {
+    id          String    @id @default(uuid())
+    name        String
+    address     String
+    city        String
+    lat         Float?
+    lng         Float?
+    ownerName   String?
+    ownerPhone  String?
+    totalArea   Float?
+    askingRent  Decimal?
+    bedCount    Int?
+    stage       String    @default("SCOUTING")
+    viabilityData Json?
+    documents   String[]
+    photos      String[]
+    notes       String?
+    createdAt   DateTime  @default(now())
+    updatedAt   DateTime  @updatedAt
+  }
+  
+  ═══════════════════════════════════════════════════════
+  AUTH SYSTEM
+  ═══════════════════════════════════════════════════════
+  Implement complete JWT auth:
+  POST /api/auth/login      → validate credentials, return accessToken (15min) + refreshToken (7d, httpOnly cookie)
+  POST /api/auth/refresh    → use refreshToken cookie to issue new accessToken
+  POST /api/auth/logout     → invalidate refreshToken in DB
+  GET  /api/auth/me         → return current user profile
+  
+  Middleware:
+  - authenticate: verify JWT, attach user to req
+  - authorize(...roles): check user role against allowed roles
+  - All routes except /api/auth/login require authentication
+  
+  Password: bcrypt with salt rounds 12
+  Seed one SUPER_ADMIN user: admin@uniliv.com / Admin@123
+  
+  ═══════════════════════════════════════════════════════
+  API STRUCTURE
+  ═══════════════════════════════════════════════════════
+  Base URL: /api
+  All responses: { success: boolean, data?: any, error?: string, meta?: { total, page, limit } }
+  All list endpoints: support ?page=1&limit=20&search=&propertyId= query params
+  All create/update: validate with Zod, return 400 with field errors on failure
+  Global error handler: catch all errors, log them, return { success: false, error: message }
+  
+  Create routes for ALL of these (full CRUD unless noted):
+  /api/properties          /api/rooms             /api/residents
+  /api/residents/:id/ledger  /api/residents/:id/payments
+  /api/complaints          /api/escalations
+  /api/employees           /api/attendance        /api/leaves
+  /api/candidates          /api/job-requisitions
+  /api/vendors             /api/indents           /api/purchase-orders
+  /api/grn                 /api/inventory
+  /api/recipes             /api/menu-plans
+  /api/leads               /api/courses           /api/enrollments
+  /api/property-leads
+  /api/dashboard/stats     /api/dashboard/charts
+  /api/users               /api/announcements
+  
+  ═══════════════════════════════════════════════════════
+  STARTUP TASKS
+  ═══════════════════════════════════════════════════════
+  1. Run: npx prisma migrate dev --name init
+  2. Run: npx prisma db seed (seed admin user + 2 demo properties + 10 residents)
+  3. Set up Vite proxy: /api → http://localhost:3001
+  4. Create .env with all required env vars (use dummy values for now)
+  5. Add root package.json with scripts:
+     dev: concurrently runs client (port 5173) and server (port 3001)
+     build: builds both client and server
+  
+  Build this complete foundation. Do not build any UI pages yet.
+  Confirm when server starts, DB migrated, and seed data inserted.
