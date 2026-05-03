@@ -308,6 +308,127 @@ paths:
               schema:
                 $ref: "#/components/schemas/SuccessResponse"
 
+  # ─── BOOKINGS ────────────────────────────────────────
+  /bookings:
+    get:
+      operationId: getBookings
+      tags: [bookings]
+      summary: List short-stay bookings
+      parameters:
+        - $ref: "#/components/parameters/PropertyIdParam"
+        - in: query
+          name: roomId
+          schema:
+            type: string
+        - in: query
+          name: status
+          schema:
+            type: string
+        - in: query
+          name: from
+          schema:
+            type: string
+        - in: query
+          name: to
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Bookings list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BookingsListResponse"
+    post:
+      operationId: createBooking
+      tags: [bookings]
+      summary: Create a short-stay booking
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateBookingBody"
+      responses:
+        "201":
+          description: Booking created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BookingResponse"
+
+  /bookings/availability:
+    get:
+      operationId: getBookingAvailability
+      tags: [bookings]
+      summary: Room availability for a date window
+      parameters:
+        - $ref: "#/components/parameters/PropertyIdParam"
+        - in: query
+          name: from
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: to
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Availability per room
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AvailabilityResponse"
+
+  /bookings/{id}:
+    get:
+      operationId: getBooking
+      tags: [bookings]
+      summary: Get booking by ID
+      parameters:
+        - $ref: "#/components/parameters/IdParam"
+      responses:
+        "200":
+          description: Booking
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BookingResponse"
+    put:
+      operationId: updateBooking
+      tags: [bookings]
+      summary: Update booking
+      parameters:
+        - $ref: "#/components/parameters/IdParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateBookingBody"
+      responses:
+        "200":
+          description: Booking updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BookingResponse"
+    delete:
+      operationId: deleteBooking
+      tags: [bookings]
+      summary: Delete booking
+      parameters:
+        - $ref: "#/components/parameters/IdParam"
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
   # ─── RESIDENTS ────────────────────────────────────────
   /residents:
     get:
@@ -3410,6 +3531,148 @@ components:
         reference:
           type: string
       required: [type, amount, description]
+
+    # ─── BOOKING ──────────────────────────────────────────
+    BookingDto:
+      type: object
+      properties:
+        id:
+          type: string
+        bookingNo:
+          type: string
+        propertyId:
+          type: string
+        roomId:
+          type: string
+          nullable: true
+        roomNumber:
+          type: string
+          nullable: true
+        guestName:
+          type: string
+        guestEmail:
+          type: string
+          nullable: true
+        guestPhone:
+          type: string
+        guestCount:
+          type: integer
+        checkInDate:
+          type: string
+        checkOutDate:
+          type: string
+        nights:
+          type: integer
+        ratePeriod:
+          type: string
+        ratePerPeriod:
+          type: string
+        subtotal:
+          type: string
+        taxAmount:
+          type: string
+        totalAmount:
+          type: string
+        status:
+          type: string
+        notes:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+        updatedAt:
+          type: string
+      required: [id, bookingNo, propertyId, guestName, guestPhone, guestCount, checkInDate, checkOutDate, nights, ratePeriod, ratePerPeriod, subtotal, taxAmount, totalAmount, status, createdAt, updatedAt]
+
+    BookingResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          $ref: "#/components/schemas/BookingDto"
+      required: [success, data]
+
+    BookingsListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/BookingDto"
+      required: [success, data]
+
+    CreateBookingBody:
+      type: object
+      properties:
+        propertyId:
+          type: string
+        roomId:
+          type: string
+          nullable: true
+        guestName:
+          type: string
+        guestEmail:
+          type: string
+        guestPhone:
+          type: string
+        guestCount:
+          type: integer
+        checkInDate:
+          type: string
+        checkOutDate:
+          type: string
+        ratePeriod:
+          type: string
+        ratePerPeriod:
+          type: number
+        status:
+          type: string
+        notes:
+          type: string
+      required: [propertyId, guestName, guestPhone, checkInDate, checkOutDate]
+
+    AvailabilityRoomEntry:
+      type: object
+      properties:
+        roomId:
+          type: string
+        number:
+          type: string
+        floor:
+          type: integer
+        type:
+          type: string
+        capacity:
+          type: integer
+        available:
+          type: boolean
+        bookings:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              bookingNo: { type: string }
+              guestName: { type: string }
+              checkInDate: { type: string }
+              checkOutDate: { type: string }
+              status: { type: string }
+            required: [id, bookingNo, guestName, checkInDate, checkOutDate, status]
+      required: [roomId, number, floor, type, capacity, available, bookings]
+
+    AvailabilityResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/AvailabilityRoomEntry"
+      required: [success, data]
 
     # ─── PAYMENT ──────────────────────────────────────────
     PaymentDto:

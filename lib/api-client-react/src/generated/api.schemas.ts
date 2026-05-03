@@ -346,6 +346,79 @@ export interface CreateLedgerEntryBody {
   reference?: string;
 }
 
+export interface BookingDto {
+  id: string;
+  bookingNo: string;
+  propertyId: string;
+  roomId?: string | null;
+  roomNumber?: string | null;
+  guestName: string;
+  guestEmail?: string | null;
+  guestPhone: string;
+  guestCount: number;
+  checkInDate: string;
+  checkOutDate: string;
+  nights: number;
+  ratePeriod: string;
+  ratePerPeriod: string;
+  subtotal: string;
+  taxAmount: string;
+  totalAmount: string;
+  status: string;
+  notes?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface BookingResponse {
+  success: boolean;
+  data: BookingDto;
+}
+
+export interface BookingsListResponse {
+  success: boolean;
+  data: BookingDto[];
+}
+
+export interface CreateBookingBody {
+  propertyId: string;
+  roomId?: string | null;
+  guestName: string;
+  guestEmail?: string;
+  guestPhone: string;
+  guestCount?: number;
+  checkInDate: string;
+  checkOutDate: string;
+  ratePeriod?: string;
+  ratePerPeriod?: number;
+  status?: string;
+  notes?: string;
+}
+
+export type AvailabilityRoomEntryBookingsItem = {
+  id: string;
+  bookingNo: string;
+  guestName: string;
+  checkInDate: string;
+  checkOutDate: string;
+  status: string;
+};
+
+export interface AvailabilityRoomEntry {
+  roomId: string;
+  number: string;
+  floor: number;
+  type: string;
+  capacity: number;
+  available: boolean;
+  bookings: AvailabilityRoomEntryBookingsItem[];
+}
+
+export interface AvailabilityResponse {
+  success: boolean;
+  data: AvailabilityRoomEntry[];
+}
+
 export interface PaymentDto {
   id: string;
   residentId: string;
@@ -1921,6 +1994,20 @@ export type GetRoomsParams = {
   limit?: LimitParamParameter;
   search?: SearchParamParameter;
   propertyId?: PropertyIdParamParameter;
+};
+
+export type GetBookingsParams = {
+  propertyId?: PropertyIdParamParameter;
+  roomId?: string;
+  status?: string;
+  from?: string;
+  to?: string;
+};
+
+export type GetBookingAvailabilityParams = {
+  propertyId?: PropertyIdParamParameter;
+  from: string;
+  to: string;
 };
 
 export type GetResidentsParams = {

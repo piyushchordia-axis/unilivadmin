@@ -540,6 +540,192 @@ export const DeleteRoomResponse = zod.object({
 });
 
 /**
+ * @summary List short-stay bookings
+ */
+export const GetBookingsQueryParams = zod.object({
+  propertyId: zod.coerce.string().optional(),
+  roomId: zod.coerce.string().optional(),
+  status: zod.coerce.string().optional(),
+  from: zod.coerce.string().optional(),
+  to: zod.coerce.string().optional(),
+});
+
+export const GetBookingsResponse = zod.object({
+  success: zod.boolean(),
+  data: zod.array(
+    zod.object({
+      id: zod.string(),
+      bookingNo: zod.string(),
+      propertyId: zod.string(),
+      roomId: zod.string().nullish(),
+      roomNumber: zod.string().nullish(),
+      guestName: zod.string(),
+      guestEmail: zod.string().nullish(),
+      guestPhone: zod.string(),
+      guestCount: zod.number(),
+      checkInDate: zod.string(),
+      checkOutDate: zod.string(),
+      nights: zod.number(),
+      ratePeriod: zod.string(),
+      ratePerPeriod: zod.string(),
+      subtotal: zod.string(),
+      taxAmount: zod.string(),
+      totalAmount: zod.string(),
+      status: zod.string(),
+      notes: zod.string().nullish(),
+      createdAt: zod.string(),
+      updatedAt: zod.string(),
+    }),
+  ),
+});
+
+/**
+ * @summary Create a short-stay booking
+ */
+export const CreateBookingBody = zod.object({
+  propertyId: zod.string(),
+  roomId: zod.string().nullish(),
+  guestName: zod.string(),
+  guestEmail: zod.string().optional(),
+  guestPhone: zod.string(),
+  guestCount: zod.number().optional(),
+  checkInDate: zod.string(),
+  checkOutDate: zod.string(),
+  ratePeriod: zod.string().optional(),
+  ratePerPeriod: zod.number().optional(),
+  status: zod.string().optional(),
+  notes: zod.string().optional(),
+});
+
+/**
+ * @summary Room availability for a date window
+ */
+export const GetBookingAvailabilityQueryParams = zod.object({
+  propertyId: zod.coerce.string().optional(),
+  from: zod.coerce.string(),
+  to: zod.coerce.string(),
+});
+
+export const GetBookingAvailabilityResponse = zod.object({
+  success: zod.boolean(),
+  data: zod.array(
+    zod.object({
+      roomId: zod.string(),
+      number: zod.string(),
+      floor: zod.number(),
+      type: zod.string(),
+      capacity: zod.number(),
+      available: zod.boolean(),
+      bookings: zod.array(
+        zod.object({
+          id: zod.string(),
+          bookingNo: zod.string(),
+          guestName: zod.string(),
+          checkInDate: zod.string(),
+          checkOutDate: zod.string(),
+          status: zod.string(),
+        }),
+      ),
+    }),
+  ),
+});
+
+/**
+ * @summary Get booking by ID
+ */
+export const GetBookingParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const GetBookingResponse = zod.object({
+  success: zod.boolean(),
+  data: zod.object({
+    id: zod.string(),
+    bookingNo: zod.string(),
+    propertyId: zod.string(),
+    roomId: zod.string().nullish(),
+    roomNumber: zod.string().nullish(),
+    guestName: zod.string(),
+    guestEmail: zod.string().nullish(),
+    guestPhone: zod.string(),
+    guestCount: zod.number(),
+    checkInDate: zod.string(),
+    checkOutDate: zod.string(),
+    nights: zod.number(),
+    ratePeriod: zod.string(),
+    ratePerPeriod: zod.string(),
+    subtotal: zod.string(),
+    taxAmount: zod.string(),
+    totalAmount: zod.string(),
+    status: zod.string(),
+    notes: zod.string().nullish(),
+    createdAt: zod.string(),
+    updatedAt: zod.string(),
+  }),
+});
+
+/**
+ * @summary Update booking
+ */
+export const UpdateBookingParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const UpdateBookingBody = zod.object({
+  propertyId: zod.string(),
+  roomId: zod.string().nullish(),
+  guestName: zod.string(),
+  guestEmail: zod.string().optional(),
+  guestPhone: zod.string(),
+  guestCount: zod.number().optional(),
+  checkInDate: zod.string(),
+  checkOutDate: zod.string(),
+  ratePeriod: zod.string().optional(),
+  ratePerPeriod: zod.number().optional(),
+  status: zod.string().optional(),
+  notes: zod.string().optional(),
+});
+
+export const UpdateBookingResponse = zod.object({
+  success: zod.boolean(),
+  data: zod.object({
+    id: zod.string(),
+    bookingNo: zod.string(),
+    propertyId: zod.string(),
+    roomId: zod.string().nullish(),
+    roomNumber: zod.string().nullish(),
+    guestName: zod.string(),
+    guestEmail: zod.string().nullish(),
+    guestPhone: zod.string(),
+    guestCount: zod.number(),
+    checkInDate: zod.string(),
+    checkOutDate: zod.string(),
+    nights: zod.number(),
+    ratePeriod: zod.string(),
+    ratePerPeriod: zod.string(),
+    subtotal: zod.string(),
+    taxAmount: zod.string(),
+    totalAmount: zod.string(),
+    status: zod.string(),
+    notes: zod.string().nullish(),
+    createdAt: zod.string(),
+    updatedAt: zod.string(),
+  }),
+});
+
+/**
+ * @summary Delete booking
+ */
+export const DeleteBookingParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const DeleteBookingResponse = zod.object({
+  success: zod.boolean(),
+  message: zod.string().optional(),
+});
+
+/**
  * @summary List residents
  */
 export const getResidentsQueryPageDefault = 1;

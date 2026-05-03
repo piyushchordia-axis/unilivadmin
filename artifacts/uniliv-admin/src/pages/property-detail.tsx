@@ -10,7 +10,14 @@ import {
   getGetComplaintsQueryKey,
   useCreateRoom,
   useUpdateRoom,
+  useGetBookings,
+  getGetBookingsQueryKey,
+  useGetBookingAvailability,
+  getGetBookingAvailabilityQueryKey,
+  useDeleteBooking,
   type RoomDto,
+  type BookingDto,
+  type PropertyDto,
 } from "@workspace/api-client-react";
 import { useParams, Link, useLocation } from "wouter";
 import { Card, CardContent } from "@/components/ui/card";
@@ -24,6 +31,7 @@ import { Label } from "@/components/ui/label";
 import { FormModal } from "@/components/ui/form-modal";
 import { EmptyState } from "@/components/ui/empty-state";
 import { DataTable } from "@/components/data-table";
+import type { ColumnDef } from "@tanstack/react-table";
 import {
   Select,
   SelectContent,
@@ -31,6 +39,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import {
   MapPin,
   ChevronLeft,
@@ -44,7 +60,11 @@ import {
   UserCog,
   FileText,
   Tag,
+  Calendar as CalendarIcon,
+  Trash2,
 } from "lucide-react";
+import { BookingFormModal } from "@/components/booking-form-modal";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import {
   PORTFOLIO_TYPE_LABELS,
   ATTR_LABELS,
@@ -61,6 +81,84 @@ import { formatDistanceToNow } from "date-fns";
 import { Wifi, WifiOff, Zap as ZapIcon } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { usePermissions } from "@/lib/use-permissions";
+
+function bookingColumns({
+  onEdit,
+  onDelete,
+}: {
+  onEdit: (b: BookingDto) => void;
+  onDelete: (b: BookingDto) => void;
+}): ColumnDef<BookingDto, unknown>[] {
+  return [
+    {
+      accessorKey: "bookingNo",
+      header: "Booking",
+      cell: ({ row }) => (
+        <span className="font-mono text-xs">{row.original.bookingNo}</span>
+      ),
+    },
+    { accessorKey: "guestName", header: "Guest" },
+    {
+      accessorKey: "checkInDate",
+      header: "Check-in",
+      cell: ({ row }) =>
+        new Date(row.original.checkInDate).toLocaleDateString(),
+    },
+    {
+      accessorKey: "checkOutDate",
+      header: "Check-out",
+      cell: ({ row }) =>
+        new Date(row.original.checkOutDate).toLocaleDateString(),
+    },
+    {
+      accessorKey: "nights",
+      header: "Nights",
+      cell: ({ row }) => row.original.nights,
+    },
+    {
+      accessorKey: "totalAmount",
+      header: "Total",
+      cell: ({ row }) => `₹${Number(row.original.totalAmount).toFixed(0)}`,
+    },
+    {
+      accessorKey: "status",
+      header: "Status",
+      cell: ({ row }) => <StatusBadge status={row.original.status} />,
+    },
+    {
+      id: "actions",
+      header: "",
+      cell: ({ row }) => (
+        <div className="flex gap-1 justify-end">
+          <Button
+            size="icon"
+            variant="ghost"
+            className="h-7 w-7"
+            onClick={(e) => {
+              e.stopPropagation();
+              onEdit(row.original);
+            }}
+            data-testid={`button-edit-booking-${row.original.id}`}
+          >
+            <Pencil className="w-3.5 h-3.5" />
+          </Button>
+          <Button
+            size="icon"
+            variant="ghost"
+            className="h-7 w-7 text-destructive"
+            onClick={(e) => {
+              e.stopPropagation();
+              onDelete(row.original);
+            }}
+            data-testid={`button-delete-booking-${row.original.id}`}
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+          </Button>
+        </div>
+      ),
+    },
+  ];
+}
 
 const roomSchema = z.object({
   number: z.string().min(1),
@@ -346,6 +444,66 @@ export default function PropertyDetail() {
   const [roomModalOpen, setRoomModalOpen] = React.useState(false);
   const [editingRoom, setEditingRoom] = React.useState<RoomDto | null>(null);
 
+  const [bookingModalOpen, setBookingModalOpen] = React.useState(false);
+  const [editingBooking, setEditingBooking] = React.useState<BookingDto | null>(null);
+  const [bookingToDelete, setBookingToDelete] = React.useState<BookingDto | null>(null);
+  const today0 = React.useMemo(() => {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    return d;
+  }, []);
+  const [calStart, setCalStart] = React.useState<Date>(today0);
+  const calEnd = React.useMemo(() => {
+    const d = new Date(calStart);
+    d.setDate(d.getDate() + 14);
+    return d;
+  }, [calStart]);
+  const isShortStay = property?.portfolioType === "SERVICED_APARTMENTS";
+  const { can } = usePermissions();
+  const showIot = can("IOT", "view");
+  const showElec = can("ELECTRICITY", "view");
+
+  const { data: bookingsRes, isLoading: bookingsLoading } = useGetBookings(
+    { propertyId: id },
+    {
+      query: {
+        queryKey: getGetBookingsQueryKey({ propertyId: id }),
+        enabled: !!id && !!isShortStay,
+      },
+    },
+  );
+  const bookings = bookingsRes?.data || [];
+
+  const availParams = {
+    propertyId: id,
+    from: calStart.toISOString(),
+    to: calEnd.toISOString(),
+  };
+  const { data: availRes } = useGetBookingAvailability(availParams, {
+    query: {
+      queryKey: getGetBookingAvailabilityQueryKey(availParams),
+      enabled: !!id && !!isShortStay,
+    },
+  });
+  const availability = availRes?.data || [];
+
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const deleteBookingMut = useDeleteBooking({
+    mutation: {
+      onSuccess: () => {
+        toast({ title: "Booking cancelled" });
+        queryClient.invalidateQueries({
+          queryKey: getGetBookingsQueryKey({ propertyId: id }),
+        });
+        queryClient.invalidateQueries({ queryKey: ["bookings"], exact: false });
+        setBookingToDelete(null);
+      },
+      onError: (e: any) =>
+        toast({ title: e?.message || "Failed", variant: "destructive" }),
+    },
+  });
+
   const filteredRooms = rooms.filter(
     (r) =>
       (roomFilterStatus === "ALL" || r.status === roomFilterStatus) &&
@@ -431,16 +589,6 @@ export default function PropertyDetail() {
         </Card>
       </div>
 
-      <PropertyDetailTabs id={id} />
-    </div>
-  );
-}
-
-function PropertyDetailTabs({ id }: { id: string }) {
-  const { can } = usePermissions();
-  const showIot = can("IOT", "view");
-  const showElec = can("ELECTRICITY", "view");
-  return (
       <Tabs defaultValue="overview" className="w-full">
         <TabsList className="bg-surface">
           <TabsTrigger value="overview" data-testid="tab-overview">Overview</TabsTrigger>
@@ -448,6 +596,7 @@ function PropertyDetailTabs({ id }: { id: string }) {
           <TabsTrigger value="residents" data-testid="tab-residents">Residents</TabsTrigger>
           <TabsTrigger value="complaints" data-testid="tab-complaints">Complaints</TabsTrigger>
           <TabsTrigger value="documents" data-testid="tab-documents">Documents</TabsTrigger>
+          {isShortStay && <TabsTrigger value="bookings" data-testid="tab-bookings">Bookings</TabsTrigger>}
           {showIot && <TabsTrigger value="iot" data-testid="tab-property-iot">IoT</TabsTrigger>}
           {showElec && <TabsTrigger value="electricity" data-testid="tab-property-electricity">Electricity</TabsTrigger>}
         </TabsList>
@@ -668,6 +817,193 @@ function PropertyDetailTabs({ id }: { id: string }) {
             />
           </div>
         </TabsContent>
+
+        {isShortStay && (
+          <TabsContent value="bookings" className="mt-6 space-y-6">
+            <div className="flex justify-between items-center">
+              <div>
+                <h3 className="font-display font-semibold text-primary text-lg">Bookings</h3>
+                <p className="text-xs text-muted-foreground">Short-stay reservations for this property</p>
+              </div>
+              <Button
+                className="bg-accent hover:bg-accent/90 text-white"
+                onClick={() => { setEditingBooking(null); setBookingModalOpen(true); }}
+                data-testid="button-add-booking"
+              >
+                <Plus className="w-4 h-4 mr-2" /> New Booking
+              </Button>
+            </div>
+
+            <Card>
+              <CardContent className="p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <h4 className="font-display font-semibold text-primary text-sm flex items-center gap-2">
+                    <CalendarIcon className="w-4 h-4" /> Availability (next 14 days)
+                  </h4>
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        const d = new Date(calStart);
+                        d.setDate(d.getDate() - 14);
+                        setCalStart(d);
+                      }}
+                      data-testid="button-cal-prev"
+                    >
+                      ← Prev
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setCalStart(today0)}
+                    >
+                      Today
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        const d = new Date(calStart);
+                        d.setDate(d.getDate() + 14);
+                        setCalStart(d);
+                      }}
+                      data-testid="button-cal-next"
+                    >
+                      Next →
+                    </Button>
+                  </div>
+                </div>
+                {availability.length === 0 ? (
+                  <EmptyState
+                    icon={Bed}
+                    title="No rooms"
+                    description="Add rooms to see availability"
+                  />
+                ) : (
+                  <div className="overflow-x-auto" data-testid="availability-grid">
+                    <table className="text-xs border-collapse">
+                      <thead>
+                        <tr>
+                          <th className="sticky left-0 bg-card text-left px-2 py-1 border-b font-medium">Room</th>
+                          {Array.from({ length: 14 }).map((_, i) => {
+                            const d = new Date(calStart);
+                            d.setDate(d.getDate() + i);
+                            return (
+                              <th key={i} className="px-1 py-1 border-b text-muted-foreground font-normal min-w-[34px]">
+                                <div>{d.getDate()}</div>
+                                <div className="text-[10px]">
+                                  {d.toLocaleDateString(undefined, { month: "short" })}
+                                </div>
+                              </th>
+                            );
+                          })}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {availability.map((row) => {
+                          const occSet = new Set<string>();
+                          for (const b of row.bookings || []) {
+                            const ci = new Date(b.checkInDate);
+                            const co = new Date(b.checkOutDate);
+                            for (let t = ci.getTime(); t < co.getTime(); t += 86400000) {
+                              occSet.add(new Date(t).toISOString().slice(0, 10));
+                            }
+                          }
+                          return (
+                            <tr key={row.roomId} data-testid={`avail-row-${row.roomId}`}>
+                              <td className="sticky left-0 bg-card px-2 py-1 border-b font-mono">
+                                {row.number}
+                              </td>
+                              {Array.from({ length: 14 }).map((_, i) => {
+                                const d = new Date(calStart);
+                                d.setDate(d.getDate() + i);
+                                const key = d.toISOString().slice(0, 10);
+                                const occ = occSet.has(key);
+                                return (
+                                  <td
+                                    key={i}
+                                    className={`border-b border-l text-center ${occ ? "bg-destructive/30" : "bg-success/15"}`}
+                                    title={`${row.number} · ${key} · ${occ ? "Booked" : "Available"}`}
+                                  >
+                                    <div className="w-full h-6" />
+                                  </td>
+                                );
+                              })}
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                    <div className="flex gap-4 mt-2 text-xs text-muted-foreground">
+                      <span className="flex items-center gap-1">
+                        <span className="inline-block w-3 h-3 bg-success/15 border" /> Available
+                      </span>
+                      <span className="flex items-center gap-1">
+                        <span className="inline-block w-3 h-3 bg-destructive/30 border" /> Booked
+                      </span>
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            {bookingsLoading ? (
+              <Skeleton className="h-32 w-full" />
+            ) : bookings.length === 0 ? (
+              <EmptyState
+                icon={CalendarIcon}
+                title="No bookings yet"
+                description="Create the first booking for this property"
+              />
+            ) : (
+              <Card>
+                <CardContent className="p-0">
+                  <DataTable<BookingDto, unknown>
+                    columns={bookingColumns({
+                      onEdit: (b) => {
+                        setEditingBooking(b);
+                        setBookingModalOpen(true);
+                      },
+                      onDelete: (b) => setBookingToDelete(b),
+                    })}
+                    data={bookings}
+                  />
+                </CardContent>
+              </Card>
+            )}
+          </TabsContent>
+        )}
       </Tabs>
+
+      {isShortStay && property && (
+        <BookingFormModal
+          open={bookingModalOpen}
+          onOpenChange={(o) => {
+            setBookingModalOpen(o);
+            if (!o) setEditingBooking(null);
+          }}
+          property={property as PropertyDto}
+          booking={editingBooking}
+        />
+      )}
+      <ConfirmDialog
+        open={!!bookingToDelete}
+        onOpenChange={(o) => { if (!o) setBookingToDelete(null); }}
+        title="Cancel booking?"
+        description={
+          bookingToDelete
+            ? `Booking ${bookingToDelete.bookingNo} for ${bookingToDelete.guestName} will be marked as cancelled.`
+            : ""
+        }
+        confirmLabel="Cancel booking"
+        isConfirming={deleteBookingMut.isPending}
+        onConfirm={() => {
+          if (bookingToDelete) {
+            deleteBookingMut.mutate({ id: bookingToDelete.id });
+          }
+        }}
+      />
+    </div>
   );
 }

@@ -351,7 +351,44 @@ export const announcementsTable = pgTable("announcements", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+export const bookingStatusEnum = pgEnum("booking_status", [
+  "CONFIRMED",
+  "CHECKED_IN",
+  "CHECKED_OUT",
+  "CANCELLED",
+  "NO_SHOW",
+]);
+
+export const ratePeriodEnum = pgEnum("rate_period", ["NIGHTLY", "WEEKLY"]);
+
+export const bookingsTable = pgTable("bookings", {
+  id: text("id").primaryKey(),
+  bookingNo: text("booking_no").notNull().unique(),
+  propertyId: text("property_id")
+    .notNull()
+    .references(() => propertiesTable.id),
+  roomId: text("room_id").references(() => roomsTable.id),
+  guestName: text("guest_name").notNull(),
+  guestEmail: text("guest_email"),
+  guestPhone: text("guest_phone").notNull(),
+  guestCount: integer("guest_count").default(1).notNull(),
+  checkInDate: timestamp("check_in_date").notNull(),
+  checkOutDate: timestamp("check_out_date").notNull(),
+  nights: integer("nights").notNull(),
+  ratePeriod: ratePeriodEnum("rate_period").notNull().default("NIGHTLY"),
+  ratePerPeriod: numeric("rate_per_period").notNull(),
+  subtotal: numeric("subtotal").notNull(),
+  taxAmount: numeric("tax_amount").default("0").notNull(),
+  totalAmount: numeric("total_amount").notNull(),
+  status: bookingStatusEnum("status").default("CONFIRMED").notNull(),
+  notes: text("notes"),
+  createdBy: text("created_by"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
 export const insertPropertySchema = createInsertSchema(propertiesTable);
+export const insertBookingSchema = createInsertSchema(bookingsTable);
 export const insertRoomSchema = createInsertSchema(roomsTable);
 export const insertUserSchema = createInsertSchema(usersTable);
 export const insertResidentSchema = createInsertSchema(residentsTable);
@@ -389,3 +426,5 @@ export type CommunicationLog = typeof communicationLogsTable.$inferSelect;
 export type InsertCommunicationLog = typeof communicationLogsTable.$inferInsert;
 export type ComplaintEvent = typeof complaintEventsTable.$inferSelect;
 export type InsertComplaintEvent = typeof complaintEventsTable.$inferInsert;
+export type Booking = typeof bookingsTable.$inferSelect;
+export type InsertBooking = typeof bookingsTable.$inferInsert;
