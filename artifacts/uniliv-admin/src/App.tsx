@@ -47,6 +47,10 @@ import Banking from "@/pages/banking";
 import Expenses from "@/pages/expenses";
 import Users from "@/pages/users";
 import Settings from "@/pages/settings";
+import Facility from "@/pages/facility";
+import Electricity from "@/pages/electricity";
+import ResidentAttendance from "@/pages/resident-attendance";
+import IoT from "@/pages/iot";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -118,6 +122,11 @@ function Router() {
       <Route path="/reminders">{() => <ProtectedRoute component={Reminders} />}</Route>
       <Route path="/banking">{() => <ProtectedRoute component={Banking} />}</Route>
       <Route path="/expenses">{() => <ProtectedRoute component={Expenses} />}</Route>
+      <Route path="/facility">{() => <ProtectedRoute component={Facility} />}</Route>
+      <Route path="/electricity">{() => <ProtectedRoute component={Electricity} />}</Route>
+      <Route path="/resident-attendance">{() => <ProtectedRoute component={ResidentAttendance} />}</Route>
+      <Route path="/out-passes">{() => <ProtectedRoute component={ResidentAttendance} />}</Route>
+      <Route path="/iot">{() => <ProtectedRoute component={IoT} />}</Route>
       
       <Route path="/users">{() => <ProtectedRoute component={Users} />}</Route>
       <Route path="/settings">{() => <ProtectedRoute component={Settings} />}</Route>

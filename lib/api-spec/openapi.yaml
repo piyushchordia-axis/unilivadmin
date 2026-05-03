@@ -27,6 +27,11 @@ tags:
   - name: users
   - name: announcements
   - name: finance
+  - name: facility
+  - name: electricity
+  - name: residentAttendance
+  - name: outPass
+  - name: iot
 
 paths:
   /healthz:
@@ -2156,6 +2161,551 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/PortfolioBreakdownResponse"
+
+  # ─── FACILITY MANAGEMENT ──────────────────────────────
+  /facility/assets:
+    get:
+      operationId: getFacilityAssets
+      tags: [facility]
+      summary: List facility assets
+      parameters:
+        - $ref: "#/components/parameters/PropertyIdParam"
+      responses:
+        "200":
+          description: Assets
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FacilityAssetsListResponse" }
+    post:
+      operationId: createFacilityAsset
+      tags: [facility]
+      summary: Create facility asset
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateFacilityAssetBody" }
+      responses:
+        "200":
+          description: Created asset
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FacilityAssetResponse" }
+
+  /facility/assets/{id}:
+    parameters:
+      - $ref: "#/components/parameters/IdParam"
+    put:
+      operationId: updateFacilityAsset
+      tags: [facility]
+      summary: Update facility asset
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateFacilityAssetBody" }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FacilityAssetResponse" }
+    delete:
+      operationId: deleteFacilityAsset
+      tags: [facility]
+      summary: Delete facility asset
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SuccessResponse" }
+
+  /facility/schedules:
+    get:
+      operationId: getFacilitySchedules
+      tags: [facility]
+      summary: List preventive maintenance schedules
+      parameters:
+        - $ref: "#/components/parameters/PropertyIdParam"
+        - in: query
+          name: assetId
+          schema: { type: string }
+        - in: query
+          name: overdueOnly
+          schema: { type: boolean }
+      responses:
+        "200":
+          description: Schedules
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FacilitySchedulesListResponse" }
+    post:
+      operationId: createFacilitySchedule
+      tags: [facility]
+      summary: Create maintenance schedule
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateFacilityScheduleBody" }
+      responses:
+        "200":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FacilityScheduleResponse" }
+
+  /facility/schedules/{id}:
+    parameters:
+      - $ref: "#/components/parameters/IdParam"
+    put:
+      operationId: updateFacilitySchedule
+      tags: [facility]
+      summary: Update schedule
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateFacilityScheduleBody" }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FacilityScheduleResponse" }
+    delete:
+      operationId: deleteFacilitySchedule
+      tags: [facility]
+      summary: Delete schedule
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SuccessResponse" }
+
+  /facility/logs:
+    get:
+      operationId: getFacilityLogs
+      tags: [facility]
+      summary: List facility maintenance logs
+      parameters:
+        - $ref: "#/components/parameters/PropertyIdParam"
+        - in: query
+          name: assetId
+          schema: { type: string }
+      responses:
+        "200":
+          description: Logs
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FacilityLogsListResponse" }
+    post:
+      operationId: createFacilityLog
+      tags: [facility]
+      summary: Record maintenance log
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateFacilityLogBody" }
+      responses:
+        "200":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FacilityLogResponse" }
+
+  # ─── ELECTRICITY ──────────────────────────────────────
+  /electricity/tariffs:
+    get:
+      operationId: getElectricityTariffs
+      tags: [electricity]
+      summary: List tariffs
+      responses:
+        "200":
+          description: Tariffs
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ElectricityTariffsListResponse" }
+    post:
+      operationId: createElectricityTariff
+      tags: [electricity]
+      summary: Create tariff
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateElectricityTariffBody" }
+      responses:
+        "200":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ElectricityTariffResponse" }
+
+  /electricity/tariffs/{id}:
+    parameters:
+      - $ref: "#/components/parameters/IdParam"
+    put:
+      operationId: updateElectricityTariff
+      tags: [electricity]
+      summary: Update tariff
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateElectricityTariffBody" }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ElectricityTariffResponse" }
+
+  /electricity/meters:
+    get:
+      operationId: getElectricityMeters
+      tags: [electricity]
+      summary: List meters
+      parameters:
+        - $ref: "#/components/parameters/PropertyIdParam"
+      responses:
+        "200":
+          description: Meters
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ElectricityMetersListResponse" }
+    post:
+      operationId: createElectricityMeter
+      tags: [electricity]
+      summary: Create meter
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateElectricityMeterBody" }
+      responses:
+        "200":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ElectricityMeterResponse" }
+
+  /electricity/meters/{id}:
+    parameters:
+      - $ref: "#/components/parameters/IdParam"
+    put:
+      operationId: updateElectricityMeter
+      tags: [electricity]
+      summary: Update meter
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateElectricityMeterBody" }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ElectricityMeterResponse" }
+
+  /electricity/readings:
+    get:
+      operationId: getElectricityReadings
+      tags: [electricity]
+      summary: List readings
+      parameters:
+        - $ref: "#/components/parameters/PropertyIdParam"
+        - in: query
+          name: meterId
+          schema: { type: string }
+      responses:
+        "200":
+          description: Readings
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ElectricityReadingsListResponse" }
+    post:
+      operationId: createElectricityReading
+      tags: [electricity]
+      summary: Record meter reading
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateElectricityReadingBody" }
+      responses:
+        "200":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ElectricityReadingResponse" }
+
+  /electricity/readings/bulk:
+    post:
+      operationId: bulkCreateElectricityReadings
+      tags: [electricity]
+      summary: Bulk upload meter readings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BulkElectricityReadingsBody" }
+      responses:
+        "200":
+          description: Bulk result
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BulkElectricityReadingsResponse" }
+
+  /electricity/readings/{id}/post:
+    parameters:
+      - $ref: "#/components/parameters/IdParam"
+    post:
+      operationId: postElectricityReadingToLedger
+      tags: [electricity]
+      summary: Post reading charge to resident ledger
+      responses:
+        "200":
+          description: Posted
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ElectricityReadingResponse" }
+
+  # ─── RESIDENT ATTENDANCE ──────────────────────────────
+  /resident-attendance:
+    get:
+      operationId: getResidentAttendance
+      tags: [residentAttendance]
+      summary: Get attendance roster for a property/date
+      parameters:
+        - $ref: "#/components/parameters/PropertyIdParam"
+        - in: query
+          name: date
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Attendance
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ResidentAttendanceListResponse" }
+
+  /resident-attendance/mark:
+    post:
+      operationId: markResidentAttendance
+      tags: [residentAttendance]
+      summary: Mark or update attendance (bulk)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MarkResidentAttendanceBody" }
+      responses:
+        "200":
+          description: Result
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MarkResidentAttendanceResponse" }
+
+  /resident-attendance/history/{residentId}:
+    parameters:
+      - in: path
+        name: residentId
+        required: true
+        schema: { type: string }
+    get:
+      operationId: getResidentAttendanceHistory
+      tags: [residentAttendance]
+      summary: Get attendance history for a resident
+      responses:
+        "200":
+          description: History
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ResidentAttendanceHistoryResponse" }
+
+  # ─── OUT-PASS ─────────────────────────────────────────
+  /out-passes:
+    get:
+      operationId: getOutPasses
+      tags: [outPass]
+      summary: List out-passes
+      parameters:
+        - $ref: "#/components/parameters/PropertyIdParam"
+        - in: query
+          name: status
+          schema: { type: string }
+      responses:
+        "200":
+          description: Out-passes
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OutPassesListResponse" }
+    post:
+      operationId: createOutPass
+      tags: [outPass]
+      summary: Create out-pass request
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateOutPassBody" }
+      responses:
+        "200":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OutPassResponse" }
+
+  /out-passes/{id}:
+    parameters:
+      - $ref: "#/components/parameters/IdParam"
+    put:
+      operationId: updateOutPass
+      tags: [outPass]
+      summary: Update out-pass (status, dates, notes)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateOutPassBody" }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OutPassResponse" }
+
+  /out-passes/{id}/return:
+    parameters:
+      - $ref: "#/components/parameters/IdParam"
+    post:
+      operationId: markOutPassReturned
+      tags: [outPass]
+      summary: Mark out-pass returned
+      responses:
+        "200":
+          description: Returned
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OutPassResponse" }
+
+  # ─── IOT ──────────────────────────────────────────────
+  /iot/devices:
+    get:
+      operationId: getIotDevices
+      tags: [iot]
+      summary: List IoT devices
+      parameters:
+        - $ref: "#/components/parameters/PropertyIdParam"
+        - in: query
+          name: roomId
+          schema: { type: string }
+      responses:
+        "200":
+          description: Devices
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/IotDevicesListResponse" }
+    post:
+      operationId: createIotDevice
+      tags: [iot]
+      summary: Register IoT device
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateIotDeviceBody" }
+      responses:
+        "200":
+          description: Created with full token (only shown once)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/IotDeviceResponse" }
+
+  /iot/devices/{id}:
+    parameters:
+      - $ref: "#/components/parameters/IdParam"
+    put:
+      operationId: updateIotDevice
+      tags: [iot]
+      summary: Update IoT device
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateIotDeviceBody" }
+      responses:
+        "200":
+          description: Updated (token masked)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/IotDeviceResponse" }
+    delete:
+      operationId: deleteIotDevice
+      tags: [iot]
+      summary: Delete IoT device
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SuccessResponse" }
+
+  /iot/devices/{id}/rotate-token:
+    parameters:
+      - $ref: "#/components/parameters/IdParam"
+    post:
+      operationId: rotateIotDeviceToken
+      tags: [iot]
+      summary: Rotate device ingestion token
+      responses:
+        "200":
+          description: New token
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/IotTokenResponse" }
+
+  /iot/readings:
+    get:
+      operationId: getIotReadings
+      tags: [iot]
+      summary: List recent IoT readings
+      parameters:
+        - $ref: "#/components/parameters/PropertyIdParam"
+        - in: query
+          name: deviceId
+          schema: { type: string }
+        - in: query
+          name: roomId
+          schema: { type: string }
+      responses:
+        "200":
+          description: Readings
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/IotReadingsListResponse" }
+
+  /iot/latest:
+    get:
+      operationId: getIotLatest
+      tags: [iot]
+      summary: Latest reading per device (with status)
+      parameters:
+        - $ref: "#/components/parameters/PropertyIdParam"
+        - in: query
+          name: roomId
+          schema: { type: string }
+      responses:
+        "200":
+          description: Latest readings
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/IotLatestListResponse" }
 
 components:
   parameters:
@@ -4764,4 +5314,564 @@ components:
           properties:
             count: { type: integer }
           required: [count]
+      required: [success, data]
+
+    # ─── OPERATIONS DTOs ──────────────────────────────────
+    FacilityAssetDto:
+      type: object
+      properties:
+        id: { type: string }
+        propertyId: { type: string }
+        propertyName: { type: string, nullable: true }
+        assetCode: { type: string }
+        name: { type: string }
+        category: { type: string }
+        location: { type: string, nullable: true }
+        manufacturer: { type: string, nullable: true }
+        modelNo: { type: string, nullable: true }
+        status: { type: string }
+        notes: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }
+      required: [id, propertyId, assetCode, name, category, status]
+
+    CreateFacilityAssetBody:
+      type: object
+      properties:
+        propertyId: { type: string }
+        assetCode: { type: string }
+        name: { type: string }
+        category: { type: string }
+        location: { type: string, nullable: true }
+        manufacturer: { type: string, nullable: true }
+        modelNo: { type: string, nullable: true }
+        status: { type: string, nullable: true }
+        notes: { type: string, nullable: true }
+      required: [propertyId, assetCode, name, category]
+
+    FacilityAssetResponse:
+      type: object
+      properties:
+        success: { type: boolean }
+        data: { $ref: "#/components/schemas/FacilityAssetDto" }
+      required: [success, data]
+
+    FacilityAssetsListResponse:
+      type: object
+      properties:
+        success: { type: boolean }
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/FacilityAssetDto" }
+      required: [success, data]
+
+    FacilityScheduleDto:
+      type: object
+      properties:
+        id: { type: string }
+        assetId: { type: string }
+        assetName: { type: string, nullable: true }
+        assetCode: { type: string, nullable: true }
+        propertyId: { type: string, nullable: true }
+        propertyName: { type: string, nullable: true }
+        taskName: { type: string }
+        frequencyDays: { type: integer }
+        vendorId: { type: string, nullable: true }
+        assignedTo: { type: string, nullable: true }
+        nextDueDate: { type: string, format: date-time }
+        isActive: { type: boolean }
+        notes: { type: string, nullable: true }
+      required: [id, assetId, taskName, frequencyDays, nextDueDate, isActive]
+
+    CreateFacilityScheduleBody:
+      type: object
+      properties:
+        assetId: { type: string }
+        taskName: { type: string }
+        frequencyDays: { type: integer }
+        vendorId: { type: string, nullable: true }
+        assignedTo: { type: string, nullable: true }
+        nextDueDate: { type: string }
+        isActive: { type: boolean, nullable: true }
+        notes: { type: string, nullable: true }
+      required: [assetId, taskName, frequencyDays, nextDueDate]
+
+    FacilityScheduleResponse:
+      type: object
+      properties:
+        success: { type: boolean }
+        data: { $ref: "#/components/schemas/FacilityScheduleDto" }
+      required: [success, data]
+
+    FacilitySchedulesListResponse:
+      type: object
+      properties:
+        success: { type: boolean }
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/FacilityScheduleDto" }
+      required: [success, data]
+
+    FacilityLogDto:
+      type: object
+      properties:
+        id: { type: string }
+        assetId: { type: string }
+        assetName: { type: string, nullable: true }
+        scheduleId: { type: string, nullable: true }
+        performedAt: { type: string, format: date-time }
+        performedBy: { type: string, nullable: true }
+        vendorId: { type: string, nullable: true }
+        cost: { type: number, nullable: true }
+        outcome: { type: string }
+        notes: { type: string, nullable: true }
+      required: [id, assetId, performedAt, outcome]
+
+    CreateFacilityLogBody:
+      type: object
+      properties:
+        assetId: { type: string }
+        scheduleId: { type: string, nullable: true }
+        performedAt: { type: string }
+        performedBy: { type: string, nullable: true }
+        vendorId: { type: string, nullable: true }
+        cost: { type: number, nullable: true }
+        outcome: { type: string, nullable: true }
+        notes: { type: string, nullable: true }
+      required: [assetId, performedAt]
+
+    FacilityLogResponse:
+      type: object
+      properties:
+        success: { type: boolean }
+        data: { $ref: "#/components/schemas/FacilityLogDto" }
+      required: [success, data]
+
+    FacilityLogsListResponse:
+      type: object
+      properties:
+        success: { type: boolean }
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/FacilityLogDto" }
+      required: [success, data]
+
+    ElectricityTariffDto:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        propertyId: { type: string, nullable: true }
+        ratePerUnit: { type: number }
+        fixedCharge: { type: number }
+        effectiveFrom: { type: string, format: date-time }
+        isActive: { type: boolean }
+      required: [id, name, ratePerUnit, fixedCharge, effectiveFrom, isActive]
+
+    CreateElectricityTariffBody:
+      type: object
+      properties:
+        name: { type: string }
+        propertyId: { type: string, nullable: true }
+        ratePerUnit: { type: number }
+        fixedCharge: { type: number, nullable: true }
+        effectiveFrom: { type: string }
+        isActive: { type: boolean, nullable: true }
+      required: [name, ratePerUnit, effectiveFrom]
+
+    ElectricityTariffResponse:
+      type: object
+      properties:
+        success: { type: boolean }
+        data: { $ref: "#/components/schemas/ElectricityTariffDto" }
+      required: [success, data]
+
+    ElectricityTariffsListResponse:
+      type: object
+      properties:
+        success: { type: boolean }
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/ElectricityTariffDto" }
+      required: [success, data]
+
+    ElectricityMeterDto:
+      type: object
+      properties:
+        id: { type: string }
+        propertyId: { type: string }
+        propertyName: { type: string, nullable: true }
+        roomId: { type: string, nullable: true }
+        roomNumber: { type: string, nullable: true }
+        residentId: { type: string, nullable: true }
+        meterNo: { type: string }
+        label: { type: string, nullable: true }
+        tariffId: { type: string, nullable: true }
+        isActive: { type: boolean }
+        createdAt: { type: string, format: date-time }
+      required: [id, propertyId, meterNo, isActive]
+
+    CreateElectricityMeterBody:
+      type: object
+      properties:
+        propertyId: { type: string }
+        roomId: { type: string, nullable: true }
+        residentId: { type: string, nullable: true }
+        meterNo: { type: string }
+        label: { type: string, nullable: true }
+        tariffId: { type: string, nullable: true }
+        isActive: { type: boolean, nullable: true }
+      required: [propertyId, meterNo]
+
+    ElectricityMeterResponse:
+      type: object
+      properties:
+        success: { type: boolean }
+        data: { $ref: "#/components/schemas/ElectricityMeterDto" }
+      required: [success, data]
+
+    ElectricityMetersListResponse:
+      type: object
+      properties:
+        success: { type: boolean }
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/ElectricityMeterDto" }
+      required: [success, data]
+
+    ElectricityReadingDto:
+      type: object
+      properties:
+        id: { type: string }
+        meterId: { type: string }
+        meterNo: { type: string, nullable: true }
+        residentId: { type: string, nullable: true }
+        readingDate: { type: string, format: date-time }
+        reading: { type: number }
+        prevReading: { type: number, nullable: true }
+        unitsConsumed: { type: number, nullable: true }
+        amount: { type: number, nullable: true }
+        posted: { type: boolean }
+        ledgerEntryId: { type: string, nullable: true }
+        notes: { type: string, nullable: true }
+      required: [id, meterId, readingDate, reading, posted]
+
+    CreateElectricityReadingBody:
+      type: object
+      properties:
+        meterId: { type: string }
+        reading: { type: number }
+        readingDate: { type: string, nullable: true }
+        notes: { type: string, nullable: true }
+      required: [meterId, reading]
+
+    ElectricityReadingResponse:
+      type: object
+      properties:
+        success: { type: boolean }
+        data: { $ref: "#/components/schemas/ElectricityReadingDto" }
+      required: [success, data]
+
+    ElectricityReadingsListResponse:
+      type: object
+      properties:
+        success: { type: boolean }
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/ElectricityReadingDto" }
+      required: [success, data]
+
+    BulkElectricityReadingItem:
+      type: object
+      properties:
+        meterId: { type: string }
+        reading: { type: number }
+        readingDate: { type: string, nullable: true }
+        notes: { type: string, nullable: true }
+      required: [meterId, reading]
+
+    BulkElectricityReadingsBody:
+      type: object
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/BulkElectricityReadingItem" }
+      required: [items]
+
+    BulkElectricityReadingsResponse:
+      type: object
+      properties:
+        success: { type: boolean }
+        data:
+          type: object
+          properties:
+            success: { type: integer }
+            failed: { type: integer }
+            errors:
+              type: array
+              items: { type: string }
+          required: [success, failed]
+      required: [success, data]
+
+    ResidentAttendanceRecord:
+      type: object
+      properties:
+        id: { type: string }
+        residentId: { type: string }
+        propertyId: { type: string }
+        attendanceDate: { type: string }
+        status: { type: string }
+        notes: { type: string, nullable: true }
+      required: [id, residentId, propertyId, attendanceDate, status]
+
+    ResidentAttendanceRosterRow:
+      type: object
+      properties:
+        residentId: { type: string }
+        residentName: { type: string, nullable: true }
+        roomId: { type: string, nullable: true }
+        record:
+          oneOf:
+            - { $ref: "#/components/schemas/ResidentAttendanceRecord" }
+            - { type: "null" }
+      required: [residentId]
+
+    ResidentAttendanceSummary:
+      type: object
+      properties:
+        total: { type: integer }
+        marked: { type: integer }
+        present: { type: integer }
+        absent: { type: integer }
+        outPass: { type: integer }
+        pct: { type: number }
+      required: [total, marked, present, absent, outPass, pct]
+
+    ResidentAttendanceListResponse:
+      type: object
+      properties:
+        success: { type: boolean }
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/ResidentAttendanceRosterRow" }
+        summary: { $ref: "#/components/schemas/ResidentAttendanceSummary" }
+      required: [success, data]
+
+    MarkResidentAttendanceItem:
+      type: object
+      properties:
+        residentId: { type: string }
+        propertyId: { type: string }
+        attendanceDate: { type: string }
+        status: { type: string }
+        notes: { type: string, nullable: true }
+      required: [residentId, propertyId, attendanceDate, status]
+
+    MarkResidentAttendanceBody:
+      type: object
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/MarkResidentAttendanceItem" }
+      required: [items]
+
+    MarkResidentAttendanceResponse:
+      type: object
+      properties:
+        success: { type: boolean }
+        data:
+          type: object
+          properties:
+            upserted: { type: integer }
+          required: [upserted]
+      required: [success, data]
+
+    ResidentAttendanceHistoryResponse:
+      type: object
+      properties:
+        success: { type: boolean }
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/ResidentAttendanceRecord" }
+      required: [success, data]
+
+    OutPassDto:
+      type: object
+      properties:
+        id: { type: string }
+        residentId: { type: string }
+        residentName: { type: string, nullable: true }
+        propertyId: { type: string }
+        propertyName: { type: string, nullable: true }
+        reason: { type: string }
+        destination: { type: string, nullable: true }
+        leaveOn: { type: string, format: date-time }
+        expectedReturn: { type: string, format: date-time }
+        actualReturn: { type: string, format: date-time, nullable: true }
+        status: { type: string }
+        approverId: { type: string, nullable: true }
+        approverNote: { type: string, nullable: true }
+        parentNotified: { type: boolean, nullable: true }
+        createdAt: { type: string, format: date-time }
+      required: [id, residentId, propertyId, reason, leaveOn, expectedReturn, status]
+
+    CreateOutPassBody:
+      type: object
+      properties:
+        residentId: { type: string }
+        propertyId: { type: string }
+        reason: { type: string }
+        destination: { type: string, nullable: true }
+        leaveOn: { type: string }
+        expectedReturn: { type: string }
+        status: { type: string, nullable: true }
+      required: [residentId, propertyId, reason, leaveOn, expectedReturn]
+
+    UpdateOutPassBody:
+      type: object
+      properties:
+        reason: { type: string, nullable: true }
+        destination: { type: string, nullable: true }
+        status: { type: string, nullable: true }
+        approverNote: { type: string, nullable: true }
+        parentNotified: { type: boolean, nullable: true }
+        leaveOn: { type: string, nullable: true }
+        expectedReturn: { type: string, nullable: true }
+        actualReturn: { type: string, nullable: true }
+
+    OutPassResponse:
+      type: object
+      properties:
+        success: { type: boolean }
+        data: { $ref: "#/components/schemas/OutPassDto" }
+      required: [success, data]
+
+    OutPassesListResponse:
+      type: object
+      properties:
+        success: { type: boolean }
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/OutPassDto" }
+      required: [success, data]
+
+    IotDeviceDto:
+      type: object
+      properties:
+        id: { type: string }
+        propertyId: { type: string }
+        propertyName: { type: string, nullable: true }
+        roomId: { type: string, nullable: true }
+        roomNumber: { type: string, nullable: true }
+        name: { type: string }
+        deviceType: { type: string }
+        adapter: { type: string }
+        endpoint: { type: string, nullable: true }
+        status: { type: string }
+        ingestionToken: { type: string }
+        lastSeenAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+      required: [id, propertyId, name, deviceType, adapter, status, ingestionToken]
+
+    CreateIotDeviceBody:
+      type: object
+      properties:
+        propertyId: { type: string }
+        roomId: { type: string, nullable: true }
+        name: { type: string }
+        deviceType: { type: string }
+        adapter: { type: string, nullable: true }
+        endpoint: { type: string, nullable: true }
+        status: { type: string, nullable: true }
+        config:
+          type: object
+          additionalProperties: true
+      required: [propertyId, name, deviceType]
+
+    UpdateIotDeviceBody:
+      type: object
+      properties:
+        name: { type: string, nullable: true }
+        deviceType: { type: string, nullable: true }
+        adapter: { type: string, nullable: true }
+        endpoint: { type: string, nullable: true }
+        status: { type: string, nullable: true }
+        roomId: { type: string, nullable: true }
+        config:
+          type: object
+          additionalProperties: true
+          nullable: true
+
+    IotDeviceResponse:
+      type: object
+      properties:
+        success: { type: boolean }
+        data: { $ref: "#/components/schemas/IotDeviceDto" }
+      required: [success, data]
+
+    IotDevicesListResponse:
+      type: object
+      properties:
+        success: { type: boolean }
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/IotDeviceDto" }
+      required: [success, data]
+
+    IotTokenResponse:
+      type: object
+      properties:
+        success: { type: boolean }
+        data:
+          type: object
+          properties:
+            ingestionToken: { type: string }
+          required: [ingestionToken]
+      required: [success, data]
+
+    IotReadingDto:
+      type: object
+      properties:
+        id: { type: string }
+        deviceId: { type: string }
+        metric: { type: string }
+        value: { type: number, nullable: true }
+        recordedAt: { type: string, format: date-time }
+      required: [id, deviceId, metric, recordedAt]
+
+    IotReadingsListResponse:
+      type: object
+      properties:
+        success: { type: boolean }
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/IotReadingDto" }
+      required: [success, data]
+
+    IotLatestDto:
+      type: object
+      properties:
+        deviceId: { type: string }
+        name: { type: string }
+        deviceType: { type: string }
+        status: { type: string }
+        propertyId: { type: string, nullable: true }
+        roomId: { type: string, nullable: true }
+        lastSeenAt: { type: string, format: date-time, nullable: true }
+        latest:
+          type: object
+          nullable: true
+          properties:
+            metric: { type: string }
+            value: { type: number, nullable: true }
+            recordedAt: { type: string, format: date-time }
+          required: [metric, recordedAt]
+      required: [deviceId, name, deviceType, status]
+
+    IotLatestListResponse:
+      type: object
+      properties:
+        success: { type: boolean }
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/IotLatestDto" }
       required: [success, data]

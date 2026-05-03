@@ -1468,6 +1468,432 @@ export interface ReminderCountResponse {
   data: ReminderCountResponseData;
 }
 
+export interface FacilityAssetDto {
+  id: string;
+  propertyId: string;
+  propertyName?: string | null;
+  assetCode: string;
+  name: string;
+  category: string;
+  location?: string | null;
+  manufacturer?: string | null;
+  modelNo?: string | null;
+  status: string;
+  notes?: string | null;
+  createdAt?: string;
+}
+
+export interface CreateFacilityAssetBody {
+  propertyId: string;
+  assetCode: string;
+  name: string;
+  category: string;
+  location?: string | null;
+  manufacturer?: string | null;
+  modelNo?: string | null;
+  status?: string | null;
+  notes?: string | null;
+}
+
+export interface FacilityAssetResponse {
+  success: boolean;
+  data: FacilityAssetDto;
+}
+
+export interface FacilityAssetsListResponse {
+  success: boolean;
+  data: FacilityAssetDto[];
+}
+
+export interface FacilityScheduleDto {
+  id: string;
+  assetId: string;
+  assetName?: string | null;
+  assetCode?: string | null;
+  propertyId?: string | null;
+  propertyName?: string | null;
+  taskName: string;
+  frequencyDays: number;
+  vendorId?: string | null;
+  assignedTo?: string | null;
+  nextDueDate: string;
+  isActive: boolean;
+  notes?: string | null;
+}
+
+export interface CreateFacilityScheduleBody {
+  assetId: string;
+  taskName: string;
+  frequencyDays: number;
+  vendorId?: string | null;
+  assignedTo?: string | null;
+  nextDueDate: string;
+  isActive?: boolean | null;
+  notes?: string | null;
+}
+
+export interface FacilityScheduleResponse {
+  success: boolean;
+  data: FacilityScheduleDto;
+}
+
+export interface FacilitySchedulesListResponse {
+  success: boolean;
+  data: FacilityScheduleDto[];
+}
+
+export interface FacilityLogDto {
+  id: string;
+  assetId: string;
+  assetName?: string | null;
+  scheduleId?: string | null;
+  performedAt: string;
+  performedBy?: string | null;
+  vendorId?: string | null;
+  cost?: number | null;
+  outcome: string;
+  notes?: string | null;
+}
+
+export interface CreateFacilityLogBody {
+  assetId: string;
+  scheduleId?: string | null;
+  performedAt: string;
+  performedBy?: string | null;
+  vendorId?: string | null;
+  cost?: number | null;
+  outcome?: string | null;
+  notes?: string | null;
+}
+
+export interface FacilityLogResponse {
+  success: boolean;
+  data: FacilityLogDto;
+}
+
+export interface FacilityLogsListResponse {
+  success: boolean;
+  data: FacilityLogDto[];
+}
+
+export interface ElectricityTariffDto {
+  id: string;
+  name: string;
+  propertyId?: string | null;
+  ratePerUnit: number;
+  fixedCharge: number;
+  effectiveFrom: string;
+  isActive: boolean;
+}
+
+export interface CreateElectricityTariffBody {
+  name: string;
+  propertyId?: string | null;
+  ratePerUnit: number;
+  fixedCharge?: number | null;
+  effectiveFrom: string;
+  isActive?: boolean | null;
+}
+
+export interface ElectricityTariffResponse {
+  success: boolean;
+  data: ElectricityTariffDto;
+}
+
+export interface ElectricityTariffsListResponse {
+  success: boolean;
+  data: ElectricityTariffDto[];
+}
+
+export interface ElectricityMeterDto {
+  id: string;
+  propertyId: string;
+  propertyName?: string | null;
+  roomId?: string | null;
+  roomNumber?: string | null;
+  residentId?: string | null;
+  meterNo: string;
+  label?: string | null;
+  tariffId?: string | null;
+  isActive: boolean;
+  createdAt?: string;
+}
+
+export interface CreateElectricityMeterBody {
+  propertyId: string;
+  roomId?: string | null;
+  residentId?: string | null;
+  meterNo: string;
+  label?: string | null;
+  tariffId?: string | null;
+  isActive?: boolean | null;
+}
+
+export interface ElectricityMeterResponse {
+  success: boolean;
+  data: ElectricityMeterDto;
+}
+
+export interface ElectricityMetersListResponse {
+  success: boolean;
+  data: ElectricityMeterDto[];
+}
+
+export interface ElectricityReadingDto {
+  id: string;
+  meterId: string;
+  meterNo?: string | null;
+  residentId?: string | null;
+  readingDate: string;
+  reading: number;
+  prevReading?: number | null;
+  unitsConsumed?: number | null;
+  amount?: number | null;
+  posted: boolean;
+  ledgerEntryId?: string | null;
+  notes?: string | null;
+}
+
+export interface CreateElectricityReadingBody {
+  meterId: string;
+  reading: number;
+  readingDate?: string | null;
+  notes?: string | null;
+}
+
+export interface ElectricityReadingResponse {
+  success: boolean;
+  data: ElectricityReadingDto;
+}
+
+export interface ElectricityReadingsListResponse {
+  success: boolean;
+  data: ElectricityReadingDto[];
+}
+
+export interface BulkElectricityReadingItem {
+  meterId: string;
+  reading: number;
+  readingDate?: string | null;
+  notes?: string | null;
+}
+
+export interface BulkElectricityReadingsBody {
+  items: BulkElectricityReadingItem[];
+}
+
+export type BulkElectricityReadingsResponseData = {
+  success: number;
+  failed: number;
+  errors?: string[];
+};
+
+export interface BulkElectricityReadingsResponse {
+  success: boolean;
+  data: BulkElectricityReadingsResponseData;
+}
+
+export interface ResidentAttendanceRecord {
+  id: string;
+  residentId: string;
+  propertyId: string;
+  attendanceDate: string;
+  status: string;
+  notes?: string | null;
+}
+
+export interface ResidentAttendanceRosterRow {
+  residentId: string;
+  residentName?: string | null;
+  roomId?: string | null;
+  record?: ResidentAttendanceRecord | null;
+}
+
+export interface ResidentAttendanceSummary {
+  total: number;
+  marked: number;
+  present: number;
+  absent: number;
+  outPass: number;
+  pct: number;
+}
+
+export interface ResidentAttendanceListResponse {
+  success: boolean;
+  data: ResidentAttendanceRosterRow[];
+  summary?: ResidentAttendanceSummary;
+}
+
+export interface MarkResidentAttendanceItem {
+  residentId: string;
+  propertyId: string;
+  attendanceDate: string;
+  status: string;
+  notes?: string | null;
+}
+
+export interface MarkResidentAttendanceBody {
+  items: MarkResidentAttendanceItem[];
+}
+
+export type MarkResidentAttendanceResponseData = {
+  upserted: number;
+};
+
+export interface MarkResidentAttendanceResponse {
+  success: boolean;
+  data: MarkResidentAttendanceResponseData;
+}
+
+export interface ResidentAttendanceHistoryResponse {
+  success: boolean;
+  data: ResidentAttendanceRecord[];
+}
+
+export interface OutPassDto {
+  id: string;
+  residentId: string;
+  residentName?: string | null;
+  propertyId: string;
+  propertyName?: string | null;
+  reason: string;
+  destination?: string | null;
+  leaveOn: string;
+  expectedReturn: string;
+  actualReturn?: string | null;
+  status: string;
+  approverId?: string | null;
+  approverNote?: string | null;
+  parentNotified?: boolean | null;
+  createdAt?: string;
+}
+
+export interface CreateOutPassBody {
+  residentId: string;
+  propertyId: string;
+  reason: string;
+  destination?: string | null;
+  leaveOn: string;
+  expectedReturn: string;
+  status?: string | null;
+}
+
+export interface UpdateOutPassBody {
+  reason?: string | null;
+  destination?: string | null;
+  status?: string | null;
+  approverNote?: string | null;
+  parentNotified?: boolean | null;
+  leaveOn?: string | null;
+  expectedReturn?: string | null;
+  actualReturn?: string | null;
+}
+
+export interface OutPassResponse {
+  success: boolean;
+  data: OutPassDto;
+}
+
+export interface OutPassesListResponse {
+  success: boolean;
+  data: OutPassDto[];
+}
+
+export interface IotDeviceDto {
+  id: string;
+  propertyId: string;
+  propertyName?: string | null;
+  roomId?: string | null;
+  roomNumber?: string | null;
+  name: string;
+  deviceType: string;
+  adapter: string;
+  endpoint?: string | null;
+  status: string;
+  ingestionToken: string;
+  lastSeenAt?: string | null;
+  createdAt?: string;
+}
+
+export type CreateIotDeviceBodyConfig = { [key: string]: unknown };
+
+export interface CreateIotDeviceBody {
+  propertyId: string;
+  roomId?: string | null;
+  name: string;
+  deviceType: string;
+  adapter?: string | null;
+  endpoint?: string | null;
+  status?: string | null;
+  config?: CreateIotDeviceBodyConfig;
+}
+
+export type UpdateIotDeviceBodyConfig = { [key: string]: unknown } | null;
+
+export interface UpdateIotDeviceBody {
+  name?: string | null;
+  deviceType?: string | null;
+  adapter?: string | null;
+  endpoint?: string | null;
+  status?: string | null;
+  roomId?: string | null;
+  config?: UpdateIotDeviceBodyConfig;
+}
+
+export interface IotDeviceResponse {
+  success: boolean;
+  data: IotDeviceDto;
+}
+
+export interface IotDevicesListResponse {
+  success: boolean;
+  data: IotDeviceDto[];
+}
+
+export type IotTokenResponseData = {
+  ingestionToken: string;
+};
+
+export interface IotTokenResponse {
+  success: boolean;
+  data: IotTokenResponseData;
+}
+
+export interface IotReadingDto {
+  id: string;
+  deviceId: string;
+  metric: string;
+  value?: number | null;
+  recordedAt: string;
+}
+
+export interface IotReadingsListResponse {
+  success: boolean;
+  data: IotReadingDto[];
+}
+
+export type IotLatestDtoLatest = {
+  metric: string;
+  value?: number | null;
+  recordedAt: string;
+} | null;
+
+export interface IotLatestDto {
+  deviceId: string;
+  name: string;
+  deviceType: string;
+  status: string;
+  propertyId?: string | null;
+  roomId?: string | null;
+  lastSeenAt?: string | null;
+  latest?: IotLatestDtoLatest;
+}
+
+export interface IotLatestListResponse {
+  success: boolean;
+  data: IotLatestDto[];
+}
+
 export type PageParamParameter = number;
 
 export type LimitParamParameter = number;
@@ -1648,4 +2074,54 @@ export type GetReminderLogsParams = {
 export type GetExpensesParams = {
   status?: string;
   propertyId?: string;
+};
+
+export type GetFacilityAssetsParams = {
+  propertyId?: PropertyIdParamParameter;
+};
+
+export type GetFacilitySchedulesParams = {
+  propertyId?: PropertyIdParamParameter;
+  assetId?: string;
+  overdueOnly?: boolean;
+};
+
+export type GetFacilityLogsParams = {
+  propertyId?: PropertyIdParamParameter;
+  assetId?: string;
+};
+
+export type GetElectricityMetersParams = {
+  propertyId?: PropertyIdParamParameter;
+};
+
+export type GetElectricityReadingsParams = {
+  propertyId?: PropertyIdParamParameter;
+  meterId?: string;
+};
+
+export type GetResidentAttendanceParams = {
+  propertyId?: PropertyIdParamParameter;
+  date: string;
+};
+
+export type GetOutPassesParams = {
+  propertyId?: PropertyIdParamParameter;
+  status?: string;
+};
+
+export type GetIotDevicesParams = {
+  propertyId?: PropertyIdParamParameter;
+  roomId?: string;
+};
+
+export type GetIotReadingsParams = {
+  propertyId?: PropertyIdParamParameter;
+  deviceId?: string;
+  roomId?: string;
+};
+
+export type GetIotLatestParams = {
+  propertyId?: PropertyIdParamParameter;
+  roomId?: string;
 };

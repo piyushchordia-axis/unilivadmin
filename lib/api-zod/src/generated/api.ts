@@ -3240,3 +3240,939 @@ export const GetExecutivePortfolioBreakdownResponse = zod.object({
     }),
   ),
 });
+
+/**
+ * @summary List facility assets
+ */
+export const GetFacilityAssetsQueryParams = zod.object({
+  propertyId: zod.coerce.string().optional(),
+});
+
+export const GetFacilityAssetsResponse = zod.object({
+  success: zod.boolean(),
+  data: zod.array(
+    zod.object({
+      id: zod.string(),
+      propertyId: zod.string(),
+      propertyName: zod.string().nullish(),
+      assetCode: zod.string(),
+      name: zod.string(),
+      category: zod.string(),
+      location: zod.string().nullish(),
+      manufacturer: zod.string().nullish(),
+      modelNo: zod.string().nullish(),
+      status: zod.string(),
+      notes: zod.string().nullish(),
+      createdAt: zod.coerce.date().optional(),
+    }),
+  ),
+});
+
+/**
+ * @summary Create facility asset
+ */
+export const CreateFacilityAssetBody = zod.object({
+  propertyId: zod.string(),
+  assetCode: zod.string(),
+  name: zod.string(),
+  category: zod.string(),
+  location: zod.string().nullish(),
+  manufacturer: zod.string().nullish(),
+  modelNo: zod.string().nullish(),
+  status: zod.string().nullish(),
+  notes: zod.string().nullish(),
+});
+
+export const CreateFacilityAssetResponse = zod.object({
+  success: zod.boolean(),
+  data: zod.object({
+    id: zod.string(),
+    propertyId: zod.string(),
+    propertyName: zod.string().nullish(),
+    assetCode: zod.string(),
+    name: zod.string(),
+    category: zod.string(),
+    location: zod.string().nullish(),
+    manufacturer: zod.string().nullish(),
+    modelNo: zod.string().nullish(),
+    status: zod.string(),
+    notes: zod.string().nullish(),
+    createdAt: zod.coerce.date().optional(),
+  }),
+});
+
+/**
+ * @summary Update facility asset
+ */
+export const UpdateFacilityAssetParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const UpdateFacilityAssetBody = zod.object({
+  propertyId: zod.string(),
+  assetCode: zod.string(),
+  name: zod.string(),
+  category: zod.string(),
+  location: zod.string().nullish(),
+  manufacturer: zod.string().nullish(),
+  modelNo: zod.string().nullish(),
+  status: zod.string().nullish(),
+  notes: zod.string().nullish(),
+});
+
+export const UpdateFacilityAssetResponse = zod.object({
+  success: zod.boolean(),
+  data: zod.object({
+    id: zod.string(),
+    propertyId: zod.string(),
+    propertyName: zod.string().nullish(),
+    assetCode: zod.string(),
+    name: zod.string(),
+    category: zod.string(),
+    location: zod.string().nullish(),
+    manufacturer: zod.string().nullish(),
+    modelNo: zod.string().nullish(),
+    status: zod.string(),
+    notes: zod.string().nullish(),
+    createdAt: zod.coerce.date().optional(),
+  }),
+});
+
+/**
+ * @summary Delete facility asset
+ */
+export const DeleteFacilityAssetParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const DeleteFacilityAssetResponse = zod.object({
+  success: zod.boolean(),
+  message: zod.string().optional(),
+});
+
+/**
+ * @summary List preventive maintenance schedules
+ */
+export const GetFacilitySchedulesQueryParams = zod.object({
+  propertyId: zod.coerce.string().optional(),
+  assetId: zod.coerce.string().optional(),
+  overdueOnly: zod.coerce.boolean().optional(),
+});
+
+export const GetFacilitySchedulesResponse = zod.object({
+  success: zod.boolean(),
+  data: zod.array(
+    zod.object({
+      id: zod.string(),
+      assetId: zod.string(),
+      assetName: zod.string().nullish(),
+      assetCode: zod.string().nullish(),
+      propertyId: zod.string().nullish(),
+      propertyName: zod.string().nullish(),
+      taskName: zod.string(),
+      frequencyDays: zod.number(),
+      vendorId: zod.string().nullish(),
+      assignedTo: zod.string().nullish(),
+      nextDueDate: zod.coerce.date(),
+      isActive: zod.boolean(),
+      notes: zod.string().nullish(),
+    }),
+  ),
+});
+
+/**
+ * @summary Create maintenance schedule
+ */
+export const CreateFacilityScheduleBody = zod.object({
+  assetId: zod.string(),
+  taskName: zod.string(),
+  frequencyDays: zod.number(),
+  vendorId: zod.string().nullish(),
+  assignedTo: zod.string().nullish(),
+  nextDueDate: zod.string(),
+  isActive: zod.boolean().nullish(),
+  notes: zod.string().nullish(),
+});
+
+export const CreateFacilityScheduleResponse = zod.object({
+  success: zod.boolean(),
+  data: zod.object({
+    id: zod.string(),
+    assetId: zod.string(),
+    assetName: zod.string().nullish(),
+    assetCode: zod.string().nullish(),
+    propertyId: zod.string().nullish(),
+    propertyName: zod.string().nullish(),
+    taskName: zod.string(),
+    frequencyDays: zod.number(),
+    vendorId: zod.string().nullish(),
+    assignedTo: zod.string().nullish(),
+    nextDueDate: zod.coerce.date(),
+    isActive: zod.boolean(),
+    notes: zod.string().nullish(),
+  }),
+});
+
+/**
+ * @summary Update schedule
+ */
+export const UpdateFacilityScheduleParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const UpdateFacilityScheduleBody = zod.object({
+  assetId: zod.string(),
+  taskName: zod.string(),
+  frequencyDays: zod.number(),
+  vendorId: zod.string().nullish(),
+  assignedTo: zod.string().nullish(),
+  nextDueDate: zod.string(),
+  isActive: zod.boolean().nullish(),
+  notes: zod.string().nullish(),
+});
+
+export const UpdateFacilityScheduleResponse = zod.object({
+  success: zod.boolean(),
+  data: zod.object({
+    id: zod.string(),
+    assetId: zod.string(),
+    assetName: zod.string().nullish(),
+    assetCode: zod.string().nullish(),
+    propertyId: zod.string().nullish(),
+    propertyName: zod.string().nullish(),
+    taskName: zod.string(),
+    frequencyDays: zod.number(),
+    vendorId: zod.string().nullish(),
+    assignedTo: zod.string().nullish(),
+    nextDueDate: zod.coerce.date(),
+    isActive: zod.boolean(),
+    notes: zod.string().nullish(),
+  }),
+});
+
+/**
+ * @summary Delete schedule
+ */
+export const DeleteFacilityScheduleParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const DeleteFacilityScheduleResponse = zod.object({
+  success: zod.boolean(),
+  message: zod.string().optional(),
+});
+
+/**
+ * @summary List facility maintenance logs
+ */
+export const GetFacilityLogsQueryParams = zod.object({
+  propertyId: zod.coerce.string().optional(),
+  assetId: zod.coerce.string().optional(),
+});
+
+export const GetFacilityLogsResponse = zod.object({
+  success: zod.boolean(),
+  data: zod.array(
+    zod.object({
+      id: zod.string(),
+      assetId: zod.string(),
+      assetName: zod.string().nullish(),
+      scheduleId: zod.string().nullish(),
+      performedAt: zod.coerce.date(),
+      performedBy: zod.string().nullish(),
+      vendorId: zod.string().nullish(),
+      cost: zod.number().nullish(),
+      outcome: zod.string(),
+      notes: zod.string().nullish(),
+    }),
+  ),
+});
+
+/**
+ * @summary Record maintenance log
+ */
+export const CreateFacilityLogBody = zod.object({
+  assetId: zod.string(),
+  scheduleId: zod.string().nullish(),
+  performedAt: zod.string(),
+  performedBy: zod.string().nullish(),
+  vendorId: zod.string().nullish(),
+  cost: zod.number().nullish(),
+  outcome: zod.string().nullish(),
+  notes: zod.string().nullish(),
+});
+
+export const CreateFacilityLogResponse = zod.object({
+  success: zod.boolean(),
+  data: zod.object({
+    id: zod.string(),
+    assetId: zod.string(),
+    assetName: zod.string().nullish(),
+    scheduleId: zod.string().nullish(),
+    performedAt: zod.coerce.date(),
+    performedBy: zod.string().nullish(),
+    vendorId: zod.string().nullish(),
+    cost: zod.number().nullish(),
+    outcome: zod.string(),
+    notes: zod.string().nullish(),
+  }),
+});
+
+/**
+ * @summary List tariffs
+ */
+export const GetElectricityTariffsResponse = zod.object({
+  success: zod.boolean(),
+  data: zod.array(
+    zod.object({
+      id: zod.string(),
+      name: zod.string(),
+      propertyId: zod.string().nullish(),
+      ratePerUnit: zod.number(),
+      fixedCharge: zod.number(),
+      effectiveFrom: zod.coerce.date(),
+      isActive: zod.boolean(),
+    }),
+  ),
+});
+
+/**
+ * @summary Create tariff
+ */
+export const CreateElectricityTariffBody = zod.object({
+  name: zod.string(),
+  propertyId: zod.string().nullish(),
+  ratePerUnit: zod.number(),
+  fixedCharge: zod.number().nullish(),
+  effectiveFrom: zod.string(),
+  isActive: zod.boolean().nullish(),
+});
+
+export const CreateElectricityTariffResponse = zod.object({
+  success: zod.boolean(),
+  data: zod.object({
+    id: zod.string(),
+    name: zod.string(),
+    propertyId: zod.string().nullish(),
+    ratePerUnit: zod.number(),
+    fixedCharge: zod.number(),
+    effectiveFrom: zod.coerce.date(),
+    isActive: zod.boolean(),
+  }),
+});
+
+/**
+ * @summary Update tariff
+ */
+export const UpdateElectricityTariffParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const UpdateElectricityTariffBody = zod.object({
+  name: zod.string(),
+  propertyId: zod.string().nullish(),
+  ratePerUnit: zod.number(),
+  fixedCharge: zod.number().nullish(),
+  effectiveFrom: zod.string(),
+  isActive: zod.boolean().nullish(),
+});
+
+export const UpdateElectricityTariffResponse = zod.object({
+  success: zod.boolean(),
+  data: zod.object({
+    id: zod.string(),
+    name: zod.string(),
+    propertyId: zod.string().nullish(),
+    ratePerUnit: zod.number(),
+    fixedCharge: zod.number(),
+    effectiveFrom: zod.coerce.date(),
+    isActive: zod.boolean(),
+  }),
+});
+
+/**
+ * @summary List meters
+ */
+export const GetElectricityMetersQueryParams = zod.object({
+  propertyId: zod.coerce.string().optional(),
+});
+
+export const GetElectricityMetersResponse = zod.object({
+  success: zod.boolean(),
+  data: zod.array(
+    zod.object({
+      id: zod.string(),
+      propertyId: zod.string(),
+      propertyName: zod.string().nullish(),
+      roomId: zod.string().nullish(),
+      roomNumber: zod.string().nullish(),
+      residentId: zod.string().nullish(),
+      meterNo: zod.string(),
+      label: zod.string().nullish(),
+      tariffId: zod.string().nullish(),
+      isActive: zod.boolean(),
+      createdAt: zod.coerce.date().optional(),
+    }),
+  ),
+});
+
+/**
+ * @summary Create meter
+ */
+export const CreateElectricityMeterBody = zod.object({
+  propertyId: zod.string(),
+  roomId: zod.string().nullish(),
+  residentId: zod.string().nullish(),
+  meterNo: zod.string(),
+  label: zod.string().nullish(),
+  tariffId: zod.string().nullish(),
+  isActive: zod.boolean().nullish(),
+});
+
+export const CreateElectricityMeterResponse = zod.object({
+  success: zod.boolean(),
+  data: zod.object({
+    id: zod.string(),
+    propertyId: zod.string(),
+    propertyName: zod.string().nullish(),
+    roomId: zod.string().nullish(),
+    roomNumber: zod.string().nullish(),
+    residentId: zod.string().nullish(),
+    meterNo: zod.string(),
+    label: zod.string().nullish(),
+    tariffId: zod.string().nullish(),
+    isActive: zod.boolean(),
+    createdAt: zod.coerce.date().optional(),
+  }),
+});
+
+/**
+ * @summary Update meter
+ */
+export const UpdateElectricityMeterParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const UpdateElectricityMeterBody = zod.object({
+  propertyId: zod.string(),
+  roomId: zod.string().nullish(),
+  residentId: zod.string().nullish(),
+  meterNo: zod.string(),
+  label: zod.string().nullish(),
+  tariffId: zod.string().nullish(),
+  isActive: zod.boolean().nullish(),
+});
+
+export const UpdateElectricityMeterResponse = zod.object({
+  success: zod.boolean(),
+  data: zod.object({
+    id: zod.string(),
+    propertyId: zod.string(),
+    propertyName: zod.string().nullish(),
+    roomId: zod.string().nullish(),
+    roomNumber: zod.string().nullish(),
+    residentId: zod.string().nullish(),
+    meterNo: zod.string(),
+    label: zod.string().nullish(),
+    tariffId: zod.string().nullish(),
+    isActive: zod.boolean(),
+    createdAt: zod.coerce.date().optional(),
+  }),
+});
+
+/**
+ * @summary List readings
+ */
+export const GetElectricityReadingsQueryParams = zod.object({
+  propertyId: zod.coerce.string().optional(),
+  meterId: zod.coerce.string().optional(),
+});
+
+export const GetElectricityReadingsResponse = zod.object({
+  success: zod.boolean(),
+  data: zod.array(
+    zod.object({
+      id: zod.string(),
+      meterId: zod.string(),
+      meterNo: zod.string().nullish(),
+      residentId: zod.string().nullish(),
+      readingDate: zod.coerce.date(),
+      reading: zod.number(),
+      prevReading: zod.number().nullish(),
+      unitsConsumed: zod.number().nullish(),
+      amount: zod.number().nullish(),
+      posted: zod.boolean(),
+      ledgerEntryId: zod.string().nullish(),
+      notes: zod.string().nullish(),
+    }),
+  ),
+});
+
+/**
+ * @summary Record meter reading
+ */
+export const CreateElectricityReadingBody = zod.object({
+  meterId: zod.string(),
+  reading: zod.number(),
+  readingDate: zod.string().nullish(),
+  notes: zod.string().nullish(),
+});
+
+export const CreateElectricityReadingResponse = zod.object({
+  success: zod.boolean(),
+  data: zod.object({
+    id: zod.string(),
+    meterId: zod.string(),
+    meterNo: zod.string().nullish(),
+    residentId: zod.string().nullish(),
+    readingDate: zod.coerce.date(),
+    reading: zod.number(),
+    prevReading: zod.number().nullish(),
+    unitsConsumed: zod.number().nullish(),
+    amount: zod.number().nullish(),
+    posted: zod.boolean(),
+    ledgerEntryId: zod.string().nullish(),
+    notes: zod.string().nullish(),
+  }),
+});
+
+/**
+ * @summary Bulk upload meter readings
+ */
+export const BulkCreateElectricityReadingsBody = zod.object({
+  items: zod.array(
+    zod.object({
+      meterId: zod.string(),
+      reading: zod.number(),
+      readingDate: zod.string().nullish(),
+      notes: zod.string().nullish(),
+    }),
+  ),
+});
+
+export const BulkCreateElectricityReadingsResponse = zod.object({
+  success: zod.boolean(),
+  data: zod.object({
+    success: zod.number(),
+    failed: zod.number(),
+    errors: zod.array(zod.string()).optional(),
+  }),
+});
+
+/**
+ * @summary Post reading charge to resident ledger
+ */
+export const PostElectricityReadingToLedgerParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const PostElectricityReadingToLedgerResponse = zod.object({
+  success: zod.boolean(),
+  data: zod.object({
+    id: zod.string(),
+    meterId: zod.string(),
+    meterNo: zod.string().nullish(),
+    residentId: zod.string().nullish(),
+    readingDate: zod.coerce.date(),
+    reading: zod.number(),
+    prevReading: zod.number().nullish(),
+    unitsConsumed: zod.number().nullish(),
+    amount: zod.number().nullish(),
+    posted: zod.boolean(),
+    ledgerEntryId: zod.string().nullish(),
+    notes: zod.string().nullish(),
+  }),
+});
+
+/**
+ * @summary Get attendance roster for a property/date
+ */
+export const GetResidentAttendanceQueryParams = zod.object({
+  propertyId: zod.coerce.string().optional(),
+  date: zod.coerce.string(),
+});
+
+export const GetResidentAttendanceResponse = zod.object({
+  success: zod.boolean(),
+  data: zod.array(
+    zod.object({
+      residentId: zod.string(),
+      residentName: zod.string().nullish(),
+      roomId: zod.string().nullish(),
+      record: zod
+        .union([
+          zod.object({
+            id: zod.string(),
+            residentId: zod.string(),
+            propertyId: zod.string(),
+            attendanceDate: zod.string(),
+            status: zod.string(),
+            notes: zod.string().nullish(),
+          }),
+          zod.null(),
+        ])
+        .optional(),
+    }),
+  ),
+  summary: zod
+    .object({
+      total: zod.number(),
+      marked: zod.number(),
+      present: zod.number(),
+      absent: zod.number(),
+      outPass: zod.number(),
+      pct: zod.number(),
+    })
+    .optional(),
+});
+
+/**
+ * @summary Mark or update attendance (bulk)
+ */
+export const MarkResidentAttendanceBody = zod.object({
+  items: zod.array(
+    zod.object({
+      residentId: zod.string(),
+      propertyId: zod.string(),
+      attendanceDate: zod.string(),
+      status: zod.string(),
+      notes: zod.string().nullish(),
+    }),
+  ),
+});
+
+export const MarkResidentAttendanceResponse = zod.object({
+  success: zod.boolean(),
+  data: zod.object({
+    upserted: zod.number(),
+  }),
+});
+
+/**
+ * @summary Get attendance history for a resident
+ */
+export const GetResidentAttendanceHistoryParams = zod.object({
+  residentId: zod.coerce.string(),
+});
+
+export const GetResidentAttendanceHistoryResponse = zod.object({
+  success: zod.boolean(),
+  data: zod.array(
+    zod.object({
+      id: zod.string(),
+      residentId: zod.string(),
+      propertyId: zod.string(),
+      attendanceDate: zod.string(),
+      status: zod.string(),
+      notes: zod.string().nullish(),
+    }),
+  ),
+});
+
+/**
+ * @summary List out-passes
+ */
+export const GetOutPassesQueryParams = zod.object({
+  propertyId: zod.coerce.string().optional(),
+  status: zod.coerce.string().optional(),
+});
+
+export const GetOutPassesResponse = zod.object({
+  success: zod.boolean(),
+  data: zod.array(
+    zod.object({
+      id: zod.string(),
+      residentId: zod.string(),
+      residentName: zod.string().nullish(),
+      propertyId: zod.string(),
+      propertyName: zod.string().nullish(),
+      reason: zod.string(),
+      destination: zod.string().nullish(),
+      leaveOn: zod.coerce.date(),
+      expectedReturn: zod.coerce.date(),
+      actualReturn: zod.coerce.date().nullish(),
+      status: zod.string(),
+      approverId: zod.string().nullish(),
+      approverNote: zod.string().nullish(),
+      parentNotified: zod.boolean().nullish(),
+      createdAt: zod.coerce.date().optional(),
+    }),
+  ),
+});
+
+/**
+ * @summary Create out-pass request
+ */
+export const CreateOutPassBody = zod.object({
+  residentId: zod.string(),
+  propertyId: zod.string(),
+  reason: zod.string(),
+  destination: zod.string().nullish(),
+  leaveOn: zod.string(),
+  expectedReturn: zod.string(),
+  status: zod.string().nullish(),
+});
+
+export const CreateOutPassResponse = zod.object({
+  success: zod.boolean(),
+  data: zod.object({
+    id: zod.string(),
+    residentId: zod.string(),
+    residentName: zod.string().nullish(),
+    propertyId: zod.string(),
+    propertyName: zod.string().nullish(),
+    reason: zod.string(),
+    destination: zod.string().nullish(),
+    leaveOn: zod.coerce.date(),
+    expectedReturn: zod.coerce.date(),
+    actualReturn: zod.coerce.date().nullish(),
+    status: zod.string(),
+    approverId: zod.string().nullish(),
+    approverNote: zod.string().nullish(),
+    parentNotified: zod.boolean().nullish(),
+    createdAt: zod.coerce.date().optional(),
+  }),
+});
+
+/**
+ * @summary Update out-pass (status, dates, notes)
+ */
+export const UpdateOutPassParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const UpdateOutPassBody = zod.object({
+  reason: zod.string().nullish(),
+  destination: zod.string().nullish(),
+  status: zod.string().nullish(),
+  approverNote: zod.string().nullish(),
+  parentNotified: zod.boolean().nullish(),
+  leaveOn: zod.string().nullish(),
+  expectedReturn: zod.string().nullish(),
+  actualReturn: zod.string().nullish(),
+});
+
+export const UpdateOutPassResponse = zod.object({
+  success: zod.boolean(),
+  data: zod.object({
+    id: zod.string(),
+    residentId: zod.string(),
+    residentName: zod.string().nullish(),
+    propertyId: zod.string(),
+    propertyName: zod.string().nullish(),
+    reason: zod.string(),
+    destination: zod.string().nullish(),
+    leaveOn: zod.coerce.date(),
+    expectedReturn: zod.coerce.date(),
+    actualReturn: zod.coerce.date().nullish(),
+    status: zod.string(),
+    approverId: zod.string().nullish(),
+    approverNote: zod.string().nullish(),
+    parentNotified: zod.boolean().nullish(),
+    createdAt: zod.coerce.date().optional(),
+  }),
+});
+
+/**
+ * @summary Mark out-pass returned
+ */
+export const MarkOutPassReturnedParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const MarkOutPassReturnedResponse = zod.object({
+  success: zod.boolean(),
+  data: zod.object({
+    id: zod.string(),
+    residentId: zod.string(),
+    residentName: zod.string().nullish(),
+    propertyId: zod.string(),
+    propertyName: zod.string().nullish(),
+    reason: zod.string(),
+    destination: zod.string().nullish(),
+    leaveOn: zod.coerce.date(),
+    expectedReturn: zod.coerce.date(),
+    actualReturn: zod.coerce.date().nullish(),
+    status: zod.string(),
+    approverId: zod.string().nullish(),
+    approverNote: zod.string().nullish(),
+    parentNotified: zod.boolean().nullish(),
+    createdAt: zod.coerce.date().optional(),
+  }),
+});
+
+/**
+ * @summary List IoT devices
+ */
+export const GetIotDevicesQueryParams = zod.object({
+  propertyId: zod.coerce.string().optional(),
+  roomId: zod.coerce.string().optional(),
+});
+
+export const GetIotDevicesResponse = zod.object({
+  success: zod.boolean(),
+  data: zod.array(
+    zod.object({
+      id: zod.string(),
+      propertyId: zod.string(),
+      propertyName: zod.string().nullish(),
+      roomId: zod.string().nullish(),
+      roomNumber: zod.string().nullish(),
+      name: zod.string(),
+      deviceType: zod.string(),
+      adapter: zod.string(),
+      endpoint: zod.string().nullish(),
+      status: zod.string(),
+      ingestionToken: zod.string(),
+      lastSeenAt: zod.coerce.date().nullish(),
+      createdAt: zod.coerce.date().optional(),
+    }),
+  ),
+});
+
+/**
+ * @summary Register IoT device
+ */
+export const CreateIotDeviceBody = zod.object({
+  propertyId: zod.string(),
+  roomId: zod.string().nullish(),
+  name: zod.string(),
+  deviceType: zod.string(),
+  adapter: zod.string().nullish(),
+  endpoint: zod.string().nullish(),
+  status: zod.string().nullish(),
+  config: zod.record(zod.string(), zod.unknown()).optional(),
+});
+
+export const CreateIotDeviceResponse = zod.object({
+  success: zod.boolean(),
+  data: zod.object({
+    id: zod.string(),
+    propertyId: zod.string(),
+    propertyName: zod.string().nullish(),
+    roomId: zod.string().nullish(),
+    roomNumber: zod.string().nullish(),
+    name: zod.string(),
+    deviceType: zod.string(),
+    adapter: zod.string(),
+    endpoint: zod.string().nullish(),
+    status: zod.string(),
+    ingestionToken: zod.string(),
+    lastSeenAt: zod.coerce.date().nullish(),
+    createdAt: zod.coerce.date().optional(),
+  }),
+});
+
+/**
+ * @summary Update IoT device
+ */
+export const UpdateIotDeviceParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const UpdateIotDeviceBody = zod.object({
+  name: zod.string().nullish(),
+  deviceType: zod.string().nullish(),
+  adapter: zod.string().nullish(),
+  endpoint: zod.string().nullish(),
+  status: zod.string().nullish(),
+  roomId: zod.string().nullish(),
+  config: zod.record(zod.string(), zod.unknown()).nullish(),
+});
+
+export const UpdateIotDeviceResponse = zod.object({
+  success: zod.boolean(),
+  data: zod.object({
+    id: zod.string(),
+    propertyId: zod.string(),
+    propertyName: zod.string().nullish(),
+    roomId: zod.string().nullish(),
+    roomNumber: zod.string().nullish(),
+    name: zod.string(),
+    deviceType: zod.string(),
+    adapter: zod.string(),
+    endpoint: zod.string().nullish(),
+    status: zod.string(),
+    ingestionToken: zod.string(),
+    lastSeenAt: zod.coerce.date().nullish(),
+    createdAt: zod.coerce.date().optional(),
+  }),
+});
+
+/**
+ * @summary Delete IoT device
+ */
+export const DeleteIotDeviceParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const DeleteIotDeviceResponse = zod.object({
+  success: zod.boolean(),
+  message: zod.string().optional(),
+});
+
+/**
+ * @summary Rotate device ingestion token
+ */
+export const RotateIotDeviceTokenParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const RotateIotDeviceTokenResponse = zod.object({
+  success: zod.boolean(),
+  data: zod.object({
+    ingestionToken: zod.string(),
+  }),
+});
+
+/**
+ * @summary List recent IoT readings
+ */
+export const GetIotReadingsQueryParams = zod.object({
+  propertyId: zod.coerce.string().optional(),
+  deviceId: zod.coerce.string().optional(),
+  roomId: zod.coerce.string().optional(),
+});
+
+export const GetIotReadingsResponse = zod.object({
+  success: zod.boolean(),
+  data: zod.array(
+    zod.object({
+      id: zod.string(),
+      deviceId: zod.string(),
+      metric: zod.string(),
+      value: zod.number().nullish(),
+      recordedAt: zod.coerce.date(),
+    }),
+  ),
+});
+
+/**
+ * @summary Latest reading per device (with status)
+ */
+export const GetIotLatestQueryParams = zod.object({
+  propertyId: zod.coerce.string().optional(),
+  roomId: zod.coerce.string().optional(),
+});
+
+export const GetIotLatestResponse = zod.object({
+  success: zod.boolean(),
+  data: zod.array(
+    zod.object({
+      deviceId: zod.string(),
+      name: zod.string(),
+      deviceType: zod.string(),
+      status: zod.string(),
+      propertyId: zod.string().nullish(),
+      roomId: zod.string().nullish(),
+      lastSeenAt: zod.coerce.date().nullish(),
+      latest: zod
+        .object({
+          metric: zod.string(),
+          value: zod.number().nullish(),
+          recordedAt: zod.coerce.date(),
+        })
+        .nullish(),
+    }),
+  ),
+});

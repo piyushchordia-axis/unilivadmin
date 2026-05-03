@@ -55,8 +55,12 @@ import {
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQueryClient, useQuery } from "@tanstack/react-query";
+import { apiFetch } from "@/lib/api-fetch";
+import { formatDistanceToNow } from "date-fns";
+import { Wifi, WifiOff, Zap as ZapIcon } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { usePermissions } from "@/lib/use-permissions";
 
 const roomSchema = z.object({
   number: z.string().min(1),
@@ -208,6 +212,109 @@ function RoomFormModal({
   );
 }
 
+function RoomIoTBadge({ propertyId, roomId }: { propertyId: string; roomId: string }) {
+  const { can } = usePermissions();
+  if (!can("IOT", "view")) return null;
+  return <RoomIoTBadgeInner propertyId={propertyId} roomId={roomId} />;
+}
+
+function RoomIoTBadgeInner({ propertyId, roomId }: { propertyId: string; roomId: string }) {
+  const { data } = useQuery<{ data: Array<{ deviceId: string; name: string; deviceType: string; status: string; roomId?: string | null; lastSeenAt: string | null; latest: { metric: string; value: number | null; recordedAt: string } | null }> }>({
+    queryKey: ["property-iot-latest", propertyId],
+    queryFn: () => apiFetch(`/iot/latest?propertyId=${propertyId}`),
+    refetchInterval: 60_000,
+    staleTime: 30_000,
+  });
+  const all = data?.data || [];
+  const forRoom = all.filter((d) => d.roomId === roomId);
+  if (forRoom.length === 0) return null;
+  return (
+    <div className="border-t pt-2 mt-1 space-y-1" data-testid={`room-iot-${roomId}`}>
+      {forRoom.slice(0, 3).map((d) => {
+        const seenMs = d.lastSeenAt ? Date.now() - new Date(d.lastSeenAt).getTime() : null;
+        const online = d.status === "ACTIVE" && seenMs != null && seenMs < 600_000;
+        return (
+          <div key={d.deviceId} className="flex items-center justify-between text-xs">
+            <div className="flex items-center gap-1">
+              {online ? <Wifi className="w-3 h-3 text-success" /> : <WifiOff className="w-3 h-3 text-muted-foreground" />}
+              <span className="truncate max-w-[100px]">{d.name}</span>
+            </div>
+            <span className="font-mono">{d.latest?.value ?? "—"}</span>
+          </div>
+        );
+      })}
+      {forRoom.length > 3 && <div className="text-[10px] text-muted-foreground">+{forRoom.length - 3} more</div>}
+    </div>
+  );
+}
+
+function PropertyIoTTab({ propertyId }: { propertyId: string }) {
+  const { data, isLoading } = useQuery<{ data: Array<{ deviceId: string; name: string; deviceType: string; status: string; lastSeenAt: string | null; latest: { metric: string; value: number | null; recordedAt: string } | null }> }>({
+    queryKey: ["property-iot-latest", propertyId],
+    queryFn: () => apiFetch(`/iot/latest?propertyId=${propertyId}`),
+    refetchInterval: 30_000,
+  });
+  const latest = data?.data || [];
+  if (isLoading) return <Skeleton className="h-32" />;
+  if (latest.length === 0) return <EmptyState icon={Wifi} title="No IoT devices" description="Register devices from the IoT page" />;
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      {latest.map((l) => {
+        const seenMs = l.lastSeenAt ? Date.now() - new Date(l.lastSeenAt).getTime() : null;
+        const online = l.status === "ACTIVE" && seenMs != null && seenMs < 600_000;
+        return (
+          <Card key={l.deviceId} data-testid={`property-live-${l.deviceId}`}>
+            <CardContent className="p-4 space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="font-medium">{l.name}</div>
+                {online ? <Badge><Wifi className="w-3 h-3 mr-1" />Online</Badge> : <Badge variant="secondary"><WifiOff className="w-3 h-3 mr-1" />Stale</Badge>}
+              </div>
+              <div className="text-xs text-muted-foreground">{l.deviceType}</div>
+              {l.latest ? (
+                <div className="pt-2 border-t">
+                  <div className="text-xs text-muted-foreground">{l.latest.metric}</div>
+                  <div className="text-2xl font-display font-bold">{l.latest.value ?? "—"}</div>
+                  <div className="text-xs text-muted-foreground">{formatDistanceToNow(new Date(l.latest.recordedAt), { addSuffix: true })}</div>
+                </div>
+              ) : <div className="text-xs text-muted-foreground pt-2">No readings yet.</div>}
+            </CardContent>
+          </Card>
+        );
+      })}
+    </div>
+  );
+}
+
+function PropertyElectricityTab({ propertyId }: { propertyId: string }) {
+  const { data: metersRes } = useQuery<{ data: any[] }>({ queryKey: ["property-meters", propertyId], queryFn: () => apiFetch(`/electricity/meters?propertyId=${propertyId}`) });
+  const { data: readingsRes } = useQuery<{ data: any[] }>({ queryKey: ["property-readings", propertyId], queryFn: () => apiFetch(`/electricity/readings?propertyId=${propertyId}`) });
+  const meters = metersRes?.data || [];
+  const readings = readingsRes?.data || [];
+  const totalUnits = readings.reduce((s, r) => s + (Number(r.unitsConsumed) || 0), 0);
+  const postedAmount = readings.filter((r) => r.posted).reduce((s, r) => s + (Number(r.amount) || 0), 0);
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-3 gap-3">
+        <Card><CardContent className="p-4"><div className="text-xs text-muted-foreground">Active meters</div><div className="text-2xl font-display font-bold">{meters.filter((m: any) => m.isActive).length}</div></CardContent></Card>
+        <Card><CardContent className="p-4"><div className="text-xs text-muted-foreground">Units consumed</div><div className="text-2xl font-display font-bold">{totalUnits.toFixed(1)}</div></CardContent></Card>
+        <Card><CardContent className="p-4"><div className="text-xs text-muted-foreground">Posted amount</div><div className="text-2xl font-display font-bold">₹{postedAmount.toFixed(0)}</div></CardContent></Card>
+      </div>
+      {meters.length === 0 ? <EmptyState icon={ZapIcon} title="No meters" description="Add meters from the Electricity page" /> : (
+        <Card><CardContent className="p-0">
+          <Table>
+            <TableHeader><TableRow><TableHead>Meter No.</TableHead><TableHead>Label</TableHead><TableHead>Room</TableHead><TableHead>Resident</TableHead><TableHead>Tariff</TableHead></TableRow></TableHeader>
+            <TableBody>
+              {meters.map((m: any) => (
+                <TableRow key={m.id}><TableCell className="font-mono">{m.meterNo}</TableCell><TableCell>{m.label || "—"}</TableCell><TableCell>{m.roomNumber || "—"}</TableCell><TableCell>{m.residentName || "—"}</TableCell><TableCell className="text-xs">{m.tariffName || "—"}</TableCell></TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </CardContent></Card>
+      )}
+    </div>
+  );
+}
+
 export default function PropertyDetail() {
   const params = useParams<{ id: string }>();
   const id = params.id as string;
@@ -324,6 +431,16 @@ export default function PropertyDetail() {
         </Card>
       </div>
 
+      <PropertyDetailTabs id={id} />
+    </div>
+  );
+}
+
+function PropertyDetailTabs({ id }: { id: string }) {
+  const { can } = usePermissions();
+  const showIot = can("IOT", "view");
+  const showElec = can("ELECTRICITY", "view");
+  return (
       <Tabs defaultValue="overview" className="w-full">
         <TabsList className="bg-surface">
           <TabsTrigger value="overview" data-testid="tab-overview">Overview</TabsTrigger>
@@ -331,6 +448,8 @@ export default function PropertyDetail() {
           <TabsTrigger value="residents" data-testid="tab-residents">Residents</TabsTrigger>
           <TabsTrigger value="complaints" data-testid="tab-complaints">Complaints</TabsTrigger>
           <TabsTrigger value="documents" data-testid="tab-documents">Documents</TabsTrigger>
+          {showIot && <TabsTrigger value="iot" data-testid="tab-property-iot">IoT</TabsTrigger>}
+          {showElec && <TabsTrigger value="electricity" data-testid="tab-property-electricity">Electricity</TabsTrigger>}
         </TabsList>
 
         <TabsContent value="overview" className="mt-6">
@@ -475,6 +594,7 @@ export default function PropertyDetail() {
                       <span className="text-primary font-medium">{room.occupancy}/{room.capacity}</span>
                     </div>
                     <StatusBadge status={room.status} />
+                    <RoomIoTBadge propertyId={id} roomId={room.id} />
                   </CardContent>
                 </Card>
               ))}
@@ -516,6 +636,13 @@ export default function PropertyDetail() {
           />
         </TabsContent>
 
+        <TabsContent value="iot" className="mt-6">
+          <PropertyIoTTab propertyId={id} />
+        </TabsContent>
+        <TabsContent value="electricity" className="mt-6">
+          <PropertyElectricityTab propertyId={id} />
+        </TabsContent>
+
         <TabsContent value="documents" className="mt-6">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {["Property License", "Lease Agreement", "Tax Records", "Insurance"].map((label) => (
@@ -542,6 +669,5 @@ export default function PropertyDetail() {
           </div>
         </TabsContent>
       </Tabs>
-    </div>
   );
 }

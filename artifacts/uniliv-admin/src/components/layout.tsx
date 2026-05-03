@@ -7,7 +7,7 @@ import {
   UserCheck, Briefcase, GraduationCap, Truck, ClipboardList, ShoppingCart,
   PackageCheck, Boxes, ChefHat, CalendarDays, TrendingUp, MapPin,
   BookOpen, CreditCard, Shield, Settings, LogOut, Search, Menu, BarChart3,
-  Repeat, BellRing, Landmark, Receipt
+  Repeat, BellRing, Landmark, Receipt, Wrench, Zap, ClipboardCheck, Radio
 } from "lucide-react"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
@@ -30,6 +30,10 @@ const navGroups: Array<{ title: string; items: Array<{ title: string; href: stri
     { title: "Complaints", href: "/complaints", icon: AlertCircle, module: "COMPLAINTS" },
     { title: "Laundry", href: "/laundry", icon: WashingMachine, module: "LAUNDRY" },
     { title: "Communications", href: "/communications", icon: MessageSquare, module: "COMMUNICATIONS" },
+    { title: "Facility", href: "/facility", icon: Wrench, module: "FACILITY" },
+    { title: "Electricity", href: "/electricity", icon: Zap, module: "ELECTRICITY" },
+    { title: "Attendance & Out-pass", href: "/resident-attendance", icon: ClipboardCheck, module: "RESIDENT_ATTENDANCE" },
+    { title: "IoT Devices", href: "/iot", icon: Radio, module: "IOT" },
   ]},
   { title: "People", items: [
     { title: "Employees", href: "/employees", icon: UserCheck, module: "EMPLOYEES" },

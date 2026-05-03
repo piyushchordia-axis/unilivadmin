@@ -237,9 +237,61 @@ function KycGateTab({ canEdit }: { canEdit: boolean }) {
   );
 }
 
+function ElectricityTariffsTab({ canEdit }: { canEdit: boolean }) {
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  const { data } = useQuery<{ data: Array<{ id: string; name: string; ratePerUnit: number; fixedCharge: number; effectiveFrom: string; isActive: boolean }> }>({
+    queryKey: ["/electricity/tariffs"], queryFn: () => apiFetch("/electricity/tariffs"),
+  });
+  const tariffs = data?.data || [];
+  const [form, setForm] = React.useState({ name: "", ratePerUnit: "", fixedCharge: "0", effectiveFrom: new Date().toISOString().slice(0, 10) });
+  const create = useMutation({
+    mutationFn: () => apiFetch("/electricity/tariffs", {
+      method: "POST",
+      body: JSON.stringify({ ...form, ratePerUnit: Number(form.ratePerUnit), fixedCharge: Number(form.fixedCharge), isActive: true }),
+    }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["/electricity/tariffs"] }); toast({ title: "Tariff added" }); setForm({ name: "", ratePerUnit: "", fixedCharge: "0", effectiveFrom: new Date().toISOString().slice(0, 10) }); },
+    onError: (e: Error) => toast({ title: e.message, variant: "destructive" }),
+  });
+  return (
+    <Card>
+      <CardHeader><CardTitle>Electricity Tariffs</CardTitle></CardHeader>
+      <CardContent className="space-y-4">
+        <p className="text-sm text-muted-foreground">Define tariff plans for electricity meters. Active rate at the time of recording is applied to compute charges automatically.</p>
+        {canEdit && (
+          <div className="grid grid-cols-1 md:grid-cols-5 gap-2 items-end p-3 border rounded bg-surface">
+            <div><label className="text-xs">Name</label><Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Standard" data-testid="input-tariff-name-settings" /></div>
+            <div><label className="text-xs">Rate / unit</label><Input type="number" step="0.01" value={form.ratePerUnit} onChange={(e) => setForm({ ...form, ratePerUnit: e.target.value })} data-testid="input-tariff-rate-settings" /></div>
+            <div><label className="text-xs">Fixed charge</label><Input type="number" step="0.01" value={form.fixedCharge} onChange={(e) => setForm({ ...form, fixedCharge: e.target.value })} /></div>
+            <div><label className="text-xs">Effective from</label><Input type="date" value={form.effectiveFrom} onChange={(e) => setForm({ ...form, effectiveFrom: e.target.value })} /></div>
+            <Button onClick={() => create.mutate()} disabled={!form.name || !form.ratePerUnit || create.isPending} data-testid="button-add-tariff-settings">Add Tariff</Button>
+          </div>
+        )}
+        <table className="w-full text-sm">
+          <thead><tr className="border-b text-left text-xs text-muted-foreground"><th className="py-2">Name</th><th>Rate</th><th>Fixed</th><th>Effective From</th><th>Status</th></tr></thead>
+          <tbody>
+            {tariffs.length === 0 ? (
+              <tr><td colSpan={5} className="py-6 text-center text-muted-foreground">No tariffs configured.</td></tr>
+            ) : tariffs.map((t) => (
+              <tr key={t.id} className="border-b" data-testid={`tariff-row-settings-${t.id}`}>
+                <td className="py-2 font-medium">{t.name}</td>
+                <td className="font-mono">₹{t.ratePerUnit}</td>
+                <td className="font-mono">₹{t.fixedCharge}</td>
+                <td className="text-xs">{new Date(t.effectiveFrom).toLocaleDateString()}</td>
+                <td>{t.isActive ? <Badge>Active</Badge> : <Badge variant="secondary">Inactive</Badge>}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function Settings() {
   const { can } = usePermissions();
   const canEdit = can("SETTINGS", "edit");
+  const canEditElectricity = can("ELECTRICITY", "edit");
   return (
     <>
       <PageHeader title="Settings" subtitle="System configuration, integrations, and audit" />
@@ -251,6 +303,7 @@ export default function Settings() {
           <TabsTrigger value="notifications">Notifications</TabsTrigger>
           <TabsTrigger value="integrations">Integrations</TabsTrigger>
           <TabsTrigger value="kyc-gate" data-testid="tab-kyc-gate">KYC Gate</TabsTrigger>
+          <TabsTrigger value="electricity-tariffs" data-testid="tab-electricity-tariffs">Electricity Tariffs</TabsTrigger>
         </TabsList>
         <TabsContent value="general"><GeneralTab /></TabsContent>
         <TabsContent value="sla"><SLATab canEdit={canEdit} /></TabsContent>
@@ -258,6 +311,7 @@ export default function Settings() {
         <TabsContent value="notifications"><NotificationsTab /></TabsContent>
         <TabsContent value="integrations"><IntegrationsTab /></TabsContent>
         <TabsContent value="kyc-gate"><KycGateTab canEdit={canEdit} /></TabsContent>
+        <TabsContent value="electricity-tariffs"><ElectricityTariffsTab canEdit={canEditElectricity} /></TabsContent>
       </Tabs>
     </>
   );

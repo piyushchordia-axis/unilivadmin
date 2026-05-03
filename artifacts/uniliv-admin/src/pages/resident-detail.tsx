@@ -61,6 +61,42 @@ import { BellRing, RefreshCw } from "lucide-react";
 const LEDGER_TYPES = ["RENT", "UTILITY", "FOOD", "LAUNDRY", "PENALTY", "ADJUSTMENT", "DEPOSIT", "INCENTIVE"];
 const PAYMENT_MODES = ["CASH", "UPI", "BANK_TRANSFER", "CARD", "CHEQUE"];
 
+function ResidentAttendanceHistory({ residentId }: { residentId: string }) {
+  const { data, isLoading } = useQuery<{ data: Array<{ id: string; attendanceDate: string; status: string; notes?: string | null }> }>({
+    queryKey: ["resident-attendance-history", residentId],
+    queryFn: () => apiFetch(`/resident-attendance/history/${residentId}`),
+  });
+  const records = data?.data || [];
+  const summary = records.reduce((acc, r) => { acc[r.status] = (acc[r.status] || 0) + 1; return acc; }, {} as Record<string, number>);
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-3 gap-3">
+        <Card><CardContent className="p-4"><div className="text-xs text-muted-foreground">Present</div><div className="text-2xl font-display font-bold">{summary.PRESENT || 0}</div></CardContent></Card>
+        <Card><CardContent className="p-4"><div className="text-xs text-muted-foreground">Absent</div><div className="text-2xl font-display font-bold">{summary.ABSENT || 0}</div></CardContent></Card>
+        <Card><CardContent className="p-4"><div className="text-xs text-muted-foreground">Out-pass</div><div className="text-2xl font-display font-bold">{summary.OUT_PASS || 0}</div></CardContent></Card>
+      </div>
+      <Card><CardContent className="p-0">
+        {isLoading ? <div className="p-6"><Skeleton className="h-24" /></div> : records.length === 0 ? (
+          <div className="p-12 text-center text-muted-foreground">No attendance records yet.</div>
+        ) : (
+          <Table>
+            <TableHeader><TableRow><TableHead>Date</TableHead><TableHead>Status</TableHead><TableHead>Notes</TableHead></TableRow></TableHeader>
+            <TableBody>
+              {records.map((r) => (
+                <TableRow key={r.id} data-testid={`history-row-${r.id}`}>
+                  <TableCell className="text-xs">{format(new Date(r.attendanceDate), "dd MMM yyyy")}</TableCell>
+                  <TableCell><Badge variant={r.status === "PRESENT" ? "default" : r.status === "ABSENT" ? "destructive" : "secondary"}>{r.status}</Badge></TableCell>
+                  <TableCell className="text-xs text-muted-foreground">{r.notes || "—"}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </CardContent></Card>
+    </div>
+  );
+}
+
 export default function ResidentDetail() {
   const params = useParams<{ id: string }>();
   const id = params.id as string;
@@ -236,7 +272,11 @@ export default function ResidentDetail() {
               <Badge variant="secondary" className="ml-2 text-[10px] px-1.5" data-testid="badge-reminder-count">{reminderCount}</Badge>
             )}
           </TabsTrigger>
+          <TabsTrigger value="attendance" data-testid="tab-attendance-history">Attendance</TabsTrigger>
         </TabsList>
+        <TabsContent value="attendance" className="mt-6">
+          <ResidentAttendanceHistory residentId={id} />
+        </TabsContent>
 
         <TabsContent value="profile" className="mt-6">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
