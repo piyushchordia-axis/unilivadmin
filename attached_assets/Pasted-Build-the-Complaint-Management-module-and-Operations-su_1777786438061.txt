@@ -1,0 +1,100 @@
+Build the Complaint Management module and Operations sub-modules.
+  
+  ═══════════════════════════════════════════════════════
+  COMPLAINT MANAGEMENT (/complaints)
+  ═══════════════════════════════════════════════════════
+  LIST PAGE — CENTRAL DASHBOARD:
+  - StatCards: Total Open, SLA Breached (red card), Resolved Today, Avg Resolution Hours
+  - DataTable: Ticket #, Property, Category, Title, Resident, Priority, Status, SLA Timer, Assigned To, Created
+  - SLA Timer column: shows countdown (HH:MM) in green/yellow/red based on urgency
+    Green: >50% time remaining | Yellow: <50% | Red: breached
+  - Filters: Property, Category, Status, Priority, Assigned To, Date Range
+  - 'Raise Complaint' button (admin-raised, not resident)
+  - Heatmap widget: complaint volume by category as colored grid (7 days × categories)
+  
+  SLA CONFIGURATION:
+  - Default SLA hours by category:
+    ELECTRICAL: 4h | PLUMBING: 4h | INTERNET: 2h | HOUSEKEEPING: 8h
+    SECURITY: 1h | FOOD: 2h | LAUNDRY: 24h | OTHER: 24h
+  - Auto-set slaDeadline = createdAt + slaHours on complaint creation
+  - Background job (setInterval every 5 min on server): check complaints where
+    slaDeadline < now AND status not in [RESOLVED, CLOSED] → set slaBreach = true
+    → create Escalation record → send email to assignedTo's manager
+  
+  RAISE COMPLAINT FormModal:
+  - Property* (dropdown), Resident (searchable, optional), Category*, Sub-Category,
+    Title*, Description*, Priority*, Upload Photos (up to 5)
+  - Auto-assigns based on category + property rules (configurable in Settings)
+  - Auto-generates ticket number: UNL-YYYYMMDD-XXXX (sequential)
+  
+  COMPLAINT DETAIL PAGE (/complaints/:id):
+  - Header: Ticket number, title, property, status badge, priority badge
+  - SLA timer prominently displayed (live countdown using useEffect + setInterval)
+  - Timeline of all status changes with timestamps and user who changed
+  - Current assignment: avatar + name + reassign button (opens dropdown of staff)
+  - Action buttons: Mark In Progress | Mark Resolved | Escalate | Close
+  
+    Resolution Panel (shown when clicking Mark Resolved):
+    - Resolution notes* (textarea), Upload fix photo
+    - Sets resolvedAt = now, status = RESOLVED
+  
+    Escalation Panel:
+    - Escalate To (user dropdown), Reason (textarea)
+    - Creates Escalation record, sends email notification
+    - Shows escalation history below
+  
+  - Resident rating widget: shown if RESOLVED, displays star rating + feedback
+  
+  ANALYTICS TAB (sub-tab on complaints list):
+  - Bar chart: complaints by category (this month)
+  - Line chart: complaints over last 6 months
+  - SLA compliance rate: donut chart (on-time vs breach)
+  - Table: top 5 complaint categories with avg resolution time
+  
+  ═══════════════════════════════════════════════════════
+  LAUNDRY OPERATIONS (/laundry)
+  ═══════════════════════════════════════════════════════
+  LIST PAGE:
+  - DataTable: Batch #, Resident, Property, Items (count), Drop Date, Commit TAT, Status, Actions
+  - Status: RECEIVED | IN_WASH | READY | PICKED_UP | DAMAGED
+  - Filter by property, status, date
+  - 'Log Inward' button
+  
+  LOG INWARD FormModal:
+  - Resident* (searchable), Property (auto-filled from resident), Drop Date*
+  - Item breakdown: Shirts (count), Pants, Inner Wear, Bed Sheets, Towels, Others
+  - Special instructions, Commit TAT (days — default 2)
+  - Any existing damage note on pickup
+  
+  Batch actions: Mark In Wash → Mark Ready → Mark Picked Up
+  If DAMAGED: log damage items, reason → creates ledger entry for compensation if needed
+  TAT breach: if status != PICKED_UP and (dropDate + commitDays) < today → flag red
+  
+  ═══════════════════════════════════════════════════════
+  COMMUNICATIONS HUB (/communications)
+  ═══════════════════════════════════════════════════════
+  Tabs: Announcements | Bulk Messages | Templates | Audit Log
+  
+  ANNOUNCEMENTS TAB:
+  - DataTable of past announcements: Title, Property Scope, Sent By, Date, Channel
+  - 'Create Announcement' button → FormModal:
+    Title*, Content* (rich text — use Tiptap), Priority (Normal/Urgent)
+    Target: All Properties or specific properties (multi-select)
+    Schedule: Send Now or Schedule for later (datetime picker)
+  
+  BULK MESSAGES TAB:
+  - Recipients: choose by Property, Status (All Active / Overdue / Notice Period)
+  - Channel: SMS | WhatsApp | Email
+  - Message body (with template variables: {{name}}, {{amount}}, {{dueDate}})
+  - Preview with first 3 recipients before sending
+  - Send → logs to audit trail, calls Twilio/Nodemailer
+  
+  TEMPLATES TAB:
+  - Manage message templates: Name, Channel, Body (with {{variables}})
+  - CRUD for templates, used in Bulk Messages
+  
+  AUDIT LOG TAB:
+  - Every communication sent: timestamp, sent by, channel, recipient count, message preview
+  
+  Build all of this with full backend API support and real data.
+

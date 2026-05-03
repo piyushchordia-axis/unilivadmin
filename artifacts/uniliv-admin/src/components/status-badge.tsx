@@ -10,13 +10,13 @@ export function StatusBadge({ status, className, ...props }: StatusBadgeProps) {
   
   let variant: "default" | "secondary" | "destructive" | "outline" | "success" | "warning" | "info" = "secondary";
   
-  if (["RESOLVED", "ACTIVE", "COMPLETED", "APPROVED", "DELIVERED", "PAID"].includes(normalizedStatus)) {
+  if (["RESOLVED", "ACTIVE", "COMPLETED", "APPROVED", "DELIVERED", "PAID", "PICKED_UP", "READY", "ON_TIME"].includes(normalizedStatus)) {
     variant = "success";
-  } else if (["OPEN", "NEW", "DRAFT"].includes(normalizedStatus)) {
+  } else if (["OPEN", "NEW", "DRAFT", "RECEIVED", "LOW", "NORMAL"].includes(normalizedStatus)) {
     variant = "info";
-  } else if (["BREACH", "HIGH", "CRITICAL", "FAILED", "REJECTED", "CANCELLED", "OVERDUE"].includes(normalizedStatus)) {
+  } else if (["BREACH", "HIGH", "CRITICAL", "FAILED", "REJECTED", "CANCELLED", "OVERDUE", "DAMAGED", "SLA_BREACH", "URGENT"].includes(normalizedStatus)) {
     variant = "destructive";
-  } else if (["PENDING", "IN_PROGRESS", "IN_TRANSIT", "PROCESSING"].includes(normalizedStatus)) {
+  } else if (["PENDING", "IN_PROGRESS", "IN_TRANSIT", "PROCESSING", "IN_WASH", "MEDIUM"].includes(normalizedStatus)) {
     variant = "warning";
   } else if (["INACTIVE", "CLOSED", "ARCHIVED"].includes(normalizedStatus)) {
     variant = "secondary";
@@ -24,7 +24,7 @@ export function StatusBadge({ status, className, ...props }: StatusBadgeProps) {
 
   return (
     <Badge variant={variant} className={className} {...props}>
-      {status}
+      {normalizedStatus.replace(/_/g, ' ')}
     </Badge>
   )
 }

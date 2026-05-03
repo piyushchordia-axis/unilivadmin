@@ -253,6 +253,65 @@ export const escalationsTable = pgTable("escalations", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+export const laundryStatusEnum = pgEnum("laundry_status", [
+  "RECEIVED",
+  "IN_WASH",
+  "READY",
+  "PICKED_UP",
+  "DAMAGED",
+]);
+
+export const laundryBatchesTable = pgTable("laundry_batches", {
+  id: text("id").primaryKey(),
+  batchNo: text("batch_no").notNull().unique(),
+  residentId: text("resident_id").notNull().references(() => residentsTable.id),
+  propertyId: text("property_id").notNull().references(() => propertiesTable.id),
+  dropDate: timestamp("drop_date").notNull(),
+  commitTatDays: integer("commit_tat_days").default(2).notNull(),
+  items: json("items").$type<Record<string, number>>().default({}).notNull(),
+  specialInstructions: text("special_instructions"),
+  damageNote: text("damage_note"),
+  status: laundryStatusEnum("status").default("RECEIVED").notNull(),
+  pickedUpAt: timestamp("picked_up_at"),
+  createdBy: text("created_by"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const messageTemplatesTable = pgTable("message_templates", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  channel: text("channel").notNull(),
+  body: text("body").notNull(),
+  variables: json("variables").$type<string[]>().default([]).notNull(),
+  createdBy: text("created_by"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const communicationLogsTable = pgTable("communication_logs", {
+  id: text("id").primaryKey(),
+  channel: text("channel").notNull(),
+  subject: text("subject"),
+  body: text("body").notNull(),
+  recipientCount: integer("recipient_count").default(0).notNull(),
+  recipientFilter: json("recipient_filter").$type<Record<string, unknown>>().default({}).notNull(),
+  sentBy: text("sent_by"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const complaintEventsTable = pgTable("complaint_events", {
+  id: text("id").primaryKey(),
+  complaintId: text("complaint_id").notNull().references(() => complaintsTable.id),
+  type: text("type").notNull(),
+  fromValue: text("from_value"),
+  toValue: text("to_value"),
+  note: text("note"),
+  actorId: text("actor_id"),
+  actorName: text("actor_name"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
 export const announcementsTable = pgTable("announcements", {
   id: text("id").primaryKey(),
   title: text("title").notNull(),
@@ -272,6 +331,10 @@ export const insertPaymentSchema = createInsertSchema(paymentsTable);
 export const insertComplaintSchema = createInsertSchema(complaintsTable);
 export const insertEscalationSchema = createInsertSchema(escalationsTable);
 export const insertAnnouncementSchema = createInsertSchema(announcementsTable);
+export const insertLaundryBatchSchema = createInsertSchema(laundryBatchesTable);
+export const insertMessageTemplateSchema = createInsertSchema(messageTemplatesTable);
+export const insertCommunicationLogSchema = createInsertSchema(communicationLogsTable);
+export const insertComplaintEventSchema = createInsertSchema(complaintEventsTable);
 
 export type Property = typeof propertiesTable.$inferSelect;
 export type InsertProperty = typeof propertiesTable.$inferInsert;
@@ -289,3 +352,11 @@ export type Complaint = typeof complaintsTable.$inferSelect;
 export type InsertComplaint = typeof complaintsTable.$inferInsert;
 export type Escalation = typeof escalationsTable.$inferSelect;
 export type Announcement = typeof announcementsTable.$inferSelect;
+export type LaundryBatch = typeof laundryBatchesTable.$inferSelect;
+export type InsertLaundryBatch = typeof laundryBatchesTable.$inferInsert;
+export type MessageTemplate = typeof messageTemplatesTable.$inferSelect;
+export type InsertMessageTemplate = typeof messageTemplatesTable.$inferInsert;
+export type CommunicationLog = typeof communicationLogsTable.$inferSelect;
+export type InsertCommunicationLog = typeof communicationLogsTable.$inferInsert;
+export type ComplaintEvent = typeof complaintEventsTable.$inferSelect;
+export type InsertComplaintEvent = typeof complaintEventsTable.$inferInsert;

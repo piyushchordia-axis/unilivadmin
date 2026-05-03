@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
-import { complaintsTable, escalationsTable, residentsTable, propertiesTable } from "@workspace/db";
+import { complaintsTable, escalationsTable, residentsTable, propertiesTable, complaintEventsTable } from "@workspace/db";
 import { eq, sql, ilike, or, and } from "drizzle-orm";
 import { authenticate } from "../middlewares/auth.js";
 import { getPagination, buildMeta } from "../lib/paginate.js";
@@ -8,7 +8,12 @@ import { newId } from "../lib/id.js";
 
 const router = Router();
 
-let ticketCounter = 1000;
+async function nextTicketNo(): Promise<string> {
+  const [r] = await db.select({ max: sql<string | null>`MAX(${complaintsTable.ticketNo})` }).from(complaintsTable);
+  const last = r?.max || "TKT-01000";
+  const n = parseInt(last.replace(/[^0-9]/g, ""), 10) || 1000;
+  return `TKT-${String(n + 1).padStart(5, "0")}`;
+}
 
 async function enrichComplaint(c: typeof complaintsTable.$inferSelect) {
   let residentName: string | null = null;
@@ -53,8 +58,7 @@ router.get("/", authenticate, async (req, res) => {
 router.post("/", authenticate, async (req, res) => {
   try {
     const body = req.body;
-    ticketCounter++;
-    const ticketNo = `TKT-${String(ticketCounter).padStart(5, "0")}`;
+    const ticketNo = await nextTicketNo();
     const slaDeadline = new Date(Date.now() + (body.slaHours || 24) * 60 * 60 * 1000);
     const [row] = await db.insert(complaintsTable).values({
       id: newId(),
@@ -92,6 +96,10 @@ router.get("/:id", authenticate, async (req, res) => {
 router.put("/:id", authenticate, async (req, res) => {
   try {
     const body = req.body;
+    const id = req.params["id"]!;
+    const [existing] = await db.select().from(complaintsTable).where(eq(complaintsTable.id, id));
+    if (!existing) { res.status(404).json({ success: false, error: "Not found" }); return; }
+
     const updateData: Record<string, unknown> = { updatedAt: new Date() };
     if (body.status) updateData["status"] = body.status;
     if (body.priority) updateData["priority"] = body.priority;
@@ -100,25 +108,131 @@ router.put("/:id", authenticate, async (req, res) => {
     if (body.rating !== undefined) updateData["rating"] = body.rating;
     if (body.status === "RESOLVED") updateData["resolvedAt"] = new Date();
 
-    const [row] = await db.update(complaintsTable).set(updateData as Partial<typeof complaintsTable.$inferInsert>).where(eq(complaintsTable.id, req.params["id"]!)).returning();
-    if (!row) { res.status(404).json({ success: false, error: "Not found" }); return; }
-    res.json({ success: true, data: await enrichComplaint(row) });
+    const [row] = await db.update(complaintsTable).set(updateData as Partial<typeof complaintsTable.$inferInsert>).where(eq(complaintsTable.id, id)).returning();
+
+    // Record timeline events
+    const actor = req.user?.id;
+    if (body.status && body.status !== existing.status) {
+      await db.insert(complaintEventsTable).values({ id: newId(), complaintId: id, type: "STATUS_CHANGE", fromValue: existing.status, toValue: body.status, actorId: actor });
+    }
+    if (body.assignedTo !== undefined && body.assignedTo !== existing.assignedTo) {
+      await db.insert(complaintEventsTable).values({ id: newId(), complaintId: id, type: "ASSIGNMENT", fromValue: existing.assignedTo, toValue: body.assignedTo, actorId: actor });
+    }
+    if (body.resolutionNote) {
+      await db.insert(complaintEventsTable).values({ id: newId(), complaintId: id, type: "RESOLUTION", note: body.resolutionNote, actorId: actor });
+    }
+
+    res.json({ success: true, data: await enrichComplaint(row!) });
   } catch (err) {
     req.log.error(err);
     res.status(500).json({ success: false, error: "Internal server error" });
   }
 });
 
-// Escalations
+// Timeline
+router.get("/:id/timeline", authenticate, async (req, res) => {
+  try {
+    const events = await db.select().from(complaintEventsTable).where(eq(complaintEventsTable.complaintId, req.params["id"]!)).orderBy(complaintEventsTable.createdAt);
+    const escalations = await db.select().from(escalationsTable).where(eq(escalationsTable.complaintId, req.params["id"]!)).orderBy(escalationsTable.createdAt);
+    res.json({ success: true, data: { events, escalations } });
+  } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
+});
+
+// Stats / Analytics
+router.get("/stats/overview", authenticate, async (req, res) => {
+  try {
+    const propertyId = req.query["propertyId"] as string | undefined;
+    const all = propertyId
+      ? await db.select().from(complaintsTable).where(eq(complaintsTable.propertyId, propertyId))
+      : await db.select().from(complaintsTable);
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const open = all.filter(c => !["RESOLVED", "CLOSED"].includes(c.status)).length;
+    const breached = all.filter(c => c.slaBreach && !["RESOLVED", "CLOSED"].includes(c.status)).length;
+    const resolvedToday = all.filter(c => c.resolvedAt && new Date(c.resolvedAt) >= today).length;
+    const resolvedAll = all.filter(c => c.resolvedAt);
+    const avgHours = resolvedAll.length > 0
+      ? resolvedAll.reduce((sum, c) => sum + (new Date(c.resolvedAt!).getTime() - new Date(c.createdAt).getTime()) / 3600000, 0) / resolvedAll.length
+      : 0;
+
+    // by category (this month)
+    const monthStart = new Date(); monthStart.setDate(1); monthStart.setHours(0, 0, 0, 0);
+    const thisMonth = all.filter(c => new Date(c.createdAt) >= monthStart);
+    const byCategory: Record<string, number> = {};
+    for (const c of thisMonth) byCategory[c.category] = (byCategory[c.category] || 0) + 1;
+
+    // last 6 months trend
+    const trend: { month: string; count: number }[] = [];
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date(); d.setMonth(d.getMonth() - i); d.setDate(1); d.setHours(0, 0, 0, 0);
+      const next = new Date(d); next.setMonth(next.getMonth() + 1);
+      const count = all.filter(c => { const t = new Date(c.createdAt); return t >= d && t < next; }).length;
+      trend.push({ month: d.toLocaleString("en-US", { month: "short" }), count });
+    }
+
+    // SLA compliance
+    const closed = all.filter(c => ["RESOLVED", "CLOSED"].includes(c.status));
+    const onTime = closed.filter(c => !c.slaBreach).length;
+    const breachClosed = closed.length - onTime;
+
+    // Heatmap: 7 days x categories
+    const cats = ["ELECTRICAL","PLUMBING","HOUSEKEEPING","INTERNET","SECURITY","FOOD","LAUNDRY","OTHER"];
+    const heatmap: { day: string; date: string; counts: Record<string, number> }[] = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(); d.setDate(d.getDate() - i); d.setHours(0, 0, 0, 0);
+      const next = new Date(d); next.setDate(next.getDate() + 1);
+      const counts: Record<string, number> = {};
+      for (const cat of cats) counts[cat] = 0;
+      for (const c of all) {
+        const t = new Date(c.createdAt);
+        if (t >= d && t < next) counts[c.category] = (counts[c.category] || 0) + 1;
+      }
+      heatmap.push({ day: d.toLocaleString("en-US", { weekday: "short" }), date: d.toISOString().slice(0, 10), counts });
+    }
+
+    res.json({ success: true, data: {
+      open, breached, resolvedToday, avgHours: Number(avgHours.toFixed(1)),
+      byCategory, trend, slaCompliance: { onTime, breach: breachClosed }, heatmap, categories: cats,
+    } });
+  } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
+});
+
+// Escalations (mounted at /escalations)
 router.post("/escalations", authenticate, async (req, res) => {
   try {
     const body = req.body;
-    const [row] = await db.insert(escalationsTable).values({ id: newId(), ...body }).returning();
+    const [row] = await db.insert(escalationsTable).values({
+      id: newId(),
+      complaintId: body.complaintId,
+      level: body.level || 1,
+      escalatedTo: body.escalatedTo,
+      reason: body.reason,
+    }).returning();
+    if (body.complaintId) {
+      await db.insert(complaintEventsTable).values({
+        id: newId(), complaintId: body.complaintId, type: "ESCALATION", toValue: body.escalatedTo, note: body.reason, actorId: req.user?.id,
+      });
+    }
     res.status(201).json({ success: true, data: row });
   } catch (err) {
     req.log.error(err);
     res.status(500).json({ success: false, error: "Internal server error" });
   }
 });
+
+// SLA background check
+export async function runSlaCheck(): Promise<void> {
+  const now = new Date();
+  const open = await db.select().from(complaintsTable).where(
+    and(
+      sql`${complaintsTable.status} NOT IN ('RESOLVED','CLOSED')`,
+      eq(complaintsTable.slaBreach, false),
+      sql`${complaintsTable.slaDeadline} < ${now}`,
+    )
+  );
+  for (const c of open) {
+    await db.update(complaintsTable).set({ slaBreach: true, updatedAt: now }).where(eq(complaintsTable.id, c.id));
+    await db.insert(complaintEventsTable).values({ id: newId(), complaintId: c.id, type: "SLA_BREACH", note: `SLA deadline ${c.slaDeadline?.toISOString()} passed` });
+  }
+}
 
 export default router;

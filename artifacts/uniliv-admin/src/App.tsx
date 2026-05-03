@@ -15,6 +15,7 @@ import Rooms from "@/pages/rooms";
 import Residents from "@/pages/residents";
 import ResidentDetail from "@/pages/resident-detail";
 import Complaints from "@/pages/complaints";
+import ComplaintDetail from "@/pages/complaint-detail";
 import Laundry from "@/pages/laundry";
 import Communications from "@/pages/communications";
 import Employees from "@/pages/employees";
@@ -71,6 +72,7 @@ function Router() {
       <Route path="/residents">{() => <ProtectedRoute component={Residents} />}</Route>
       <Route path="/residents/:id">{() => <ProtectedRoute component={ResidentDetail} />}</Route>
       <Route path="/complaints">{() => <ProtectedRoute component={Complaints} />}</Route>
+      <Route path="/complaints/:id">{() => <ProtectedRoute component={ComplaintDetail} />}</Route>
       <Route path="/laundry">{() => <ProtectedRoute component={Laundry} />}</Route>
       <Route path="/communications">{() => <ProtectedRoute component={Communications} />}</Route>
       

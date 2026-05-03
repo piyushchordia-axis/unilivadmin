@@ -12,6 +12,8 @@ import { recipesRouter, menuPlansRouter } from "./kitchen.js";
 import { leadsRouter, propertyLeadsRouter } from "./sales.js";
 import { coursesRouter, enrollmentsRouter } from "./lnd.js";
 import { usersRouter, announcementsRouter } from "./users.js";
+import laundryRouter from "./laundry.js";
+import { templatesRouter, commsRouter } from "./communications.js";
 
 const router: IRouter = Router();
 
@@ -40,5 +42,8 @@ router.use("/courses", coursesRouter);
 router.use("/enrollments", enrollmentsRouter);
 router.use("/users", usersRouter);
 router.use("/announcements", announcementsRouter);
+router.use("/laundry", laundryRouter);
+router.use("/message-templates", templatesRouter);
+router.use("/communications", commsRouter);
 
 export default router;

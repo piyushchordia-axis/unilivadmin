@@ -1,5 +1,6 @@
 import app from "./app";
 import { logger } from "./lib/logger";
+import { runSlaCheck } from "./routes/complaints.js";
 
 const rawPort = process.env["PORT"];
 
@@ -22,4 +23,12 @@ app.listen(port, (err) => {
   }
 
   logger.info({ port }, "Server listening");
+
+  // SLA breach check every 5 minutes
+  const slaInterval = setInterval(() => {
+    runSlaCheck().catch((e) => logger.error({ err: e }, "SLA check failed"));
+  }, 5 * 60 * 1000);
+  // Run once on startup
+  runSlaCheck().catch((e) => logger.error({ err: e }, "SLA check failed"));
+  process.on("SIGTERM", () => clearInterval(slaInterval));
 });
