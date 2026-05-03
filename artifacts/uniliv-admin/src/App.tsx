@@ -3,7 +3,9 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/not-found";
-import { Layout } from "@/components/layout";
+import { Layout, PageGuard } from "@/components/layout";
+import Forbidden from "@/pages/forbidden";
+import ExecutiveDashboard from "@/pages/executive-dashboard";
 import { useAuthStore } from "@/lib/store";
 
 // Pages
@@ -59,7 +61,9 @@ function ProtectedRoute({ component: Component }: { component: React.ComponentTy
 
   return (
     <Layout>
-      <Component />
+      <PageGuard>
+        <Component />
+      </PageGuard>
     </Layout>
   );
 }
@@ -107,6 +111,8 @@ function Router() {
       
       <Route path="/users">{() => <ProtectedRoute component={Users} />}</Route>
       <Route path="/settings">{() => <ProtectedRoute component={Settings} />}</Route>
+      <Route path="/dashboard/executive">{() => <ProtectedRoute component={ExecutiveDashboard} />}</Route>
+      <Route path="/403">{() => <ProtectedRoute component={Forbidden} />}</Route>
       
       <Route component={NotFound} />
     </Switch>

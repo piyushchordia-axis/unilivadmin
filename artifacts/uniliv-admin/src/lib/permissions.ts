@@ -1,0 +1,82 @@
+export type UserRole =
+  | "SUPER_ADMIN" | "HR_MANAGER" | "OPERATIONS_MANAGER" | "PROCUREMENT_MANAGER"
+  | "KITCHEN_MANAGER" | "PROJECTS_MANAGER" | "PROPERTY_ACQUISITION" | "FINANCE"
+  | "SALES_EXECUTIVE" | "WARDEN" | "VENDOR_RESTRICTED" | "AUDIT_READONLY";
+
+export type Module =
+  | "DASHBOARD" | "EXECUTIVE_DASHBOARD"
+  | "PROPERTIES" | "RESIDENTS" | "COMPLAINTS" | "LAUNDRY" | "COMMUNICATIONS"
+  | "EMPLOYEES" | "RECRUITMENT" | "LND"
+  | "VENDORS" | "INDENTS" | "PURCHASE_ORDERS" | "GRN" | "INVENTORY"
+  | "RECIPES" | "MENU_PLANNING"
+  | "SALES_LEADS" | "SALES_DASHBOARD" | "PROPERTY_LEADS"
+  | "LEDGER" | "PAYMENTS"
+  | "USERS" | "SETTINGS" | "AUDIT_LOG";
+
+export type Permission = "view" | "create" | "edit" | "delete";
+
+const FULL = { view: true, create: true, edit: true, delete: true };
+const VIEW = { view: true, create: false, edit: false, delete: false };
+
+const ALL_MODULES: Module[] = [
+  "DASHBOARD","EXECUTIVE_DASHBOARD","PROPERTIES","RESIDENTS","COMPLAINTS","LAUNDRY","COMMUNICATIONS",
+  "EMPLOYEES","RECRUITMENT","LND","VENDORS","INDENTS","PURCHASE_ORDERS","GRN","INVENTORY",
+  "RECIPES","MENU_PLANNING","SALES_LEADS","SALES_DASHBOARD","PROPERTY_LEADS","LEDGER","PAYMENTS",
+  "USERS","SETTINGS","AUDIT_LOG",
+];
+
+export const ROLE_PERMISSIONS: Record<UserRole, Partial<Record<Module, Partial<Record<Permission, boolean>>>>> = {
+  SUPER_ADMIN: Object.fromEntries(ALL_MODULES.map(m => [m, FULL])) as any,
+  HR_MANAGER: { DASHBOARD: VIEW, EMPLOYEES: FULL, RECRUITMENT: FULL, LND: FULL, USERS: FULL, SETTINGS: VIEW },
+  OPERATIONS_MANAGER: { DASHBOARD: VIEW, PROPERTIES: FULL, RESIDENTS: FULL, COMPLAINTS: FULL, LAUNDRY: FULL, COMMUNICATIONS: FULL },
+  PROCUREMENT_MANAGER: { DASHBOARD: VIEW, VENDORS: FULL, INDENTS: FULL, PURCHASE_ORDERS: FULL, GRN: FULL, INVENTORY: FULL },
+  KITCHEN_MANAGER: { DASHBOARD: VIEW, RECIPES: FULL, MENU_PLANNING: FULL, INVENTORY: VIEW },
+  PROJECTS_MANAGER: { DASHBOARD: VIEW, PROPERTY_LEADS: FULL, LEDGER: VIEW, PAYMENTS: VIEW, INDENTS: VIEW, PURCHASE_ORDERS: VIEW },
+  PROPERTY_ACQUISITION: { DASHBOARD: VIEW, PROPERTY_LEADS: FULL },
+  FINANCE: { DASHBOARD: VIEW, EXECUTIVE_DASHBOARD: VIEW, RESIDENTS: VIEW, LEDGER: FULL, PAYMENTS: FULL, INDENTS: VIEW, PURCHASE_ORDERS: VIEW },
+  SALES_EXECUTIVE: { DASHBOARD: VIEW, SALES_LEADS: FULL, SALES_DASHBOARD: VIEW, PROPERTY_LEADS: VIEW },
+  WARDEN: { DASHBOARD: VIEW, PROPERTIES: VIEW, RESIDENTS: FULL, COMPLAINTS: FULL, LAUNDRY: FULL, COMMUNICATIONS: { view: true, create: true, edit: false, delete: false } },
+  VENDOR_RESTRICTED: { DASHBOARD: VIEW },
+  AUDIT_READONLY: Object.fromEntries(ALL_MODULES.map(m => [m, VIEW])) as any,
+};
+
+export function can(role: UserRole | undefined, module: Module, perm: Permission = "view"): boolean {
+  if (!role) return false;
+  return ROLE_PERMISSIONS[role]?.[module]?.[perm] === true;
+}
+
+export const PATH_TO_MODULE: Array<[RegExp, Module]> = [
+  [/^\/$/, "DASHBOARD"],
+  [/^\/dashboard\/executive/, "EXECUTIVE_DASHBOARD"],
+  [/^\/properties/, "PROPERTIES"],
+  [/^\/residents/, "RESIDENTS"],
+  [/^\/complaints/, "COMPLAINTS"],
+  [/^\/laundry/, "LAUNDRY"],
+  [/^\/communications/, "COMMUNICATIONS"],
+  [/^\/employees/, "EMPLOYEES"],
+  [/^\/attendance/, "EMPLOYEES"],
+  [/^\/leaves/, "EMPLOYEES"],
+  [/^\/recruitment/, "RECRUITMENT"],
+  [/^\/courses/, "LND"],
+  [/^\/vendors/, "VENDORS"],
+  [/^\/indents/, "INDENTS"],
+  [/^\/purchase-orders/, "PURCHASE_ORDERS"],
+  [/^\/grn/, "GRN"],
+  [/^\/inventory/, "INVENTORY"],
+  [/^\/recipes/, "RECIPES"],
+  [/^\/kitchen/, "RECIPES"],
+  [/^\/menu-planning/, "MENU_PLANNING"],
+  [/^\/leads/, "SALES_LEADS"],
+  [/^\/sales\/dashboard/, "SALES_DASHBOARD"],
+  [/^\/property-leads/, "PROPERTY_LEADS"],
+  [/^\/ledger/, "LEDGER"],
+  [/^\/payments/, "PAYMENTS"],
+  [/^\/users/, "USERS"],
+  [/^\/settings/, "SETTINGS"],
+  [/^\/rooms/, "PROPERTIES"],
+];
+
+export function moduleForPath(path: string): Module | null {
+  for (const [re, m] of PATH_TO_MODULE) if (re.test(path)) return m;
+  return null;
+}

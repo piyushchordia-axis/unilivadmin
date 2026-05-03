@@ -4,3 +4,4 @@ export * from "./procurement";
 export * from "./kitchen";
 export * from "./sales";
 export * from "./lnd";
+export * from "./system";

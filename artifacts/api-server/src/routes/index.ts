@@ -14,6 +14,9 @@ import { coursesRouter, enrollmentsRouter } from "./lnd.js";
 import { usersRouter, announcementsRouter } from "./users.js";
 import laundryRouter from "./laundry.js";
 import { templatesRouter, commsRouter } from "./communications.js";
+import { notificationsRouter } from "./notifications.js";
+import { executiveRouter } from "./executive.js";
+import { settingsRouter } from "./settings.js";
 
 const router: IRouter = Router();
 
@@ -47,5 +50,8 @@ router.use("/announcements", announcementsRouter);
 router.use("/laundry", laundryRouter);
 router.use("/message-templates", templatesRouter);
 router.use("/communications", commsRouter);
+router.use("/notifications", notificationsRouter);
+router.use("/executive", executiveRouter);
+router.use("/settings", settingsRouter);
 
 export default router;
