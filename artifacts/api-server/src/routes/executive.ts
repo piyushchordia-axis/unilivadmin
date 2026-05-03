@@ -112,6 +112,30 @@ executiveRouter.get("/top-overdue", async (_req, res) => {
   } catch (err) { _req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
+executiveRouter.get("/portfolio-breakdown", async (_req, res) => {
+  try {
+    const props = await db.select().from(propertiesTable);
+    const map = new Map<string, { type: string; properties: number; totalBeds: number; occupied: number }>();
+    for (const p of props) {
+      const key = p.portfolioType || "CO_LIVING";
+      const entry = map.get(key) || { type: key, properties: 0, totalBeds: 0, occupied: 0 };
+      entry.properties += 1;
+      entry.totalBeds += p.totalBeds || 0;
+      const [r] = await db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(residentsTable)
+        .where(and(eq(residentsTable.propertyId, p.id), eq(residentsTable.status, "ACTIVE")));
+      entry.occupied += r.count || 0;
+      map.set(key, entry);
+    }
+    const data = Array.from(map.values()).map((e) => ({
+      ...e,
+      occupancy: e.totalBeds ? Math.round((e.occupied / e.totalBeds) * 1000) / 10 : 0,
+    }));
+    res.json({ success: true, data });
+  } catch (err) { _req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
+});
+
 executiveRouter.get("/top-sla-breached", async (_req, res) => {
   try {
     const rows = await db.select().from(complaintsTable).where(sql`status NOT IN ('RESOLVED', 'CLOSED')`).orderBy(desc(complaintsTable.createdAt)).limit(5);

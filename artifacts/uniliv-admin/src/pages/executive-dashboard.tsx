@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Building2, Users, BedDouble, Wallet, AlertTriangle, AlertCircle } from "lucide-react";
 import { apiFetch } from "@/lib/api-fetch";
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis, FunnelChart, Funnel, LabelList } from "recharts";
+import { PORTFOLIO_TYPE_LABELS, type PortfolioType } from "@/lib/portfolio-types";
 import { usePermissions } from "@/lib/use-permissions";
 import Forbidden from "./forbidden";
 
@@ -25,6 +26,7 @@ export default function ExecutiveDashboard() {
   const headcount = useEx<any>("/executive/headcount");
   const overdue = useEx<any[]>("/executive/top-overdue");
   const breached = useEx<any[]>("/executive/top-sla-breached");
+  const portfolio = useEx<any[]>("/executive/portfolio-breakdown");
 
   if (!can("EXECUTIVE_DASHBOARD")) return <Forbidden />;
 
@@ -111,6 +113,55 @@ export default function ExecutiveDashboard() {
           </CardContent>
         </Card>
       </div>
+
+      <Card>
+        <CardHeader><CardTitle>Portfolio Breakdown</CardTitle></CardHeader>
+        <CardContent>
+          {(portfolio.data?.data?.length ?? 0) === 0 ? (
+            <p className="text-sm text-muted-foreground text-center py-4">No portfolio data</p>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div style={{ height: 240 }}>
+                <ResponsiveContainer>
+                  <BarChart data={(portfolio.data?.data || []).map((d: any) => ({
+                    type: PORTFOLIO_TYPE_LABELS[d.type as PortfolioType] || d.type,
+                    properties: d.properties,
+                    occupancy: d.occupancy,
+                  }))}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="type" tick={{ fontSize: 10 }} angle={-15} textAnchor="end" height={60} />
+                    <YAxis tick={{ fontSize: 11 }} />
+                    <Tooltip />
+                    <Legend />
+                    <Bar dataKey="properties" fill="#FF6B35" name="Properties" />
+                    <Bar dataKey="occupancy" fill="#0EA5E9" name="Occupancy %" />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+              <table className="w-full text-sm" data-testid="table-portfolio-breakdown">
+                <thead>
+                  <tr className="text-left text-xs text-muted-foreground border-b">
+                    <th className="py-2">Type</th>
+                    <th>Properties</th>
+                    <th>Beds</th>
+                    <th>Occupancy</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(portfolio.data?.data || []).map((d: any) => (
+                    <tr key={d.type} className="border-b" data-testid={`row-portfolio-${d.type}`}>
+                      <td className="py-2">{PORTFOLIO_TYPE_LABELS[d.type as PortfolioType] || d.type}</td>
+                      <td>{d.properties}</td>
+                      <td>{d.totalBeds}</td>
+                      <td>{d.occupancy}%</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
         <Card>

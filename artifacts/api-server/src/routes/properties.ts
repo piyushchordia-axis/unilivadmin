@@ -56,6 +56,8 @@ router.post("/", authenticate, async (req, res) => {
       lng: body.lng,
       totalBeds: body.totalBeds,
       status: body.status || "ACTIVE",
+      portfolioType: body.portfolioType || "CO_LIVING",
+      portfolioAttributes: body.portfolioAttributes || {},
       wardenId: body.wardenId,
       phone: body.phone,
       email: body.email,

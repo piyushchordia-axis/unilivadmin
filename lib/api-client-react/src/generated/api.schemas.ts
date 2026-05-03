@@ -112,6 +112,55 @@ export interface DashboardChartsResponse {
   data: DashboardCharts;
 }
 
+export type PortfolioType = (typeof PortfolioType)[keyof typeof PortfolioType];
+
+export const PortfolioType = {
+  CO_LIVING: "CO_LIVING",
+  STUDENT_HOUSING: "STUDENT_HOUSING",
+  SERVICED_APARTMENTS: "SERVICED_APARTMENTS",
+  PG: "PG",
+  COLLEGE_HOSTEL: "COLLEGE_HOSTEL",
+  COWORKING: "COWORKING",
+  MANAGED_OFFICE: "MANAGED_OFFICE",
+} as const;
+
+export type PortfolioAttributesGender =
+  (typeof PortfolioAttributesGender)[keyof typeof PortfolioAttributesGender];
+
+export const PortfolioAttributesGender = {
+  MALE: "MALE",
+  FEMALE: "FEMALE",
+  COED: "COED",
+} as const;
+
+export interface PortfolioAttributes {
+  institutionAffiliation?: string;
+  academicYear?: string;
+  gender?: PortfolioAttributesGender;
+  mealPlanIncluded?: boolean;
+  mealPlanDetails?: string;
+  nightlyRate?: number;
+  weeklyRate?: number;
+  deskCapacity?: number;
+  privateOfficeCount?: number;
+  seatCapacity?: number;
+  leaseTermMonths?: number;
+}
+
+export interface PortfolioBreakdownEntry {
+  type: PortfolioType;
+  properties: number;
+  totalBeds: number;
+  occupied: number;
+  /** Occupancy percentage (0-100, one decimal) */
+  occupancy: number;
+}
+
+export interface PortfolioBreakdownResponse {
+  success: boolean;
+  data: PortfolioBreakdownEntry[];
+}
+
 export interface PropertyDto {
   id: string;
   name: string;
@@ -123,6 +172,8 @@ export interface PropertyDto {
   lng?: number | null;
   totalBeds: number;
   status: string;
+  portfolioType: PortfolioType;
+  portfolioAttributes: PortfolioAttributes;
   wardenId?: string | null;
   phone?: string | null;
   email?: string | null;
@@ -153,6 +204,8 @@ export interface CreatePropertyBody {
   lng?: number;
   totalBeds: number;
   status?: string;
+  portfolioType?: PortfolioType;
+  portfolioAttributes?: PortfolioAttributes;
   wardenId?: string;
   phone?: string;
   email?: string;

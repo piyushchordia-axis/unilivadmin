@@ -1671,6 +1671,20 @@ paths:
               schema:
                 $ref: "#/components/schemas/SuccessResponse"
 
+  # ─── EXECUTIVE ────────────────────────────────────────
+  /executive/portfolio-breakdown:
+    get:
+      operationId: getExecutivePortfolioBreakdown
+      tags: [executive]
+      summary: Portfolio breakdown by sub-type with occupancy
+      responses:
+        "200":
+          description: Per-portfolio-type counts and occupancy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PortfolioBreakdownResponse"
+
 components:
   parameters:
     IdParam:
@@ -1920,6 +1934,71 @@ components:
       required: [success, data]
 
     # ─── PROPERTY ─────────────────────────────────────────
+    PortfolioType:
+      type: string
+      enum:
+        - CO_LIVING
+        - STUDENT_HOUSING
+        - SERVICED_APARTMENTS
+        - PG
+        - COLLEGE_HOSTEL
+        - COWORKING
+        - MANAGED_OFFICE
+
+    PortfolioAttributes:
+      type: object
+      properties:
+        institutionAffiliation:
+          type: string
+        academicYear:
+          type: string
+        gender:
+          type: string
+          enum: [MALE, FEMALE, COED]
+        mealPlanIncluded:
+          type: boolean
+        mealPlanDetails:
+          type: string
+        nightlyRate:
+          type: number
+        weeklyRate:
+          type: number
+        deskCapacity:
+          type: integer
+        privateOfficeCount:
+          type: integer
+        seatCapacity:
+          type: integer
+        leaseTermMonths:
+          type: integer
+
+    PortfolioBreakdownEntry:
+      type: object
+      properties:
+        type:
+          $ref: "#/components/schemas/PortfolioType"
+        properties:
+          type: integer
+        totalBeds:
+          type: integer
+        occupied:
+          type: integer
+        occupancy:
+          type: number
+          description: Occupancy percentage (0-100, one decimal)
+      required: [type, properties, totalBeds, occupied, occupancy]
+
+    PortfolioBreakdownResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/PortfolioBreakdownEntry"
+      required: [success, data]
+
     PropertyDto:
       type: object
       properties:
@@ -1945,6 +2024,10 @@ components:
           type: integer
         status:
           type: string
+        portfolioType:
+          $ref: "#/components/schemas/PortfolioType"
+        portfolioAttributes:
+          $ref: "#/components/schemas/PortfolioAttributes"
         wardenId:
           type: string
           nullable: true
@@ -1964,7 +2047,7 @@ components:
           type: string
         updatedAt:
           type: string
-      required: [id, name, address, city, state, pincode, totalBeds, status, amenities, occupiedBeds, createdAt, updatedAt]
+      required: [id, name, address, city, state, pincode, totalBeds, status, portfolioType, portfolioAttributes, amenities, occupiedBeds, createdAt, updatedAt]
 
     PropertyResponse:
       type: object
@@ -2009,6 +2092,10 @@ components:
           type: integer
         status:
           type: string
+        portfolioType:
+          $ref: "#/components/schemas/PortfolioType"
+        portfolioAttributes:
+          $ref: "#/components/schemas/PortfolioAttributes"
         wardenId:
           type: string
         phone:

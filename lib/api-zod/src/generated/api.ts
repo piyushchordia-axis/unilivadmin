@@ -179,6 +179,28 @@ export const GetPropertiesResponse = zod.object({
       lng: zod.number().nullish(),
       totalBeds: zod.number(),
       status: zod.string(),
+      portfolioType: zod.enum([
+        "CO_LIVING",
+        "STUDENT_HOUSING",
+        "SERVICED_APARTMENTS",
+        "PG",
+        "COLLEGE_HOSTEL",
+        "COWORKING",
+        "MANAGED_OFFICE",
+      ]),
+      portfolioAttributes: zod.object({
+        institutionAffiliation: zod.string().optional(),
+        academicYear: zod.string().optional(),
+        gender: zod.enum(["MALE", "FEMALE", "COED"]).optional(),
+        mealPlanIncluded: zod.boolean().optional(),
+        mealPlanDetails: zod.string().optional(),
+        nightlyRate: zod.number().optional(),
+        weeklyRate: zod.number().optional(),
+        deskCapacity: zod.number().optional(),
+        privateOfficeCount: zod.number().optional(),
+        seatCapacity: zod.number().optional(),
+        leaseTermMonths: zod.number().optional(),
+      }),
       wardenId: zod.string().nullish(),
       phone: zod.string().nullish(),
       email: zod.string().nullish(),
@@ -209,6 +231,32 @@ export const CreatePropertyBody = zod.object({
   lng: zod.number().optional(),
   totalBeds: zod.number(),
   status: zod.string().optional(),
+  portfolioType: zod
+    .enum([
+      "CO_LIVING",
+      "STUDENT_HOUSING",
+      "SERVICED_APARTMENTS",
+      "PG",
+      "COLLEGE_HOSTEL",
+      "COWORKING",
+      "MANAGED_OFFICE",
+    ])
+    .optional(),
+  portfolioAttributes: zod
+    .object({
+      institutionAffiliation: zod.string().optional(),
+      academicYear: zod.string().optional(),
+      gender: zod.enum(["MALE", "FEMALE", "COED"]).optional(),
+      mealPlanIncluded: zod.boolean().optional(),
+      mealPlanDetails: zod.string().optional(),
+      nightlyRate: zod.number().optional(),
+      weeklyRate: zod.number().optional(),
+      deskCapacity: zod.number().optional(),
+      privateOfficeCount: zod.number().optional(),
+      seatCapacity: zod.number().optional(),
+      leaseTermMonths: zod.number().optional(),
+    })
+    .optional(),
   wardenId: zod.string().optional(),
   phone: zod.string().optional(),
   email: zod.string().optional(),
@@ -235,6 +283,28 @@ export const GetPropertyResponse = zod.object({
     lng: zod.number().nullish(),
     totalBeds: zod.number(),
     status: zod.string(),
+    portfolioType: zod.enum([
+      "CO_LIVING",
+      "STUDENT_HOUSING",
+      "SERVICED_APARTMENTS",
+      "PG",
+      "COLLEGE_HOSTEL",
+      "COWORKING",
+      "MANAGED_OFFICE",
+    ]),
+    portfolioAttributes: zod.object({
+      institutionAffiliation: zod.string().optional(),
+      academicYear: zod.string().optional(),
+      gender: zod.enum(["MALE", "FEMALE", "COED"]).optional(),
+      mealPlanIncluded: zod.boolean().optional(),
+      mealPlanDetails: zod.string().optional(),
+      nightlyRate: zod.number().optional(),
+      weeklyRate: zod.number().optional(),
+      deskCapacity: zod.number().optional(),
+      privateOfficeCount: zod.number().optional(),
+      seatCapacity: zod.number().optional(),
+      leaseTermMonths: zod.number().optional(),
+    }),
     wardenId: zod.string().nullish(),
     phone: zod.string().nullish(),
     email: zod.string().nullish(),
@@ -262,6 +332,32 @@ export const UpdatePropertyBody = zod.object({
   lng: zod.number().optional(),
   totalBeds: zod.number(),
   status: zod.string().optional(),
+  portfolioType: zod
+    .enum([
+      "CO_LIVING",
+      "STUDENT_HOUSING",
+      "SERVICED_APARTMENTS",
+      "PG",
+      "COLLEGE_HOSTEL",
+      "COWORKING",
+      "MANAGED_OFFICE",
+    ])
+    .optional(),
+  portfolioAttributes: zod
+    .object({
+      institutionAffiliation: zod.string().optional(),
+      academicYear: zod.string().optional(),
+      gender: zod.enum(["MALE", "FEMALE", "COED"]).optional(),
+      mealPlanIncluded: zod.boolean().optional(),
+      mealPlanDetails: zod.string().optional(),
+      nightlyRate: zod.number().optional(),
+      weeklyRate: zod.number().optional(),
+      deskCapacity: zod.number().optional(),
+      privateOfficeCount: zod.number().optional(),
+      seatCapacity: zod.number().optional(),
+      leaseTermMonths: zod.number().optional(),
+    })
+    .optional(),
   wardenId: zod.string().optional(),
   phone: zod.string().optional(),
   email: zod.string().optional(),
@@ -281,6 +377,28 @@ export const UpdatePropertyResponse = zod.object({
     lng: zod.number().nullish(),
     totalBeds: zod.number(),
     status: zod.string(),
+    portfolioType: zod.enum([
+      "CO_LIVING",
+      "STUDENT_HOUSING",
+      "SERVICED_APARTMENTS",
+      "PG",
+      "COLLEGE_HOSTEL",
+      "COWORKING",
+      "MANAGED_OFFICE",
+    ]),
+    portfolioAttributes: zod.object({
+      institutionAffiliation: zod.string().optional(),
+      academicYear: zod.string().optional(),
+      gender: zod.enum(["MALE", "FEMALE", "COED"]).optional(),
+      mealPlanIncluded: zod.boolean().optional(),
+      mealPlanDetails: zod.string().optional(),
+      nightlyRate: zod.number().optional(),
+      weeklyRate: zod.number().optional(),
+      deskCapacity: zod.number().optional(),
+      privateOfficeCount: zod.number().optional(),
+      seatCapacity: zod.number().optional(),
+      leaseTermMonths: zod.number().optional(),
+    }),
     wardenId: zod.string().nullish(),
     phone: zod.string().nullish(),
     email: zod.string().nullish(),
@@ -2432,4 +2550,30 @@ export const DeleteAnnouncementParams = zod.object({
 export const DeleteAnnouncementResponse = zod.object({
   success: zod.boolean(),
   message: zod.string().optional(),
+});
+
+/**
+ * @summary Portfolio breakdown by sub-type with occupancy
+ */
+export const GetExecutivePortfolioBreakdownResponse = zod.object({
+  success: zod.boolean(),
+  data: zod.array(
+    zod.object({
+      type: zod.enum([
+        "CO_LIVING",
+        "STUDENT_HOUSING",
+        "SERVICED_APARTMENTS",
+        "PG",
+        "COLLEGE_HOSTEL",
+        "COWORKING",
+        "MANAGED_OFFICE",
+      ]),
+      properties: zod.number(),
+      totalBeds: zod.number(),
+      occupied: zod.number(),
+      occupancy: zod
+        .number()
+        .describe("Occupancy percentage (0-100, one decimal)"),
+    }),
+  ),
 });

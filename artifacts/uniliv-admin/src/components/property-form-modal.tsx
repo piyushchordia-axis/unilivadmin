@@ -16,6 +16,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { MapPin, Loader2 } from "lucide-react";
 import {
   Select,
@@ -25,6 +26,13 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
+import {
+  PORTFOLIO_TYPES,
+  PORTFOLIO_TYPE_LABELS,
+  portfolioAttrFields,
+  type PortfolioType,
+  type PortfolioAttributes,
+} from "@/lib/portfolio-types";
 
 const AMENITIES = [
   "Wifi",
@@ -52,6 +60,7 @@ const schema = z.object({
     .refine((v) => !v || /^\d{10}$/.test(v), { message: "10-digit phone" }),
   email: z.string().email("Invalid email").optional().or(z.literal("")),
   status: z.enum(["ACTIVE", "INACTIVE", "UNDER_RENOVATION"]),
+  portfolioType: z.enum(PORTFOLIO_TYPES),
 });
 
 type FormValues = z.infer<typeof schema>;
@@ -73,6 +82,7 @@ export function PropertyFormModal({
   const [amenities, setAmenities] = React.useState<string[]>([]);
   const [coords, setCoords] = React.useState<{ lat?: number; lng?: number }>({});
   const [geocoding, setGeocoding] = React.useState(false);
+  const [attrs, setAttrs] = React.useState<PortfolioAttributes>({});
 
   const {
     register,
@@ -93,6 +103,7 @@ export function PropertyFormModal({
       phone: "",
       email: "",
       status: "ACTIVE",
+      portfolioType: "CO_LIVING",
     },
   });
 
@@ -109,12 +120,14 @@ export function PropertyFormModal({
           phone: property.phone || "",
           email: property.email || "",
           status: (property.status as any) || "ACTIVE",
+          portfolioType: (property.portfolioType as PortfolioType) || "CO_LIVING",
         });
         setAmenities(property.amenities || []);
         setCoords({
           lat: property.lat ?? undefined,
           lng: property.lng ?? undefined,
         });
+        setAttrs((property.portfolioAttributes as PortfolioAttributes) || {});
       } else {
         reset({
           name: "",
@@ -126,9 +139,11 @@ export function PropertyFormModal({
           phone: "",
           email: "",
           status: "ACTIVE",
+          portfolioType: "CO_LIVING",
         });
         setAmenities([]);
         setCoords({});
+        setAttrs({});
       }
     }
   }, [open, property, reset]);
@@ -171,13 +186,23 @@ export function PropertyFormModal({
   };
 
   const onSubmit = async (values: FormValues) => {
-    const body: any = {
+    const fields = portfolioAttrFields(values.portfolioType);
+    const filteredAttrs: PortfolioAttributes = {};
+    for (const k of fields) {
+      const v = attrs[k];
+      if (v === undefined || v === null || v === "") continue;
+      // Each key narrows back to its own value type via PortfolioAttributes.
+      (filteredAttrs[k] as PortfolioAttributes[typeof k]) =
+        v as PortfolioAttributes[typeof k];
+    }
+    const body = {
       ...values,
       amenities,
       lat: coords.lat,
       lng: coords.lng,
       phone: values.phone || undefined,
       email: values.email || undefined,
+      portfolioAttributes: filteredAttrs,
     };
     try {
       if (isEdit && property) {
@@ -201,6 +226,13 @@ export function PropertyFormModal({
 
   const isSaving = createMut.isPending || updateMut.isPending;
   const status = watch("status");
+  const portfolioType = watch("portfolioType");
+  const attrFields = portfolioAttrFields(portfolioType);
+
+  const setAttr = <K extends keyof PortfolioAttributes>(
+    k: K,
+    v: PortfolioAttributes[K] | undefined,
+  ) => setAttrs((p) => ({ ...p, [k]: v }));
 
   return (
     <FormModal
@@ -218,6 +250,24 @@ export function PropertyFormModal({
           {errors.name && (
             <p className="text-xs text-destructive mt-1">{errors.name.message}</p>
           )}
+        </div>
+        <div>
+          <Label>Portfolio Type *</Label>
+          <Select
+            value={portfolioType}
+            onValueChange={(v) => setValue("portfolioType", v as PortfolioType)}
+          >
+            <SelectTrigger data-testid="select-property-portfolio-type">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {PORTFOLIO_TYPES.map((t) => (
+                <SelectItem key={t} value={t}>
+                  {PORTFOLIO_TYPE_LABELS[t]}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
         <div>
           <Label>Address *</Label>
@@ -291,6 +341,184 @@ export function PropertyFormModal({
             </SelectContent>
           </Select>
         </div>
+
+        {attrFields.length > 0 && (
+          <div className="border-t pt-4">
+            <Label className="mb-2 block">
+              {PORTFOLIO_TYPE_LABELS[portfolioType]} Details
+            </Label>
+            <div className="grid grid-cols-2 gap-3">
+              {attrFields.includes("institutionAffiliation") && (
+                <div className="col-span-2">
+                  <Label className="text-xs">Institution Affiliation</Label>
+                  <Input
+                    data-testid="input-attr-institution"
+                    value={attrs.institutionAffiliation || ""}
+                    onChange={(e) => setAttr("institutionAffiliation", e.target.value)}
+                  />
+                </div>
+              )}
+              {attrFields.includes("academicYear") && (
+                <div>
+                  <Label className="text-xs">Academic Year</Label>
+                  <Input
+                    data-testid="input-attr-academic-year"
+                    placeholder="2025-26"
+                    value={attrs.academicYear || ""}
+                    onChange={(e) => setAttr("academicYear", e.target.value)}
+                  />
+                </div>
+              )}
+              {attrFields.includes("gender") && (
+                <div>
+                  <Label className="text-xs">Gender</Label>
+                  <Select
+                    value={attrs.gender || ""}
+                    onValueChange={(v) =>
+                      setAttr("gender", v as PortfolioAttributes["gender"])
+                    }
+                  >
+                    <SelectTrigger data-testid="select-attr-gender">
+                      <SelectValue placeholder="Select" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="MALE">Male</SelectItem>
+                      <SelectItem value="FEMALE">Female</SelectItem>
+                      <SelectItem value="COED">Co-ed</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+              {attrFields.includes("mealPlanIncluded") && (
+                <div className="flex items-center gap-2 mt-6">
+                  <Checkbox
+                    id="meal-plan-included"
+                    data-testid="checkbox-attr-meal-plan"
+                    checked={!!attrs.mealPlanIncluded}
+                    onCheckedChange={(v) => setAttr("mealPlanIncluded", !!v)}
+                  />
+                  <Label htmlFor="meal-plan-included" className="text-sm">
+                    Meal plan included
+                  </Label>
+                </div>
+              )}
+              {attrFields.includes("mealPlanDetails") && (
+                <div className="col-span-2">
+                  <Label className="text-xs">Meal Plan Details</Label>
+                  <Input
+                    data-testid="input-attr-meal-plan-details"
+                    placeholder="e.g. 2 meals/day, vegetarian"
+                    value={attrs.mealPlanDetails || ""}
+                    onChange={(e) => setAttr("mealPlanDetails", e.target.value)}
+                  />
+                </div>
+              )}
+              {attrFields.includes("nightlyRate") && (
+                <div>
+                  <Label className="text-xs">Nightly Rate (₹)</Label>
+                  <Input
+                    data-testid="input-attr-nightly-rate"
+                    type="number"
+                    min={0}
+                    value={attrs.nightlyRate ?? ""}
+                    onChange={(e) =>
+                      setAttr(
+                        "nightlyRate",
+                        e.target.value === "" ? undefined : Number(e.target.value)
+                      )
+                    }
+                  />
+                </div>
+              )}
+              {attrFields.includes("weeklyRate") && (
+                <div>
+                  <Label className="text-xs">Weekly Rate (₹)</Label>
+                  <Input
+                    data-testid="input-attr-weekly-rate"
+                    type="number"
+                    min={0}
+                    value={attrs.weeklyRate ?? ""}
+                    onChange={(e) =>
+                      setAttr(
+                        "weeklyRate",
+                        e.target.value === "" ? undefined : Number(e.target.value)
+                      )
+                    }
+                  />
+                </div>
+              )}
+              {attrFields.includes("deskCapacity") && (
+                <div>
+                  <Label className="text-xs">Desk Capacity</Label>
+                  <Input
+                    data-testid="input-attr-desk-capacity"
+                    type="number"
+                    min={0}
+                    value={attrs.deskCapacity ?? ""}
+                    onChange={(e) =>
+                      setAttr(
+                        "deskCapacity",
+                        e.target.value === "" ? undefined : Number(e.target.value)
+                      )
+                    }
+                  />
+                </div>
+              )}
+              {attrFields.includes("privateOfficeCount") && (
+                <div>
+                  <Label className="text-xs">Private Offices</Label>
+                  <Input
+                    data-testid="input-attr-private-offices"
+                    type="number"
+                    min={0}
+                    value={attrs.privateOfficeCount ?? ""}
+                    onChange={(e) =>
+                      setAttr(
+                        "privateOfficeCount",
+                        e.target.value === "" ? undefined : Number(e.target.value)
+                      )
+                    }
+                  />
+                </div>
+              )}
+              {attrFields.includes("seatCapacity") && (
+                <div>
+                  <Label className="text-xs">Seat Capacity</Label>
+                  <Input
+                    data-testid="input-attr-seat-capacity"
+                    type="number"
+                    min={0}
+                    value={attrs.seatCapacity ?? ""}
+                    onChange={(e) =>
+                      setAttr(
+                        "seatCapacity",
+                        e.target.value === "" ? undefined : Number(e.target.value)
+                      )
+                    }
+                  />
+                </div>
+              )}
+              {attrFields.includes("leaseTermMonths") && (
+                <div>
+                  <Label className="text-xs">Lease Term (months)</Label>
+                  <Input
+                    data-testid="input-attr-lease-term"
+                    type="number"
+                    min={0}
+                    value={attrs.leaseTermMonths ?? ""}
+                    onChange={(e) =>
+                      setAttr(
+                        "leaseTermMonths",
+                        e.target.value === "" ? undefined : Number(e.target.value)
+                      )
+                    }
+                  />
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         <div>
           <Label>Amenities</Label>
           <div className="flex flex-wrap gap-2 mt-2">

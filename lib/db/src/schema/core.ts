@@ -96,6 +96,30 @@ export const priorityEnum = pgEnum("priority", [
   "CRITICAL",
 ]);
 
+export const portfolioTypeEnum = pgEnum("portfolio_type", [
+  "CO_LIVING",
+  "STUDENT_HOUSING",
+  "SERVICED_APARTMENTS",
+  "PG",
+  "COLLEGE_HOSTEL",
+  "COWORKING",
+  "MANAGED_OFFICE",
+]);
+
+export type PortfolioAttributes = {
+  institutionAffiliation?: string;
+  academicYear?: string;
+  gender?: "MALE" | "FEMALE" | "COED";
+  mealPlanIncluded?: boolean;
+  mealPlanDetails?: string;
+  nightlyRate?: number;
+  weeklyRate?: number;
+  deskCapacity?: number;
+  privateOfficeCount?: number;
+  seatCapacity?: number;
+  leaseTermMonths?: number;
+};
+
 export const propertiesTable = pgTable("properties", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
@@ -107,6 +131,11 @@ export const propertiesTable = pgTable("properties", {
   lng: doublePrecision("lng"),
   totalBeds: integer("total_beds").notNull(),
   status: propertyStatusEnum("status").default("ACTIVE").notNull(),
+  portfolioType: portfolioTypeEnum("portfolio_type").default("CO_LIVING").notNull(),
+  portfolioAttributes: json("portfolio_attributes")
+    .$type<PortfolioAttributes>()
+    .default({})
+    .notNull(),
   wardenId: text("warden_id"),
   phone: text("phone"),
   email: text("email"),

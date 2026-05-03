@@ -104,6 +104,7 @@ import type {
   MenuPlansListResponse,
   PaymentResponse,
   PaymentsListResponse,
+  PortfolioBreakdownResponse,
   PropertiesListResponse,
   PropertyLeadResponse,
   PropertyLeadsListResponse,
@@ -8041,3 +8042,83 @@ export const useDeleteAnnouncement = <
 > => {
   return useMutation(getDeleteAnnouncementMutationOptions(options));
 };
+
+/**
+ * @summary Portfolio breakdown by sub-type with occupancy
+ */
+export const getGetExecutivePortfolioBreakdownUrl = () => {
+  return `/api/executive/portfolio-breakdown`;
+};
+
+export const getExecutivePortfolioBreakdown = async (
+  options?: RequestInit,
+): Promise<PortfolioBreakdownResponse> => {
+  return customFetch<PortfolioBreakdownResponse>(
+    getGetExecutivePortfolioBreakdownUrl(),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetExecutivePortfolioBreakdownQueryKey = () => {
+  return [`/api/executive/portfolio-breakdown`] as const;
+};
+
+export const getGetExecutivePortfolioBreakdownQueryOptions = <
+  TData = Awaited<ReturnType<typeof getExecutivePortfolioBreakdown>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getExecutivePortfolioBreakdown>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetExecutivePortfolioBreakdownQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getExecutivePortfolioBreakdown>>
+  > = ({ signal }) =>
+    getExecutivePortfolioBreakdown({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getExecutivePortfolioBreakdown>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetExecutivePortfolioBreakdownQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getExecutivePortfolioBreakdown>>
+>;
+export type GetExecutivePortfolioBreakdownQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Portfolio breakdown by sub-type with occupancy
+ */
+
+export function useGetExecutivePortfolioBreakdown<
+  TData = Awaited<ReturnType<typeof getExecutivePortfolioBreakdown>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getExecutivePortfolioBreakdown>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetExecutivePortfolioBreakdownQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}

@@ -43,7 +43,15 @@ import {
   Mail,
   UserCog,
   FileText,
+  Tag,
 } from "lucide-react";
+import {
+  PORTFOLIO_TYPE_LABELS,
+  ATTR_LABELS,
+  portfolioAttrFields,
+  type PortfolioType,
+  type PortfolioAttributes,
+} from "@/lib/portfolio-types";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -263,6 +271,12 @@ export default function PropertyDetail() {
           <h1 className="text-3xl font-display font-bold tracking-tight text-primary">
             {property.name}
           </h1>
+          <div className="flex items-center gap-2 mt-2">
+            <Badge variant="outline" className="flex items-center gap-1" data-testid="badge-property-portfolio-type">
+              <Tag className="w-3 h-3" />
+              {PORTFOLIO_TYPE_LABELS[(property.portfolioType as PortfolioType) || "CO_LIVING"]}
+            </Badge>
+          </div>
           <p className="text-muted-foreground flex items-center gap-1 mt-1 text-sm">
             <MapPin className="w-4 h-4" /> {property.address}, {property.city},{" "}
             {property.state} {property.pincode}
@@ -338,6 +352,39 @@ export default function PropertyDetail() {
               </CardContent>
             </Card>
             <div className="space-y-4">
+              {(() => {
+                const t = (property.portfolioType as PortfolioType) || "CO_LIVING";
+                const fields = portfolioAttrFields(t);
+                const attrs = (property.portfolioAttributes as PortfolioAttributes) || {};
+                if (fields.length === 0) return null;
+                return (
+                  <Card data-testid="card-portfolio-attributes">
+                    <CardContent className="p-4">
+                      <h3 className="font-display font-semibold text-primary mb-3">
+                        {PORTFOLIO_TYPE_LABELS[t]} Details
+                      </h3>
+                      <dl className="grid grid-cols-2 gap-y-2 gap-x-3 text-sm">
+                        {fields.map((f) => {
+                          const v: PortfolioAttributes[typeof f] = attrs[f];
+                          let display: React.ReactNode = "—";
+                          if (v !== undefined && v !== null && v !== "") {
+                            if (typeof v === "boolean") display = v ? "Yes" : "No";
+                            else display = String(v);
+                          }
+                          return (
+                            <React.Fragment key={f}>
+                              <dt className="text-muted-foreground text-xs uppercase tracking-wide">
+                                {ATTR_LABELS[f]}
+                              </dt>
+                              <dd className="text-primary font-medium">{display}</dd>
+                            </React.Fragment>
+                          );
+                        })}
+                      </dl>
+                    </CardContent>
+                  </Card>
+                );
+              })()}
               <Card>
                 <CardContent className="p-4">
                   <h3 className="font-display font-semibold text-primary mb-3">Amenities</h3>

@@ -5,6 +5,8 @@
  * UNILIV Admin API specification
  * OpenAPI spec version: 0.1.0
  */
+import type { PortfolioAttributes } from "./portfolioAttributes";
+import type { PortfolioType } from "./portfolioType";
 
 export interface PropertyDto {
   id: string;
@@ -17,6 +19,8 @@ export interface PropertyDto {
   lng?: number | null;
   totalBeds: number;
   status: string;
+  portfolioType: PortfolioType;
+  portfolioAttributes: PortfolioAttributes;
   wardenId?: string | null;
   phone?: string | null;
   email?: string | null;

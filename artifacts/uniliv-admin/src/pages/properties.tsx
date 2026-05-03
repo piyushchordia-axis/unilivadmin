@@ -20,6 +20,8 @@ import {
 import { Plus, Eye, Pencil, Building2, Bed, Users, Percent, Search } from "lucide-react";
 import { useLocation } from "wouter";
 import { PropertyFormModal } from "@/components/property-form-modal";
+import { Badge } from "@/components/ui/badge";
+import { PORTFOLIO_TYPES, PORTFOLIO_TYPE_LABELS, type PortfolioType } from "@/lib/portfolio-types";
 
 export default function Properties() {
   const [, setLocation] = useLocation();
@@ -31,6 +33,7 @@ export default function Properties() {
 
   const [city, setCity] = React.useState<string>("ALL");
   const [status, setStatus] = React.useState<string>("ALL");
+  const [portfolioType, setPortfolioType] = React.useState<string>("ALL");
   const [search, setSearch] = React.useState("");
   const [modalOpen, setModalOpen] = React.useState(false);
   const [editing, setEditing] = React.useState<PropertyDto | null>(null);
@@ -44,11 +47,12 @@ export default function Properties() {
     return properties.filter((p) => {
       if (city !== "ALL" && p.city !== city) return false;
       if (status !== "ALL" && p.status !== status) return false;
+      if (portfolioType !== "ALL" && (p.portfolioType || "CO_LIVING") !== portfolioType) return false;
       if (search && !p.name.toLowerCase().includes(search.toLowerCase()))
         return false;
       return true;
     });
-  }, [properties, city, status, search]);
+  }, [properties, city, status, portfolioType, search]);
 
   const totalBeds = properties.reduce((s, p) => s + (p.totalBeds || 0), 0);
   const totalOccupied = properties.reduce((s, p) => s + (p.occupiedBeds || 0), 0);
@@ -66,6 +70,18 @@ export default function Properties() {
 
   const columns = [
     { accessorKey: "name", header: "Name" },
+    {
+      id: "portfolioType",
+      header: "Type",
+      cell: ({ row }: any) => {
+        const t = (row.original.portfolioType || "CO_LIVING") as PortfolioType;
+        return (
+          <Badge variant="outline" data-testid={`badge-portfolio-${row.original.id}`}>
+            {PORTFOLIO_TYPE_LABELS[t] || t}
+          </Badge>
+        );
+      },
+    },
     {
       id: "location",
       header: "Location",
@@ -177,6 +193,19 @@ export default function Properties() {
             {cities.map((c) => (
               <SelectItem key={c} value={c}>
                 {c}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Select value={portfolioType} onValueChange={setPortfolioType}>
+          <SelectTrigger className="w-48" data-testid="select-filter-portfolio-type">
+            <SelectValue placeholder="Type" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="ALL">All Types</SelectItem>
+            {PORTFOLIO_TYPES.map((t) => (
+              <SelectItem key={t} value={t}>
+                {PORTFOLIO_TYPE_LABELS[t]}
               </SelectItem>
             ))}
           </SelectContent>

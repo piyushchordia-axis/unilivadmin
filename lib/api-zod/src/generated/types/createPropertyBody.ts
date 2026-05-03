@@ -5,6 +5,8 @@
  * UNILIV Admin API specification
  * OpenAPI spec version: 0.1.0
  */
+import type { PortfolioAttributes } from "./portfolioAttributes";
+import type { PortfolioType } from "./portfolioType";
 
 export interface CreatePropertyBody {
   name: string;
@@ -16,6 +18,8 @@ export interface CreatePropertyBody {
   lng?: number;
   totalBeds: number;
   status?: string;
+  portfolioType?: PortfolioType;
+  portfolioAttributes?: PortfolioAttributes;
   wardenId?: string;
   phone?: string;
   email?: string;
