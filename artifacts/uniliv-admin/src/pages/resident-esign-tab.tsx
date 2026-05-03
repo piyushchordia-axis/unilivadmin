@@ -189,6 +189,7 @@ function CreateEsignModal({
 function EsignDetailSheet({ id, onClose }: { id: string; onClose: () => void }) {
   const qc = useQueryClient();
   const { toast } = useToast();
+  // Note: list query is keyed by ["esign", residentId]; we invalidate the prefix.
   const { data } = useQuery<{
     data: EsignRow & {
       signerUrl: string;
@@ -207,7 +208,7 @@ function EsignDetailSheet({ id, onClose }: { id: string; onClose: () => void }) 
     mutationFn: () => apiFetch(`/esign/${id}/void`, { method: "POST" }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["esign-detail", id] });
-      qc.invalidateQueries({ queryKey: ["esign"] });
+      qc.invalidateQueries({ queryKey: ["esign"], exact: false });
       toast({ title: "Request voided" });
     },
   });
