@@ -41,6 +41,10 @@ import SalesDashboard from "@/pages/sales-dashboard";
 import PropertyLeads from "@/pages/property-leads";
 import Ledger from "@/pages/ledger";
 import Payments from "@/pages/payments";
+import BillingCycles from "@/pages/billing-cycles";
+import Reminders from "@/pages/reminders";
+import Banking from "@/pages/banking";
+import Expenses from "@/pages/expenses";
 import Users from "@/pages/users";
 import Settings from "@/pages/settings";
 
@@ -110,6 +114,10 @@ function Router() {
       
       <Route path="/ledger">{() => <ProtectedRoute component={Ledger} />}</Route>
       <Route path="/payments">{() => <ProtectedRoute component={Payments} />}</Route>
+      <Route path="/billing-cycles">{() => <ProtectedRoute component={BillingCycles} />}</Route>
+      <Route path="/reminders">{() => <ProtectedRoute component={Reminders} />}</Route>
+      <Route path="/banking">{() => <ProtectedRoute component={Banking} />}</Route>
+      <Route path="/expenses">{() => <ProtectedRoute component={Expenses} />}</Route>
       
       <Route path="/users">{() => <ProtectedRoute component={Users} />}</Route>
       <Route path="/settings">{() => <ProtectedRoute component={Settings} />}</Route>

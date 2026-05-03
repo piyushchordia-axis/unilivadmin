@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { PageHeader } from "@/components/page-header";
 import { StatCard } from "@/components/stat-card";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Building2, Users, BedDouble, Wallet, AlertTriangle, AlertCircle } from "lucide-react";
+import { Building2, Users, BedDouble, Wallet, AlertTriangle, AlertCircle, Receipt, BellRing, ClipboardCheck } from "lucide-react";
 import { apiFetch } from "@/lib/api-fetch";
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis, FunnelChart, Funnel, LabelList } from "recharts";
 import { PORTFOLIO_TYPE_LABELS, type PortfolioType } from "@/lib/portfolio-types";
@@ -27,10 +27,12 @@ export default function ExecutiveDashboard() {
   const overdue = useEx<any[]>("/executive/top-overdue");
   const breached = useEx<any[]>("/executive/top-sla-breached");
   const portfolio = useEx<any[]>("/executive/portfolio-breakdown");
+  const finance = useEx<{ paidExpenses: number; pendingExpenses: number; reminderTotal: number }>("/finance-summary");
 
   if (!can("EXECUTIVE_DASHBOARD")) return <Forbidden />;
 
   const k = kpis.data?.data || {};
+  const f = finance.data?.data || ({} as { paidExpenses?: number; pendingExpenses?: number; reminderTotal?: number });
   const resData = resolution.data?.data ? [
     { name: "Resolved", value: resolution.data.data.resolved },
     { name: "Open", value: resolution.data.data.open },
@@ -47,6 +49,12 @@ export default function ExecutiveDashboard() {
         <StatCard title="Revenue (MTD)" value={`₹${Math.round(k.revenueThisMonth ?? 0).toLocaleString()}`} icon={Wallet} />
         <StatCard title="Outstanding" value={`₹${Math.round(k.outstandingDues ?? 0).toLocaleString()}`} icon={AlertTriangle} />
         <StatCard title="Open Complaints" value={k.openComplaints ?? 0} icon={AlertCircle} />
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+        <StatCard title="Expenses Paid" value={`₹${Math.round(f.paidExpenses ?? 0).toLocaleString()}`} icon={Receipt} />
+        <StatCard title="Expenses Pending Approval" value={`₹${Math.round(f.pendingExpenses ?? 0).toLocaleString()}`} icon={ClipboardCheck} />
+        <StatCard title="Reminders Sent" value={f.reminderTotal ?? 0} icon={BellRing} />
       </div>
 
       <Card>

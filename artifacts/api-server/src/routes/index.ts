@@ -18,6 +18,7 @@ import { notificationsRouter } from "./notifications.js";
 import { executiveRouter } from "./executive.js";
 import { settingsRouter } from "./settings.js";
 import { kycRouter, esignRouter, esignPublicRouter } from "./kyc-esign.js";
+import { financeRouter } from "./finance.js";
 
 const router: IRouter = Router();
 
@@ -57,5 +58,6 @@ router.use("/settings", settingsRouter);
 router.use(kycRouter);
 router.use(esignRouter);
 router.use("/esign", esignPublicRouter);
+router.use(financeRouter);
 
 export default router;

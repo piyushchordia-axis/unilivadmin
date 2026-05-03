@@ -12,9 +12,13 @@ import {
   useCreatePayment,
   type LedgerEntryDto,
   type PaymentDto,
+  type ReminderRuleDto,
+  type ReminderLogDto,
 } from "@workspace/api-client-react";
 import { useParams, Link } from "wouter";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQueryClient, useQuery, useMutation } from "@tanstack/react-query";
+import { apiFetch } from "@/lib/api-fetch";
+import { format } from "date-fns";
 import { Card, CardContent } from "@/components/ui/card";
 import { StatusBadge } from "@/components/status-badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -52,6 +56,7 @@ import { ResidentKycTab } from "./resident-kyc-tab";
 import { ResidentEsignTab } from "./resident-esign-tab";
 import { CheckoutModal } from "@/components/checkout-modal";
 import jsPDF from "jspdf";
+import { BellRing, RefreshCw } from "lucide-react";
 
 const LEDGER_TYPES = ["RENT", "UTILITY", "FOOD", "LAUNDRY", "PENALTY", "ADJUSTMENT", "DEPOSIT", "INCENTIVE"];
 const PAYMENT_MODES = ["CASH", "UPI", "BANK_TRANSFER", "CARD", "CHEQUE"];
@@ -75,6 +80,12 @@ export default function ResidentDetail() {
     {},
     { query: { queryKey: getGetComplaintsQueryKey({}), enabled: !!id } }
   );
+  const { data: reminderCountRes } = useQuery<{ data: { count: number } }>({
+    queryKey: ["resident-reminder-count", id],
+    queryFn: () => apiFetch(`/residents/${id}/reminder-count`),
+    enabled: !!id,
+  });
+  const reminderCount = reminderCountRes?.data?.count ?? 0;
 
   const resident = residentRes?.data;
   const ledger = ledgerRes?.data || [];
@@ -219,6 +230,12 @@ export default function ResidentDetail() {
           <TabsTrigger value="documents">Documents</TabsTrigger>
           <TabsTrigger value="kyc" data-testid="tab-kyc">KYC</TabsTrigger>
           <TabsTrigger value="esign" data-testid="tab-esign">E-sign</TabsTrigger>
+          <TabsTrigger value="reminders" data-testid="tab-reminders">
+            Reminders
+            {reminderCount > 0 && (
+              <Badge variant="secondary" className="ml-2 text-[10px] px-1.5" data-testid="badge-reminder-count">{reminderCount}</Badge>
+            )}
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="profile" className="mt-6">
@@ -387,11 +404,104 @@ export default function ResidentDetail() {
         <TabsContent value="esign" className="mt-6">
           <ResidentEsignTab residentId={id} residentName={resident.name} />
         </TabsContent>
+
+        <TabsContent value="reminders" className="mt-6">
+          <ResidentRemindersTab residentId={id} ledger={ledger} />
+        </TabsContent>
       </Tabs>
 
       <AddLedgerModal open={ledgerModalOpen} onOpenChange={setLedgerModalOpen} residentId={id} />
       <AddPaymentModal open={paymentModalOpen} onOpenChange={setPaymentModalOpen} residentId={id} />
       <CheckoutModal open={checkoutOpen} onOpenChange={setCheckoutOpen} resident={resident} ledger={ledger} />
+    </div>
+  );
+}
+
+function ResidentRemindersTab({ residentId, ledger }: { residentId: string; ledger: LedgerEntryDto[] }) {
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  const { data: logsRes, isLoading } = useQuery<{ success: boolean; data: ReminderLogDto[] }>({
+    queryKey: ["reminder-logs", residentId],
+    queryFn: () => apiFetch(`/reminder-logs?residentId=${residentId}`),
+  });
+  const { data: rulesRes } = useQuery<{ success: boolean; data: ReminderRuleDto[] }>({
+    queryKey: ["reminder-rules"],
+    queryFn: () => apiFetch(`/reminder-rules`),
+  });
+  const logs = logsRes?.data || [];
+  const rules = (rulesRes?.data || []).filter((r) => r.isActive);
+  const unpaid = ledger.filter((l) => !l.isPaid);
+
+  const [ruleId, setRuleId] = React.useState<string>("");
+  const [entryId, setEntryId] = React.useState<string>("");
+
+  const sendMut = useMutation({
+    mutationFn: (body: { ruleId: string; ledgerEntryId: string }) =>
+      apiFetch(`/reminders/send`, { method: "POST", body: JSON.stringify(body) }),
+    onSuccess: () => {
+      toast({ title: "Reminder sent" });
+      qc.invalidateQueries({ queryKey: ["reminder-logs", residentId] });
+    },
+    onError: (e: Error) => toast({ title: e?.message || "Failed", variant: "destructive" }),
+  });
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardContent className="p-4 space-y-3">
+          <div className="flex items-center gap-2">
+            <BellRing className="w-4 h-4 text-accent" />
+            <h3 className="font-display font-semibold text-primary">Send a reminder now</h3>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div>
+              <Label>Rule</Label>
+              <Select value={ruleId} onValueChange={setRuleId}>
+                <SelectTrigger data-testid="select-resident-reminder-rule"><SelectValue placeholder="Choose rule" /></SelectTrigger>
+                <SelectContent>
+                  {rules.map((r) => <SelectItem key={r.id} value={r.id}>{r.name} • {r.channel}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label>Ledger entry</Label>
+              <Select value={entryId} onValueChange={setEntryId}>
+                <SelectTrigger data-testid="select-resident-reminder-entry"><SelectValue placeholder="Choose unpaid entry" /></SelectTrigger>
+                <SelectContent>
+                  {unpaid.length === 0 && <SelectItem value="__none__" disabled>No unpaid entries</SelectItem>}
+                  {unpaid.map((e) => (
+                    <SelectItem key={e.id} value={e.id}>
+                      ₹{e.amount} • {e.description?.slice(0, 40) || e.type}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex items-end">
+              <Button
+                disabled={!ruleId || !entryId || sendMut.isPending}
+                onClick={() => sendMut.mutate({ ruleId, ledgerEntryId: entryId })}
+                className="bg-accent hover:bg-accent/90 text-white w-full"
+                data-testid="button-send-resident-reminder"
+              >
+                <RefreshCw className="w-4 h-4 mr-2" /> Send / Resend
+              </Button>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <DataTable
+        columns={[
+          { accessorKey: "createdAt", header: "Sent At", cell: ({ row }: any) => format(new Date(row.original.createdAt), "dd MMM yyyy HH:mm") },
+          { accessorKey: "ruleName", header: "Rule" },
+          { accessorKey: "channel", header: "Channel", cell: ({ row }: any) => <Badge variant="outline">{row.original.channel}</Badge> },
+          { accessorKey: "subject", header: "Subject", cell: ({ row }: any) => row.original.subject || "—" },
+          { accessorKey: "status", header: "Status", cell: ({ row }: any) => <Badge variant={row.original.status === "SENT" ? "success" : "destructive"}>{row.original.status}</Badge> },
+        ] as any}
+        data={logs}
+        isLoading={isLoading}
+      />
     </div>
   );
 }

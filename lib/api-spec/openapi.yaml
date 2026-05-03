@@ -26,6 +26,7 @@ tags:
   - name: dashboard
   - name: users
   - name: announcements
+  - name: finance
 
 paths:
   /healthz:
@@ -1671,6 +1672,477 @@ paths:
               schema:
                 $ref: "#/components/schemas/SuccessResponse"
 
+  # ─── FINANCE AUTOMATION ───────────────────────────────
+  /billing-cycles:
+    get:
+      operationId: getBillingCycles
+      tags: [finance]
+      summary: List recurring billing cycles
+      responses:
+        "200":
+          description: List of billing cycles
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BillingCyclesListResponse"
+    post:
+      operationId: createBillingCycle
+      tags: [finance]
+      summary: Create a new billing cycle
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateBillingCycleBody"
+      responses:
+        "200":
+          description: Created billing cycle
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BillingCycleResponse"
+
+  /billing-cycles/{id}:
+    parameters:
+      - $ref: "#/components/parameters/IdParam"
+    put:
+      operationId: updateBillingCycle
+      tags: [finance]
+      summary: Update a billing cycle
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateBillingCycleBody"
+      responses:
+        "200":
+          description: Updated billing cycle
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BillingCycleResponse"
+    delete:
+      operationId: deleteBillingCycle
+      tags: [finance]
+      summary: Delete a billing cycle
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
+  /billing-cycles/{id}/run:
+    parameters:
+      - $ref: "#/components/parameters/IdParam"
+    post:
+      operationId: runBillingCycle
+      tags: [finance]
+      summary: Run a billing cycle now (idempotent per period)
+      responses:
+        "200":
+          description: Billing run result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BillingRunResponse"
+
+  /billing-runs:
+    get:
+      operationId: getBillingRuns
+      tags: [finance]
+      summary: List recent billing runs
+      parameters:
+        - in: query
+          name: cycleId
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Recent billing runs
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BillingRunsListResponse"
+
+  /reminder-rules:
+    get:
+      operationId: getReminderRules
+      tags: [finance]
+      summary: List reminder rules
+      responses:
+        "200":
+          description: List of reminder rules
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReminderRulesListResponse"
+    post:
+      operationId: createReminderRule
+      tags: [finance]
+      summary: Create a reminder rule
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateReminderRuleBody"
+      responses:
+        "200":
+          description: Created reminder rule
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReminderRuleResponse"
+
+  /reminder-rules/{id}:
+    parameters:
+      - $ref: "#/components/parameters/IdParam"
+    put:
+      operationId: updateReminderRule
+      tags: [finance]
+      summary: Update a reminder rule
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateReminderRuleBody"
+      responses:
+        "200":
+          description: Updated rule
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReminderRuleResponse"
+    delete:
+      operationId: deleteReminderRule
+      tags: [finance]
+      summary: Delete a reminder rule
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
+  /reminder-rules/{id}/run:
+    parameters:
+      - $ref: "#/components/parameters/IdParam"
+    post:
+      operationId: runReminderRule
+      tags: [finance]
+      summary: Evaluate a reminder rule and dispatch matching reminders
+      responses:
+        "200":
+          description: Run result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunReminderRuleResponse"
+
+  /reminder-logs:
+    get:
+      operationId: getReminderLogs
+      tags: [finance]
+      summary: List reminder logs (optionally filter by resident)
+      parameters:
+        - in: query
+          name: residentId
+          schema:
+            type: string
+      responses:
+        "200":
+          description: List of reminder logs
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReminderLogsListResponse"
+
+  /reminders/send:
+    post:
+      operationId: sendReminderManual
+      tags: [finance]
+      summary: Manually send a reminder for a specific ledger entry
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SendReminderBody"
+      responses:
+        "200":
+          description: Reminder log
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReminderLogResponse"
+
+  /bank-imports:
+    get:
+      operationId: getBankImports
+      tags: [finance]
+      summary: List CSV bank imports
+      responses:
+        "200":
+          description: List of imports
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BankImportsListResponse"
+    post:
+      operationId: createBankImport
+      tags: [finance]
+      summary: Upload a bank statement CSV for reconciliation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateBankImportBody"
+      responses:
+        "200":
+          description: Created import with parsed lines
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BankImportResponse"
+
+  /bank-imports/{id}/lines:
+    parameters:
+      - $ref: "#/components/parameters/IdParam"
+    get:
+      operationId: getBankImportLines
+      tags: [finance]
+      summary: List statement lines for an import
+      responses:
+        "200":
+          description: Lines with match suggestions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BankStatementLinesListResponse"
+
+  /bank-lines/{id}/confirm:
+    parameters:
+      - $ref: "#/components/parameters/IdParam"
+    post:
+      operationId: confirmBankLine
+      tags: [finance]
+      summary: Confirm a match → creates a payment and marks ledger paid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfirmBankLineBody"
+      responses:
+        "200":
+          description: Confirmed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
+  /bank-lines/{id}/ignore:
+    parameters:
+      - $ref: "#/components/parameters/IdParam"
+    post:
+      operationId: ignoreBankLine
+      tags: [finance]
+      summary: Ignore a statement line
+      responses:
+        "200":
+          description: Ignored
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
+  /expense-categories:
+    get:
+      operationId: getExpenseCategories
+      tags: [finance]
+      summary: List expense categories
+      responses:
+        "200":
+          description: List of categories
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExpenseCategoriesListResponse"
+    post:
+      operationId: createExpenseCategory
+      tags: [finance]
+      summary: Create an expense category
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateExpenseCategoryBody"
+      responses:
+        "200":
+          description: Created category
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExpenseCategoryResponse"
+
+  /expense-categories/{id}:
+    parameters:
+      - $ref: "#/components/parameters/IdParam"
+    delete:
+      operationId: deleteExpenseCategory
+      tags: [finance]
+      summary: Delete an expense category
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
+  /expenses:
+    get:
+      operationId: getExpenses
+      tags: [finance]
+      summary: List expenses
+      parameters:
+        - in: query
+          name: status
+          schema:
+            type: string
+        - in: query
+          name: propertyId
+          schema:
+            type: string
+      responses:
+        "200":
+          description: List of expenses
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExpensesListResponse"
+    post:
+      operationId: createExpense
+      tags: [finance]
+      summary: Submit a new expense
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateExpenseBody"
+      responses:
+        "200":
+          description: Created expense
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExpenseResponse"
+
+  /expenses/{id}:
+    parameters:
+      - $ref: "#/components/parameters/IdParam"
+    put:
+      operationId: updateExpense
+      tags: [finance]
+      summary: Update an expense
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateExpenseBody"
+      responses:
+        "200":
+          description: Updated expense
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExpenseResponse"
+    delete:
+      operationId: deleteExpense
+      tags: [finance]
+      summary: Delete an expense
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
+  /expenses/{id}/transition:
+    parameters:
+      - $ref: "#/components/parameters/IdParam"
+    post:
+      operationId: transitionExpense
+      tags: [finance]
+      summary: Approve, reject, or mark an expense as paid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TransitionExpenseBody"
+      responses:
+        "200":
+          description: Updated expense
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExpenseResponse"
+
+  /expenses/{id}/events:
+    parameters:
+      - $ref: "#/components/parameters/IdParam"
+    get:
+      operationId: getExpenseEvents
+      tags: [finance]
+      summary: List audit events for an expense
+      responses:
+        "200":
+          description: Events
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExpenseEventsListResponse"
+
+  /finance-summary:
+    get:
+      operationId: getFinanceSummary
+      tags: [finance]
+      summary: Aggregated finance KPIs (paid/pending expenses, reminders sent)
+      responses:
+        "200":
+          description: Finance summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FinanceSummaryResponse"
+
+  /residents/{id}/reminder-count:
+    parameters:
+      - $ref: "#/components/parameters/IdParam"
+    get:
+      operationId: getResidentReminderCount
+      tags: [finance]
+      summary: Number of reminders ever sent to a resident
+      responses:
+        "200":
+          description: Reminder count
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReminderCountResponse"
+
   # ─── EXECUTIVE ────────────────────────────────────────
   /executive/portfolio-breakdown:
     get:
@@ -1732,6 +2204,17 @@ components:
         message:
           type: string
       required: [success]
+
+    RunReminderRuleResponse:
+      type: object
+      properties:
+        success: { type: boolean }
+        data:
+          type: object
+          properties:
+            sent: { type: integer }
+          required: [sent]
+      required: [success, data]
 
     PaginationMeta:
       type: object
@@ -3907,3 +4390,378 @@ components:
           items:
             type: string
       required: [title, content]
+
+
+    # ─── FINANCE AUTOMATION SCHEMAS ────────────────────
+    BillingCycleDto:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        propertyId: { type: string, nullable: true }
+        propertyName: { type: string, nullable: true }
+        cadence: { type: string, enum: [MONTHLY, WEEKLY, CUSTOM_DAYS] }
+        dayOfMonth: { type: integer }
+        customDays: { type: integer, nullable: true }
+        ledgerType: { type: string }
+        descriptionTemplate: { type: string }
+        isActive: { type: boolean }
+        lastRunAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+      required: [id, name, cadence, dayOfMonth, ledgerType, descriptionTemplate, isActive, createdAt]
+
+    CreateBillingCycleBody:
+      type: object
+      properties:
+        name: { type: string }
+        propertyId: { type: string, nullable: true }
+        cadence: { type: string, enum: [MONTHLY, WEEKLY, CUSTOM_DAYS] }
+        dayOfMonth: { type: integer }
+        customDays: { type: integer, nullable: true }
+        ledgerType: { type: string }
+        descriptionTemplate: { type: string }
+        isActive: { type: boolean }
+      required: [name, cadence, ledgerType]
+
+    BillingCycleResponse:
+      type: object
+      properties:
+        success: { type: boolean }
+        data: { $ref: "#/components/schemas/BillingCycleDto" }
+      required: [success, data]
+
+    BillingCyclesListResponse:
+      type: object
+      properties:
+        success: { type: boolean }
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/BillingCycleDto" }
+      required: [success, data]
+
+    BillingRunDto:
+      type: object
+      properties:
+        id: { type: string }
+        cycleId: { type: string, nullable: true }
+        cycleName: { type: string, nullable: true }
+        triggeredBy: { type: string, nullable: true }
+        periodLabel: { type: string }
+        successCount: { type: integer }
+        failedCount: { type: integer }
+        skippedCount: { type: integer }
+        totalEligible: { type: integer }
+        notes: { type: string, nullable: true }
+        errors:
+          type: array
+          items:
+            type: object
+            properties:
+              residentId: { type: string }
+              reason: { type: string }
+            required: [residentId, reason]
+        createdAt: { type: string, format: date-time }
+      required: [id, periodLabel, successCount, failedCount, skippedCount, totalEligible, errors, createdAt]
+
+    BillingRunResponse:
+      type: object
+      properties:
+        success: { type: boolean }
+        data: { $ref: "#/components/schemas/BillingRunDto" }
+      required: [success, data]
+
+    BillingRunsListResponse:
+      type: object
+      properties:
+        success: { type: boolean }
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/BillingRunDto" }
+      required: [success, data]
+
+    ReminderRuleDto:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        offsetDays: { type: integer }
+        channel: { type: string, enum: [EMAIL, SMS, INAPP] }
+        templateSubject: { type: string, nullable: true }
+        templateBody: { type: string }
+        isActive: { type: boolean }
+        createdAt: { type: string, format: date-time }
+      required: [id, name, offsetDays, channel, templateBody, isActive, createdAt]
+
+    CreateReminderRuleBody:
+      type: object
+      properties:
+        name: { type: string }
+        offsetDays: { type: integer }
+        channel: { type: string, enum: [EMAIL, SMS, INAPP] }
+        templateSubject: { type: string, nullable: true }
+        templateBody: { type: string }
+        isActive: { type: boolean }
+      required: [name, offsetDays, channel, templateBody]
+
+    ReminderRuleResponse:
+      type: object
+      properties:
+        success: { type: boolean }
+        data: { $ref: "#/components/schemas/ReminderRuleDto" }
+      required: [success, data]
+
+    ReminderRulesListResponse:
+      type: object
+      properties:
+        success: { type: boolean }
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/ReminderRuleDto" }
+      required: [success, data]
+
+    ReminderLogDto:
+      type: object
+      properties:
+        id: { type: string }
+        ruleId: { type: string, nullable: true }
+        ruleName: { type: string, nullable: true }
+        residentId: { type: string }
+        residentName: { type: string, nullable: true }
+        ledgerEntryId: { type: string, nullable: true }
+        channel: { type: string }
+        subject: { type: string, nullable: true }
+        body: { type: string }
+        status: { type: string, enum: [SENT, FAILED] }
+        triggeredBy: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }
+      required: [id, residentId, channel, body, status, createdAt]
+
+    ReminderLogResponse:
+      type: object
+      properties:
+        success: { type: boolean }
+        data: { $ref: "#/components/schemas/ReminderLogDto" }
+      required: [success, data]
+
+    ReminderLogsListResponse:
+      type: object
+      properties:
+        success: { type: boolean }
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/ReminderLogDto" }
+      required: [success, data]
+
+    SendReminderBody:
+      type: object
+      properties:
+        ruleId: { type: string }
+        ledgerEntryId: { type: string }
+      required: [ruleId, ledgerEntryId]
+
+    BankImportDto:
+      type: object
+      properties:
+        id: { type: string }
+        fileName: { type: string }
+        accountLabel: { type: string, nullable: true }
+        totalLines: { type: integer }
+        matchedLines: { type: integer }
+        status: { type: string, enum: [PENDING, RECONCILED] }
+        createdAt: { type: string, format: date-time }
+      required: [id, fileName, totalLines, matchedLines, status, createdAt]
+
+    CreateBankImportBody:
+      type: object
+      properties:
+        fileName: { type: string }
+        accountLabel: { type: string, nullable: true }
+        csv: { type: string, description: Raw CSV file contents }
+      required: [fileName, csv]
+
+    BankImportResponse:
+      type: object
+      properties:
+        success: { type: boolean }
+        data: { $ref: "#/components/schemas/BankImportDto" }
+      required: [success, data]
+
+    BankImportsListResponse:
+      type: object
+      properties:
+        success: { type: boolean }
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/BankImportDto" }
+      required: [success, data]
+
+    BankStatementLineDto:
+      type: object
+      properties:
+        id: { type: string }
+        importId: { type: string }
+        txnDate: { type: string, format: date-time }
+        description: { type: string }
+        reference: { type: string, nullable: true }
+        amount: { type: string }
+        direction: { type: string, enum: [CREDIT, DEBIT] }
+        status: { type: string, enum: [UNMATCHED, SUGGESTED, MATCHED, IGNORED] }
+        matchedResidentId: { type: string, nullable: true }
+        matchedResidentName: { type: string, nullable: true }
+        matchedLedgerEntryId: { type: string, nullable: true }
+        matchedPaymentId: { type: string, nullable: true }
+      required: [id, importId, txnDate, description, amount, direction, status]
+
+    BankStatementLinesListResponse:
+      type: object
+      properties:
+        success: { type: boolean }
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/BankStatementLineDto" }
+      required: [success, data]
+
+    ConfirmBankLineBody:
+      type: object
+      properties:
+        residentId: { type: string, nullable: true }
+        ledgerEntryId: { type: string, nullable: true }
+
+    ExpenseCategoryDto:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        description: { type: string, nullable: true }
+        isActive: { type: boolean }
+      required: [id, name, isActive]
+
+    CreateExpenseCategoryBody:
+      type: object
+      properties:
+        name: { type: string }
+        description: { type: string, nullable: true }
+      required: [name]
+
+    ExpenseCategoryResponse:
+      type: object
+      properties:
+        success: { type: boolean }
+        data: { $ref: "#/components/schemas/ExpenseCategoryDto" }
+      required: [success, data]
+
+    ExpenseCategoriesListResponse:
+      type: object
+      properties:
+        success: { type: boolean }
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/ExpenseCategoryDto" }
+      required: [success, data]
+
+    ExpenseDto:
+      type: object
+      properties:
+        id: { type: string }
+        categoryId: { type: string, nullable: true }
+        categoryName: { type: string, nullable: true }
+        propertyId: { type: string, nullable: true }
+        propertyName: { type: string, nullable: true }
+        vendor: { type: string, nullable: true }
+        amount: { type: string }
+        expenseDate: { type: string, format: date-time }
+        description: { type: string, nullable: true }
+        reference: { type: string, nullable: true }
+        attachment: { type: string, nullable: true }
+        status: { type: string, enum: [SUBMITTED, APPROVED, REJECTED, PAID] }
+        rejectionReason: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }
+      required: [id, amount, expenseDate, status, createdAt]
+
+    CreateExpenseBody:
+      type: object
+      properties:
+        categoryId: { type: string, nullable: true }
+        propertyId: { type: string, nullable: true }
+        vendor: { type: string, nullable: true }
+        amount: { type: string }
+        expenseDate: { type: string, format: date-time }
+        description: { type: string, nullable: true }
+        reference: { type: string, nullable: true }
+        attachment: { type: string, nullable: true }
+      required: [amount, expenseDate]
+
+    ExpenseResponse:
+      type: object
+      properties:
+        success: { type: boolean }
+        data: { $ref: "#/components/schemas/ExpenseDto" }
+      required: [success, data]
+
+    ExpensesListResponse:
+      type: object
+      properties:
+        success: { type: boolean }
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/ExpenseDto" }
+        meta:
+          type: object
+          properties:
+            totals:
+              type: object
+              properties:
+                total: { type: number }
+      required: [success, data]
+
+    TransitionExpenseBody:
+      type: object
+      properties:
+        action: { type: string, enum: [APPROVED, REJECTED, PAID] }
+        note: { type: string, nullable: true }
+      required: [action]
+
+    ExpenseEventDto:
+      type: object
+      properties:
+        id: { type: string }
+        expenseId: { type: string }
+        type: { type: string }
+        actorId: { type: string, nullable: true }
+        actorName: { type: string, nullable: true }
+        note: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }
+      required: [id, expenseId, type, createdAt]
+
+    ExpenseEventsListResponse:
+      type: object
+      properties:
+        success: { type: boolean }
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/ExpenseEventDto" }
+      required: [success, data]
+
+    FinanceSummaryResponse:
+      type: object
+      properties:
+        success: { type: boolean }
+        data:
+          type: object
+          properties:
+            paidExpenses: { type: number }
+            pendingExpenses: { type: number }
+            reminderTotal: { type: integer }
+          required: [paidExpenses, pendingExpenses, reminderTotal]
+      required: [success, data]
+
+    ReminderCountResponse:
+      type: object
+      properties:
+        success: { type: boolean }
+        data:
+          type: object
+          properties:
+            count: { type: integer }
+          required: [count]
+      required: [success, data]

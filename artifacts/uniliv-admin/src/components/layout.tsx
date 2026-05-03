@@ -6,7 +6,8 @@ import {
   LayoutDashboard, Building2, Users, AlertCircle, WashingMachine, MessageSquare,
   UserCheck, Briefcase, GraduationCap, Truck, ClipboardList, ShoppingCart,
   PackageCheck, Boxes, ChefHat, CalendarDays, TrendingUp, MapPin,
-  BookOpen, CreditCard, Shield, Settings, LogOut, Search, Menu, BarChart3
+  BookOpen, CreditCard, Shield, Settings, LogOut, Search, Menu, BarChart3,
+  Repeat, BellRing, Landmark, Receipt
 } from "lucide-react"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
@@ -53,6 +54,10 @@ const navGroups: Array<{ title: string; items: Array<{ title: string; href: stri
   { title: "Finance", items: [
     { title: "Ledger", href: "/ledger", icon: BookOpen, module: "LEDGER" },
     { title: "Payments", href: "/payments", icon: CreditCard, module: "PAYMENTS" },
+    { title: "Recurring Billing", href: "/billing-cycles", icon: Repeat, module: "BILLING_CYCLES" },
+    { title: "Reminders", href: "/reminders", icon: BellRing, module: "REMINDERS" },
+    { title: "Banking", href: "/banking", icon: Landmark, module: "BANKING" },
+    { title: "Expenses", href: "/expenses", icon: Receipt, module: "EXPENSES" },
   ]},
   { title: "Settings", items: [
     { title: "Users & Roles", href: "/users", icon: Shield, module: "USERS" },

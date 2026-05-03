@@ -1,6 +1,7 @@
 import app from "./app";
 import { logger } from "./lib/logger";
 import { runSlaCheck } from "./routes/complaints.js";
+import { runDueBillingCycles, runDueReminders } from "./routes/finance.js";
 
 const rawPort = process.env["PORT"];
 
@@ -30,5 +31,15 @@ app.listen(port, (err) => {
   }, 5 * 60 * 1000);
   // Run once on startup
   runSlaCheck().catch((e) => logger.error({ err: e }, "SLA check failed"));
-  process.on("SIGTERM", () => clearInterval(slaInterval));
+
+  // Finance scheduler: billing cycles + reminders, every hour
+  const financeInterval = setInterval(() => {
+    runDueBillingCycles().catch((e) => logger.error({ err: e }, "Billing cycle scheduler failed"));
+    runDueReminders().catch((e) => logger.error({ err: e }, "Reminder scheduler failed"));
+  }, 60 * 60 * 1000);
+  // Also kick off once on boot so a fresh dev env has data
+  runDueBillingCycles().catch((e) => logger.error({ err: e }, "Billing cycle scheduler failed (initial)"));
+  runDueReminders().catch((e) => logger.error({ err: e }, "Reminder scheduler failed (initial)"));
+
+  process.on("SIGTERM", () => { clearInterval(slaInterval); clearInterval(financeInterval); });
 });

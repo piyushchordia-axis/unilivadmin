@@ -2553,6 +2553,669 @@ export const DeleteAnnouncementResponse = zod.object({
 });
 
 /**
+ * @summary List recurring billing cycles
+ */
+export const GetBillingCyclesResponse = zod.object({
+  success: zod.boolean(),
+  data: zod.array(
+    zod.object({
+      id: zod.string(),
+      name: zod.string(),
+      propertyId: zod.string().nullish(),
+      propertyName: zod.string().nullish(),
+      cadence: zod.enum(["MONTHLY", "WEEKLY", "CUSTOM_DAYS"]),
+      dayOfMonth: zod.number(),
+      customDays: zod.number().nullish(),
+      ledgerType: zod.string(),
+      descriptionTemplate: zod.string(),
+      isActive: zod.boolean(),
+      lastRunAt: zod.coerce.date().nullish(),
+      createdAt: zod.coerce.date(),
+    }),
+  ),
+});
+
+/**
+ * @summary Create a new billing cycle
+ */
+export const CreateBillingCycleBody = zod.object({
+  name: zod.string(),
+  propertyId: zod.string().nullish(),
+  cadence: zod.enum(["MONTHLY", "WEEKLY", "CUSTOM_DAYS"]),
+  dayOfMonth: zod.number().optional(),
+  customDays: zod.number().nullish(),
+  ledgerType: zod.string(),
+  descriptionTemplate: zod.string().optional(),
+  isActive: zod.boolean().optional(),
+});
+
+export const CreateBillingCycleResponse = zod.object({
+  success: zod.boolean(),
+  data: zod.object({
+    id: zod.string(),
+    name: zod.string(),
+    propertyId: zod.string().nullish(),
+    propertyName: zod.string().nullish(),
+    cadence: zod.enum(["MONTHLY", "WEEKLY", "CUSTOM_DAYS"]),
+    dayOfMonth: zod.number(),
+    customDays: zod.number().nullish(),
+    ledgerType: zod.string(),
+    descriptionTemplate: zod.string(),
+    isActive: zod.boolean(),
+    lastRunAt: zod.coerce.date().nullish(),
+    createdAt: zod.coerce.date(),
+  }),
+});
+
+/**
+ * @summary Update a billing cycle
+ */
+export const UpdateBillingCycleParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const UpdateBillingCycleBody = zod.object({
+  name: zod.string(),
+  propertyId: zod.string().nullish(),
+  cadence: zod.enum(["MONTHLY", "WEEKLY", "CUSTOM_DAYS"]),
+  dayOfMonth: zod.number().optional(),
+  customDays: zod.number().nullish(),
+  ledgerType: zod.string(),
+  descriptionTemplate: zod.string().optional(),
+  isActive: zod.boolean().optional(),
+});
+
+export const UpdateBillingCycleResponse = zod.object({
+  success: zod.boolean(),
+  data: zod.object({
+    id: zod.string(),
+    name: zod.string(),
+    propertyId: zod.string().nullish(),
+    propertyName: zod.string().nullish(),
+    cadence: zod.enum(["MONTHLY", "WEEKLY", "CUSTOM_DAYS"]),
+    dayOfMonth: zod.number(),
+    customDays: zod.number().nullish(),
+    ledgerType: zod.string(),
+    descriptionTemplate: zod.string(),
+    isActive: zod.boolean(),
+    lastRunAt: zod.coerce.date().nullish(),
+    createdAt: zod.coerce.date(),
+  }),
+});
+
+/**
+ * @summary Delete a billing cycle
+ */
+export const DeleteBillingCycleParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const DeleteBillingCycleResponse = zod.object({
+  success: zod.boolean(),
+  message: zod.string().optional(),
+});
+
+/**
+ * @summary Run a billing cycle now (idempotent per period)
+ */
+export const RunBillingCycleParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const RunBillingCycleResponse = zod.object({
+  success: zod.boolean(),
+  data: zod.object({
+    id: zod.string(),
+    cycleId: zod.string().nullish(),
+    cycleName: zod.string().nullish(),
+    triggeredBy: zod.string().nullish(),
+    periodLabel: zod.string(),
+    successCount: zod.number(),
+    failedCount: zod.number(),
+    skippedCount: zod.number(),
+    totalEligible: zod.number(),
+    notes: zod.string().nullish(),
+    errors: zod.array(
+      zod.object({
+        residentId: zod.string(),
+        reason: zod.string(),
+      }),
+    ),
+    createdAt: zod.coerce.date(),
+  }),
+});
+
+/**
+ * @summary List recent billing runs
+ */
+export const GetBillingRunsQueryParams = zod.object({
+  cycleId: zod.coerce.string().optional(),
+});
+
+export const GetBillingRunsResponse = zod.object({
+  success: zod.boolean(),
+  data: zod.array(
+    zod.object({
+      id: zod.string(),
+      cycleId: zod.string().nullish(),
+      cycleName: zod.string().nullish(),
+      triggeredBy: zod.string().nullish(),
+      periodLabel: zod.string(),
+      successCount: zod.number(),
+      failedCount: zod.number(),
+      skippedCount: zod.number(),
+      totalEligible: zod.number(),
+      notes: zod.string().nullish(),
+      errors: zod.array(
+        zod.object({
+          residentId: zod.string(),
+          reason: zod.string(),
+        }),
+      ),
+      createdAt: zod.coerce.date(),
+    }),
+  ),
+});
+
+/**
+ * @summary List reminder rules
+ */
+export const GetReminderRulesResponse = zod.object({
+  success: zod.boolean(),
+  data: zod.array(
+    zod.object({
+      id: zod.string(),
+      name: zod.string(),
+      offsetDays: zod.number(),
+      channel: zod.enum(["EMAIL", "SMS", "INAPP"]),
+      templateSubject: zod.string().nullish(),
+      templateBody: zod.string(),
+      isActive: zod.boolean(),
+      createdAt: zod.coerce.date(),
+    }),
+  ),
+});
+
+/**
+ * @summary Create a reminder rule
+ */
+export const CreateReminderRuleBody = zod.object({
+  name: zod.string(),
+  offsetDays: zod.number(),
+  channel: zod.enum(["EMAIL", "SMS", "INAPP"]),
+  templateSubject: zod.string().nullish(),
+  templateBody: zod.string(),
+  isActive: zod.boolean().optional(),
+});
+
+export const CreateReminderRuleResponse = zod.object({
+  success: zod.boolean(),
+  data: zod.object({
+    id: zod.string(),
+    name: zod.string(),
+    offsetDays: zod.number(),
+    channel: zod.enum(["EMAIL", "SMS", "INAPP"]),
+    templateSubject: zod.string().nullish(),
+    templateBody: zod.string(),
+    isActive: zod.boolean(),
+    createdAt: zod.coerce.date(),
+  }),
+});
+
+/**
+ * @summary Update a reminder rule
+ */
+export const UpdateReminderRuleParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const UpdateReminderRuleBody = zod.object({
+  name: zod.string(),
+  offsetDays: zod.number(),
+  channel: zod.enum(["EMAIL", "SMS", "INAPP"]),
+  templateSubject: zod.string().nullish(),
+  templateBody: zod.string(),
+  isActive: zod.boolean().optional(),
+});
+
+export const UpdateReminderRuleResponse = zod.object({
+  success: zod.boolean(),
+  data: zod.object({
+    id: zod.string(),
+    name: zod.string(),
+    offsetDays: zod.number(),
+    channel: zod.enum(["EMAIL", "SMS", "INAPP"]),
+    templateSubject: zod.string().nullish(),
+    templateBody: zod.string(),
+    isActive: zod.boolean(),
+    createdAt: zod.coerce.date(),
+  }),
+});
+
+/**
+ * @summary Delete a reminder rule
+ */
+export const DeleteReminderRuleParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const DeleteReminderRuleResponse = zod.object({
+  success: zod.boolean(),
+  message: zod.string().optional(),
+});
+
+/**
+ * @summary Evaluate a reminder rule and dispatch matching reminders
+ */
+export const RunReminderRuleParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const RunReminderRuleResponse = zod.object({
+  success: zod.boolean(),
+  data: zod.object({
+    sent: zod.number(),
+  }),
+});
+
+/**
+ * @summary List reminder logs (optionally filter by resident)
+ */
+export const GetReminderLogsQueryParams = zod.object({
+  residentId: zod.coerce.string().optional(),
+});
+
+export const GetReminderLogsResponse = zod.object({
+  success: zod.boolean(),
+  data: zod.array(
+    zod.object({
+      id: zod.string(),
+      ruleId: zod.string().nullish(),
+      ruleName: zod.string().nullish(),
+      residentId: zod.string(),
+      residentName: zod.string().nullish(),
+      ledgerEntryId: zod.string().nullish(),
+      channel: zod.string(),
+      subject: zod.string().nullish(),
+      body: zod.string(),
+      status: zod.enum(["SENT", "FAILED"]),
+      triggeredBy: zod.string().nullish(),
+      createdAt: zod.coerce.date(),
+    }),
+  ),
+});
+
+/**
+ * @summary Manually send a reminder for a specific ledger entry
+ */
+export const SendReminderManualBody = zod.object({
+  ruleId: zod.string(),
+  ledgerEntryId: zod.string(),
+});
+
+export const SendReminderManualResponse = zod.object({
+  success: zod.boolean(),
+  data: zod.object({
+    id: zod.string(),
+    ruleId: zod.string().nullish(),
+    ruleName: zod.string().nullish(),
+    residentId: zod.string(),
+    residentName: zod.string().nullish(),
+    ledgerEntryId: zod.string().nullish(),
+    channel: zod.string(),
+    subject: zod.string().nullish(),
+    body: zod.string(),
+    status: zod.enum(["SENT", "FAILED"]),
+    triggeredBy: zod.string().nullish(),
+    createdAt: zod.coerce.date(),
+  }),
+});
+
+/**
+ * @summary List CSV bank imports
+ */
+export const GetBankImportsResponse = zod.object({
+  success: zod.boolean(),
+  data: zod.array(
+    zod.object({
+      id: zod.string(),
+      fileName: zod.string(),
+      accountLabel: zod.string().nullish(),
+      totalLines: zod.number(),
+      matchedLines: zod.number(),
+      status: zod.enum(["PENDING", "RECONCILED"]),
+      createdAt: zod.coerce.date(),
+    }),
+  ),
+});
+
+/**
+ * @summary Upload a bank statement CSV for reconciliation
+ */
+export const CreateBankImportBody = zod.object({
+  fileName: zod.string(),
+  accountLabel: zod.string().nullish(),
+  csv: zod.string().describe("Raw CSV file contents"),
+});
+
+export const CreateBankImportResponse = zod.object({
+  success: zod.boolean(),
+  data: zod.object({
+    id: zod.string(),
+    fileName: zod.string(),
+    accountLabel: zod.string().nullish(),
+    totalLines: zod.number(),
+    matchedLines: zod.number(),
+    status: zod.enum(["PENDING", "RECONCILED"]),
+    createdAt: zod.coerce.date(),
+  }),
+});
+
+/**
+ * @summary List statement lines for an import
+ */
+export const GetBankImportLinesParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const GetBankImportLinesResponse = zod.object({
+  success: zod.boolean(),
+  data: zod.array(
+    zod.object({
+      id: zod.string(),
+      importId: zod.string(),
+      txnDate: zod.coerce.date(),
+      description: zod.string(),
+      reference: zod.string().nullish(),
+      amount: zod.string(),
+      direction: zod.enum(["CREDIT", "DEBIT"]),
+      status: zod.enum(["UNMATCHED", "SUGGESTED", "MATCHED", "IGNORED"]),
+      matchedResidentId: zod.string().nullish(),
+      matchedResidentName: zod.string().nullish(),
+      matchedLedgerEntryId: zod.string().nullish(),
+      matchedPaymentId: zod.string().nullish(),
+    }),
+  ),
+});
+
+/**
+ * @summary Confirm a match → creates a payment and marks ledger paid
+ */
+export const ConfirmBankLineParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const ConfirmBankLineBody = zod.object({
+  residentId: zod.string().nullish(),
+  ledgerEntryId: zod.string().nullish(),
+});
+
+export const ConfirmBankLineResponse = zod.object({
+  success: zod.boolean(),
+  message: zod.string().optional(),
+});
+
+/**
+ * @summary Ignore a statement line
+ */
+export const IgnoreBankLineParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const IgnoreBankLineResponse = zod.object({
+  success: zod.boolean(),
+  message: zod.string().optional(),
+});
+
+/**
+ * @summary List expense categories
+ */
+export const GetExpenseCategoriesResponse = zod.object({
+  success: zod.boolean(),
+  data: zod.array(
+    zod.object({
+      id: zod.string(),
+      name: zod.string(),
+      description: zod.string().nullish(),
+      isActive: zod.boolean(),
+    }),
+  ),
+});
+
+/**
+ * @summary Create an expense category
+ */
+export const CreateExpenseCategoryBody = zod.object({
+  name: zod.string(),
+  description: zod.string().nullish(),
+});
+
+export const CreateExpenseCategoryResponse = zod.object({
+  success: zod.boolean(),
+  data: zod.object({
+    id: zod.string(),
+    name: zod.string(),
+    description: zod.string().nullish(),
+    isActive: zod.boolean(),
+  }),
+});
+
+/**
+ * @summary Delete an expense category
+ */
+export const DeleteExpenseCategoryParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const DeleteExpenseCategoryResponse = zod.object({
+  success: zod.boolean(),
+  message: zod.string().optional(),
+});
+
+/**
+ * @summary List expenses
+ */
+export const GetExpensesQueryParams = zod.object({
+  status: zod.coerce.string().optional(),
+  propertyId: zod.coerce.string().optional(),
+});
+
+export const GetExpensesResponse = zod.object({
+  success: zod.boolean(),
+  data: zod.array(
+    zod.object({
+      id: zod.string(),
+      categoryId: zod.string().nullish(),
+      categoryName: zod.string().nullish(),
+      propertyId: zod.string().nullish(),
+      propertyName: zod.string().nullish(),
+      vendor: zod.string().nullish(),
+      amount: zod.string(),
+      expenseDate: zod.coerce.date(),
+      description: zod.string().nullish(),
+      reference: zod.string().nullish(),
+      attachment: zod.string().nullish(),
+      status: zod.enum(["SUBMITTED", "APPROVED", "REJECTED", "PAID"]),
+      rejectionReason: zod.string().nullish(),
+      createdAt: zod.coerce.date(),
+    }),
+  ),
+  meta: zod
+    .object({
+      totals: zod
+        .object({
+          total: zod.number().optional(),
+        })
+        .optional(),
+    })
+    .optional(),
+});
+
+/**
+ * @summary Submit a new expense
+ */
+export const CreateExpenseBody = zod.object({
+  categoryId: zod.string().nullish(),
+  propertyId: zod.string().nullish(),
+  vendor: zod.string().nullish(),
+  amount: zod.string(),
+  expenseDate: zod.coerce.date(),
+  description: zod.string().nullish(),
+  reference: zod.string().nullish(),
+  attachment: zod.string().nullish(),
+});
+
+export const CreateExpenseResponse = zod.object({
+  success: zod.boolean(),
+  data: zod.object({
+    id: zod.string(),
+    categoryId: zod.string().nullish(),
+    categoryName: zod.string().nullish(),
+    propertyId: zod.string().nullish(),
+    propertyName: zod.string().nullish(),
+    vendor: zod.string().nullish(),
+    amount: zod.string(),
+    expenseDate: zod.coerce.date(),
+    description: zod.string().nullish(),
+    reference: zod.string().nullish(),
+    attachment: zod.string().nullish(),
+    status: zod.enum(["SUBMITTED", "APPROVED", "REJECTED", "PAID"]),
+    rejectionReason: zod.string().nullish(),
+    createdAt: zod.coerce.date(),
+  }),
+});
+
+/**
+ * @summary Update an expense
+ */
+export const UpdateExpenseParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const UpdateExpenseBody = zod.object({
+  categoryId: zod.string().nullish(),
+  propertyId: zod.string().nullish(),
+  vendor: zod.string().nullish(),
+  amount: zod.string(),
+  expenseDate: zod.coerce.date(),
+  description: zod.string().nullish(),
+  reference: zod.string().nullish(),
+  attachment: zod.string().nullish(),
+});
+
+export const UpdateExpenseResponse = zod.object({
+  success: zod.boolean(),
+  data: zod.object({
+    id: zod.string(),
+    categoryId: zod.string().nullish(),
+    categoryName: zod.string().nullish(),
+    propertyId: zod.string().nullish(),
+    propertyName: zod.string().nullish(),
+    vendor: zod.string().nullish(),
+    amount: zod.string(),
+    expenseDate: zod.coerce.date(),
+    description: zod.string().nullish(),
+    reference: zod.string().nullish(),
+    attachment: zod.string().nullish(),
+    status: zod.enum(["SUBMITTED", "APPROVED", "REJECTED", "PAID"]),
+    rejectionReason: zod.string().nullish(),
+    createdAt: zod.coerce.date(),
+  }),
+});
+
+/**
+ * @summary Delete an expense
+ */
+export const DeleteExpenseParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const DeleteExpenseResponse = zod.object({
+  success: zod.boolean(),
+  message: zod.string().optional(),
+});
+
+/**
+ * @summary Approve, reject, or mark an expense as paid
+ */
+export const TransitionExpenseParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const TransitionExpenseBody = zod.object({
+  action: zod.enum(["APPROVED", "REJECTED", "PAID"]),
+  note: zod.string().nullish(),
+});
+
+export const TransitionExpenseResponse = zod.object({
+  success: zod.boolean(),
+  data: zod.object({
+    id: zod.string(),
+    categoryId: zod.string().nullish(),
+    categoryName: zod.string().nullish(),
+    propertyId: zod.string().nullish(),
+    propertyName: zod.string().nullish(),
+    vendor: zod.string().nullish(),
+    amount: zod.string(),
+    expenseDate: zod.coerce.date(),
+    description: zod.string().nullish(),
+    reference: zod.string().nullish(),
+    attachment: zod.string().nullish(),
+    status: zod.enum(["SUBMITTED", "APPROVED", "REJECTED", "PAID"]),
+    rejectionReason: zod.string().nullish(),
+    createdAt: zod.coerce.date(),
+  }),
+});
+
+/**
+ * @summary List audit events for an expense
+ */
+export const GetExpenseEventsParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const GetExpenseEventsResponse = zod.object({
+  success: zod.boolean(),
+  data: zod.array(
+    zod.object({
+      id: zod.string(),
+      expenseId: zod.string(),
+      type: zod.string(),
+      actorId: zod.string().nullish(),
+      actorName: zod.string().nullish(),
+      note: zod.string().nullish(),
+      createdAt: zod.coerce.date(),
+    }),
+  ),
+});
+
+/**
+ * @summary Aggregated finance KPIs (paid/pending expenses, reminders sent)
+ */
+export const GetFinanceSummaryResponse = zod.object({
+  success: zod.boolean(),
+  data: zod.object({
+    paidExpenses: zod.number(),
+    pendingExpenses: zod.number(),
+    reminderTotal: zod.number(),
+  }),
+});
+
+/**
+ * @summary Number of reminders ever sent to a resident
+ */
+export const GetResidentReminderCountParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const GetResidentReminderCountResponse = zod.object({
+  success: zod.boolean(),
+  data: zod.object({
+    count: zod.number(),
+  }),
+});
+
+/**
  * @summary Portfolio breakdown by sub-type with occupancy
  */
 export const GetExecutivePortfolioBreakdownResponse = zod.object({

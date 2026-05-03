@@ -14,6 +14,15 @@ export interface SuccessResponse {
   message?: string;
 }
 
+export type RunReminderRuleResponseData = {
+  sent: number;
+};
+
+export interface RunReminderRuleResponse {
+  success: boolean;
+  data: RunReminderRuleResponseData;
+}
+
 export interface PaginationMeta {
   total: number;
   page: number;
@@ -1083,6 +1092,382 @@ export interface CreateAnnouncementBody {
   targetRoles?: string[];
 }
 
+export type BillingCycleDtoCadence =
+  (typeof BillingCycleDtoCadence)[keyof typeof BillingCycleDtoCadence];
+
+export const BillingCycleDtoCadence = {
+  MONTHLY: "MONTHLY",
+  WEEKLY: "WEEKLY",
+  CUSTOM_DAYS: "CUSTOM_DAYS",
+} as const;
+
+export interface BillingCycleDto {
+  id: string;
+  name: string;
+  propertyId?: string | null;
+  propertyName?: string | null;
+  cadence: BillingCycleDtoCadence;
+  dayOfMonth: number;
+  customDays?: number | null;
+  ledgerType: string;
+  descriptionTemplate: string;
+  isActive: boolean;
+  lastRunAt?: string | null;
+  createdAt: string;
+}
+
+export type CreateBillingCycleBodyCadence =
+  (typeof CreateBillingCycleBodyCadence)[keyof typeof CreateBillingCycleBodyCadence];
+
+export const CreateBillingCycleBodyCadence = {
+  MONTHLY: "MONTHLY",
+  WEEKLY: "WEEKLY",
+  CUSTOM_DAYS: "CUSTOM_DAYS",
+} as const;
+
+export interface CreateBillingCycleBody {
+  name: string;
+  propertyId?: string | null;
+  cadence: CreateBillingCycleBodyCadence;
+  dayOfMonth?: number;
+  customDays?: number | null;
+  ledgerType: string;
+  descriptionTemplate?: string;
+  isActive?: boolean;
+}
+
+export interface BillingCycleResponse {
+  success: boolean;
+  data: BillingCycleDto;
+}
+
+export interface BillingCyclesListResponse {
+  success: boolean;
+  data: BillingCycleDto[];
+}
+
+export type BillingRunDtoErrorsItem = {
+  residentId: string;
+  reason: string;
+};
+
+export interface BillingRunDto {
+  id: string;
+  cycleId?: string | null;
+  cycleName?: string | null;
+  triggeredBy?: string | null;
+  periodLabel: string;
+  successCount: number;
+  failedCount: number;
+  skippedCount: number;
+  totalEligible: number;
+  notes?: string | null;
+  errors: BillingRunDtoErrorsItem[];
+  createdAt: string;
+}
+
+export interface BillingRunResponse {
+  success: boolean;
+  data: BillingRunDto;
+}
+
+export interface BillingRunsListResponse {
+  success: boolean;
+  data: BillingRunDto[];
+}
+
+export type ReminderRuleDtoChannel =
+  (typeof ReminderRuleDtoChannel)[keyof typeof ReminderRuleDtoChannel];
+
+export const ReminderRuleDtoChannel = {
+  EMAIL: "EMAIL",
+  SMS: "SMS",
+  INAPP: "INAPP",
+} as const;
+
+export interface ReminderRuleDto {
+  id: string;
+  name: string;
+  offsetDays: number;
+  channel: ReminderRuleDtoChannel;
+  templateSubject?: string | null;
+  templateBody: string;
+  isActive: boolean;
+  createdAt: string;
+}
+
+export type CreateReminderRuleBodyChannel =
+  (typeof CreateReminderRuleBodyChannel)[keyof typeof CreateReminderRuleBodyChannel];
+
+export const CreateReminderRuleBodyChannel = {
+  EMAIL: "EMAIL",
+  SMS: "SMS",
+  INAPP: "INAPP",
+} as const;
+
+export interface CreateReminderRuleBody {
+  name: string;
+  offsetDays: number;
+  channel: CreateReminderRuleBodyChannel;
+  templateSubject?: string | null;
+  templateBody: string;
+  isActive?: boolean;
+}
+
+export interface ReminderRuleResponse {
+  success: boolean;
+  data: ReminderRuleDto;
+}
+
+export interface ReminderRulesListResponse {
+  success: boolean;
+  data: ReminderRuleDto[];
+}
+
+export type ReminderLogDtoStatus =
+  (typeof ReminderLogDtoStatus)[keyof typeof ReminderLogDtoStatus];
+
+export const ReminderLogDtoStatus = {
+  SENT: "SENT",
+  FAILED: "FAILED",
+} as const;
+
+export interface ReminderLogDto {
+  id: string;
+  ruleId?: string | null;
+  ruleName?: string | null;
+  residentId: string;
+  residentName?: string | null;
+  ledgerEntryId?: string | null;
+  channel: string;
+  subject?: string | null;
+  body: string;
+  status: ReminderLogDtoStatus;
+  triggeredBy?: string | null;
+  createdAt: string;
+}
+
+export interface ReminderLogResponse {
+  success: boolean;
+  data: ReminderLogDto;
+}
+
+export interface ReminderLogsListResponse {
+  success: boolean;
+  data: ReminderLogDto[];
+}
+
+export interface SendReminderBody {
+  ruleId: string;
+  ledgerEntryId: string;
+}
+
+export type BankImportDtoStatus =
+  (typeof BankImportDtoStatus)[keyof typeof BankImportDtoStatus];
+
+export const BankImportDtoStatus = {
+  PENDING: "PENDING",
+  RECONCILED: "RECONCILED",
+} as const;
+
+export interface BankImportDto {
+  id: string;
+  fileName: string;
+  accountLabel?: string | null;
+  totalLines: number;
+  matchedLines: number;
+  status: BankImportDtoStatus;
+  createdAt: string;
+}
+
+export interface CreateBankImportBody {
+  fileName: string;
+  accountLabel?: string | null;
+  /** Raw CSV file contents */
+  csv: string;
+}
+
+export interface BankImportResponse {
+  success: boolean;
+  data: BankImportDto;
+}
+
+export interface BankImportsListResponse {
+  success: boolean;
+  data: BankImportDto[];
+}
+
+export type BankStatementLineDtoDirection =
+  (typeof BankStatementLineDtoDirection)[keyof typeof BankStatementLineDtoDirection];
+
+export const BankStatementLineDtoDirection = {
+  CREDIT: "CREDIT",
+  DEBIT: "DEBIT",
+} as const;
+
+export type BankStatementLineDtoStatus =
+  (typeof BankStatementLineDtoStatus)[keyof typeof BankStatementLineDtoStatus];
+
+export const BankStatementLineDtoStatus = {
+  UNMATCHED: "UNMATCHED",
+  SUGGESTED: "SUGGESTED",
+  MATCHED: "MATCHED",
+  IGNORED: "IGNORED",
+} as const;
+
+export interface BankStatementLineDto {
+  id: string;
+  importId: string;
+  txnDate: string;
+  description: string;
+  reference?: string | null;
+  amount: string;
+  direction: BankStatementLineDtoDirection;
+  status: BankStatementLineDtoStatus;
+  matchedResidentId?: string | null;
+  matchedResidentName?: string | null;
+  matchedLedgerEntryId?: string | null;
+  matchedPaymentId?: string | null;
+}
+
+export interface BankStatementLinesListResponse {
+  success: boolean;
+  data: BankStatementLineDto[];
+}
+
+export interface ConfirmBankLineBody {
+  residentId?: string | null;
+  ledgerEntryId?: string | null;
+}
+
+export interface ExpenseCategoryDto {
+  id: string;
+  name: string;
+  description?: string | null;
+  isActive: boolean;
+}
+
+export interface CreateExpenseCategoryBody {
+  name: string;
+  description?: string | null;
+}
+
+export interface ExpenseCategoryResponse {
+  success: boolean;
+  data: ExpenseCategoryDto;
+}
+
+export interface ExpenseCategoriesListResponse {
+  success: boolean;
+  data: ExpenseCategoryDto[];
+}
+
+export type ExpenseDtoStatus =
+  (typeof ExpenseDtoStatus)[keyof typeof ExpenseDtoStatus];
+
+export const ExpenseDtoStatus = {
+  SUBMITTED: "SUBMITTED",
+  APPROVED: "APPROVED",
+  REJECTED: "REJECTED",
+  PAID: "PAID",
+} as const;
+
+export interface ExpenseDto {
+  id: string;
+  categoryId?: string | null;
+  categoryName?: string | null;
+  propertyId?: string | null;
+  propertyName?: string | null;
+  vendor?: string | null;
+  amount: string;
+  expenseDate: string;
+  description?: string | null;
+  reference?: string | null;
+  attachment?: string | null;
+  status: ExpenseDtoStatus;
+  rejectionReason?: string | null;
+  createdAt: string;
+}
+
+export interface CreateExpenseBody {
+  categoryId?: string | null;
+  propertyId?: string | null;
+  vendor?: string | null;
+  amount: string;
+  expenseDate: string;
+  description?: string | null;
+  reference?: string | null;
+  attachment?: string | null;
+}
+
+export interface ExpenseResponse {
+  success: boolean;
+  data: ExpenseDto;
+}
+
+export type ExpensesListResponseMetaTotals = {
+  total?: number;
+};
+
+export type ExpensesListResponseMeta = {
+  totals?: ExpensesListResponseMetaTotals;
+};
+
+export interface ExpensesListResponse {
+  success: boolean;
+  data: ExpenseDto[];
+  meta?: ExpensesListResponseMeta;
+}
+
+export type TransitionExpenseBodyAction =
+  (typeof TransitionExpenseBodyAction)[keyof typeof TransitionExpenseBodyAction];
+
+export const TransitionExpenseBodyAction = {
+  APPROVED: "APPROVED",
+  REJECTED: "REJECTED",
+  PAID: "PAID",
+} as const;
+
+export interface TransitionExpenseBody {
+  action: TransitionExpenseBodyAction;
+  note?: string | null;
+}
+
+export interface ExpenseEventDto {
+  id: string;
+  expenseId: string;
+  type: string;
+  actorId?: string | null;
+  actorName?: string | null;
+  note?: string | null;
+  createdAt: string;
+}
+
+export interface ExpenseEventsListResponse {
+  success: boolean;
+  data: ExpenseEventDto[];
+}
+
+export type FinanceSummaryResponseData = {
+  paidExpenses: number;
+  pendingExpenses: number;
+  reminderTotal: number;
+};
+
+export interface FinanceSummaryResponse {
+  success: boolean;
+  data: FinanceSummaryResponseData;
+}
+
+export type ReminderCountResponseData = {
+  count: number;
+};
+
+export interface ReminderCountResponse {
+  success: boolean;
+  data: ReminderCountResponseData;
+}
+
 export type PageParamParameter = number;
 
 export type LimitParamParameter = number;
@@ -1250,4 +1635,17 @@ export type GetAnnouncementsParams = {
   page?: PageParamParameter;
   limit?: LimitParamParameter;
   propertyId?: PropertyIdParamParameter;
+};
+
+export type GetBillingRunsParams = {
+  cycleId?: string;
+};
+
+export type GetReminderLogsParams = {
+  residentId?: string;
+};
+
+export type GetExpensesParams = {
+  status?: string;
+  propertyId?: string;
 };

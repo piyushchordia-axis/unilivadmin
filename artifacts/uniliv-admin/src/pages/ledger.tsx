@@ -6,6 +6,8 @@ import { useGetResidents, getGetResidentsQueryKey, useGetResidentLedger, getGetR
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet"
 import { format } from "date-fns"
 import { Skeleton } from "@/components/ui/skeleton"
+import { Badge } from "@/components/ui/badge"
+import { Bot } from "lucide-react"
 
 export default function Ledger() {
   const { data: res, isLoading } = useGetResidents({} as any, { query: { queryKey: getGetResidentsQueryKey({} as any) } })
@@ -60,7 +62,14 @@ export default function Ledger() {
               ledgerRes.data.map((entry) => (
                 <div key={entry.id} className="p-4 border rounded-lg flex justify-between items-center bg-card">
                   <div>
-                    <p className="font-medium">{entry.description}</p>
+                    <div className="flex items-center gap-2">
+                      <p className="font-medium">{entry.description}</p>
+                      {entry.reference?.startsWith("AUTO:") && (
+                        <Badge variant="secondary" className="text-[10px] px-1.5 py-0 h-5 gap-1" data-testid={`badge-auto-${entry.id}`}>
+                          <Bot className="w-3 h-3" /> Auto
+                        </Badge>
+                      )}
+                    </div>
                     <p className="text-sm text-muted-foreground">{entry.type} • {format(new Date(entry.createdAt), "dd MMM yyyy")}</p>
                   </div>
                   <div className="text-right">
