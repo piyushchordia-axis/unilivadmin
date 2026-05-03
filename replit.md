@@ -141,6 +141,13 @@ pnpm --filter @workspace/api-spec run codegen
 - **PDF generation**: client-side via `jspdf` (agreements, receipts) — no Puppeteer or backend PDF.
 - **Razorpay**: stubbed in UI ("Generate Payment Link" card) — needs API keys to enable.
 
+## HRMS Module (Phase 5)
+
+- **Schema** (`lib/db/src/schema/hrms.ts`): extended `employees` with `basic`/`hra`/`specialAllowance`/`exitedAt`. New tables: `leaveBalances` (per emp/year/type CL/SL/EL/PL with total+used), `performanceNotes` (APPRECIATION/WARNING/NEUTRAL timeline), `interviews`, `offers` (CTC + joining date), `exits` (RESIGNATION/TERMINATION/CONTRACT_END), `exitClearances` (4 depts: IT/ADMIN/FINANCE/ASSETS), `exitAssets` (5 items: LAPTOP/ID_CARD/KEYS/ACCESS_CARDS/UNIFORM).
+- **Routes** (`artifacts/api-server/src/routes/employees.ts` ~700 lines): `GET /employees/stats/overview`; `GET /employees/:id/leave-balances`, `/attendance`, `/performance` (+POST), `/exit` (+POST creates 4 clearances + 5 assets); `PUT /exit-clearances/:cid`, `/exit-assets/:aid`; `POST /exits/:eid/finalize` (validates all CLEARED, sets emp EXITED). Attendance: `POST /attendance/bulk` (idempotent — upserts on day midnight, dedupes), `GET /by-date`, `GET /export-csv` (month CSV with day columns). Leave PUT auto-reconciles balances using prev-vs-row deltas (handles edits on approved leaves correctly). POST /employees seeds default balances (CL:12, SL:12, EL:15, PL:0) and uses `MAX(employeeCode)` for next code (no in-memory counter). Recruitment: `GET /candidates/:id` (with interviews+offers), `POST /candidates/:id/interviews`, `POST /candidates/:id/offers` (auto-moves stage to OFFER).
+- **Frontend** (5 pages rebuilt): `employees.tsx` (stats + 4-tab add modal), `employee-detail.tsx` (6 tabs: Profile/Attendance/Leave/Performance/Documents/Exit — calendar grid with click-to-edit, bulk-mark-range, balance cards + Apply modal, performance timeline, exit lifecycle UI with clearance + asset checklists + finalize gating), `attendance.tsx` (date picker, inline status select, bulk mark all present, CSV export), `leaves.tsx` (status tabs with counts), `recruitment.tsx` (HTML5 DnD kanban with 7 stages APPLIED/SCREENED/INTERVIEW_1/INTERVIEW_2/OFFER/JOINED/REJECTED, candidate slide-over with BGV/notes/schedule interview, generate offer with jsPDF download, list view, requisitions grid).
+- **Custom endpoints called via `apiFetch`** (not in OpenAPI): all the new HRMS detail endpoints above.
+
 ## Key Implementation Notes
 
 - `lib/api-zod/src/index.ts` must only export `from "./generated/api"` (not types) — orval codegen otherwise creates duplicate exports

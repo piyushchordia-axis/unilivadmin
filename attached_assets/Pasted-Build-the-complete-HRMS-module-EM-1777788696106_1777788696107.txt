@@ -1,0 +1,84 @@
+Build the complete HRMS module.
+  
+  ═══════════════════════════════════════════════════════
+  EMPLOYEES (/hrms/employees)
+  ═══════════════════════════════════════════════════════
+  LIST PAGE:
+  - DataTable: Photo+Name, Employee Code, Department, Designation, Property, Status, Actions
+  - Filters: Department, Property, Status
+  - StatCards: Total Active, Joined This Month, On Leave Today, Exited This Month
+  - 'Add Employee' button → FormModal
+  
+  ADD/EDIT EMPLOYEE FormModal (tabbed within modal):
+    Tab 1 — Personal: Name*, Email*, Phone*, DOB, Gender, Photo upload
+    Tab 2 — Employment: Employee Code (auto-generated: EMP-001), Department*,
+      Designation*, Property (assignment), Manager (dropdown), Joining Date*
+    Tab 3 — Compensation: CTC, Basic, HRA, Special Allowance (optional fields)
+    Tab 4 — Banking & Compliance: Bank Account, IFSC, PAN, PF Number, ESIC
+  
+  EMPLOYEE DETAIL PAGE (/hrms/employees/:id):
+  - Tabs: Profile | Attendance | Leave | Performance | Documents
+  
+    ATTENDANCE TAB:
+    - Monthly calendar grid: each day shows status chip (P/A/H/L/WFH)
+    - Clicking a day opens edit modal: status*, in-time, out-time, notes
+    - Bulk mark: select date range → set status for all working days
+    - Summary: Present days, Absent, Leave taken this month
+  
+    LEAVE TAB:
+    - Leave balance card: CL (balance/total), SL, EL, PL
+    - Leave applications table: Type, From, To, Days, Status, Applied On
+    - 'Apply Leave' button: Type*, From Date*, To Date*, Reason*
+      Auto-calculates days (skip Sundays), deducts from balance on approval
+    - Approve/Reject buttons for managers
+  
+    PERFORMANCE TAB:
+    - Timeline of performance notes added by manager
+    - Add note: type (Appreciation/Warning/Neutral), text, date
+  
+  ATTENDANCE MANAGEMENT (/hrms/attendance):
+  - Date picker at top (default: today)
+  - Table of all employees with attendance status for selected date
+  - Bulk mark present: select all → mark P in one click
+  - Export attendance sheet for payroll (CSV with all employees × days in month)
+  
+  ═══════════════════════════════════════════════════════
+  RECRUITMENT (/hrms/recruitment)
+  ═══════════════════════════════════════════════════════
+  KANBAN PIPELINE VIEW (primary view):
+  - Columns: Applied | Screened | Interview 1 | Interview 2 | Offer | Joined | Rejected
+  - Each card: candidate name, role, source tag, days in stage
+  - Drag card to move stage (update via API)
+  - Clicking card opens candidate detail slide-over
+  
+  CANDIDATE DETAIL SLIDE-OVER:
+  - Name, phone, email, source, role applied, current stage
+  - Resume download link (if uploaded)
+  - Stage history log
+  - 'Schedule Interview' button: date/time, panel (user dropdown), send calendar invite email
+  - 'Generate Offer' button: inputs CTC, joining date → generates offer letter PDF
+  - BGV Status: Pending / In Progress / Cleared / Flagged (toggle)
+  - Notes textarea (append-only log)
+  
+  LIST VIEW (toggle from kanban):
+  - DataTable: Name, Role, Source, Stage, Applied Date, Next Action, BGV
+  - Add Candidate button: Name*, Phone*, Email, Role*, Source*, Resume upload
+  
+  JOB REQUISITIONS:
+  - DataTable: Role, Department, Headcount, Status, Candidates count, Created
+  - 'Create Requisition' → Role*, Department*, Headcount*, Justification
+  - Status: OPEN / CLOSED
+  
+  ═══════════════════════════════════════════════════════
+  EXIT MANAGEMENT
+  ═══════════════════════════════════════════════════════
+  - Access from Employee detail page → 'Initiate Exit' button
+  - Modal: Exit Type (Resignation/Termination/Contract End), Exit Date*, Reason
+  - Creates exit checklist for departments to sign off:
+    IT clearance, Admin clearance, Finance clearance, Asset return
+  - Each department marks their clearance from their own dashboard section
+  - Asset recovery list: Laptop, ID Card, Keys, Access Cards, Uniform — each with return status
+  - Final settlement calc: pending salary days + leave encashment - deductions
+  - Employee status → EXITED after all clearances done
+  
+  Build complete HRMS with real API. Include all tabs, forms, and workflows.
