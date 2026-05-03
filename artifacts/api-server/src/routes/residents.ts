@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
 import { residentsTable, ledgerEntriesTable, paymentsTable, propertiesTable, roomsTable } from "@workspace/db";
-import { eq, sql, ilike, or, and } from "drizzle-orm";
+import { eq, sql, ilike, or, and, inArray } from "drizzle-orm";
 import { authenticate } from "../middlewares/auth.js";
 import { getPagination, buildMeta } from "../lib/paginate.js";
 import { newId } from "../lib/id.js";
@@ -177,6 +177,86 @@ router.post("/:id/payments", authenticate, async (req, res) => {
       updatedAt: new Date(),
     }).returning();
     res.status(201).json({ success: true, data: { ...row, amount: Number(row.amount) } });
+  } catch (err) {
+    req.log.error(err);
+    res.status(500).json({ success: false, error: "Internal server error" });
+  }
+});
+
+// Check-out resident
+router.post("/:id/checkout", authenticate, async (req, res) => {
+  try {
+    const { checkoutDate, reason, deductions, refundAmount, keyReturned, roomConditionNote } = req.body;
+    const residentId = req.params["id"]!;
+    const [resident] = await db.select().from(residentsTable).where(eq(residentsTable.id, residentId));
+    if (!resident) { res.status(404).json({ success: false, error: "Not found" }); return; }
+
+    // Mark resident checked out
+    await db.update(residentsTable).set({
+      status: "CHECKED_OUT",
+      checkOutDate: checkoutDate ? new Date(checkoutDate) : new Date(),
+      updatedAt: new Date(),
+    }).where(eq(residentsTable.id, residentId));
+
+    // Free up room
+    if (resident.roomId) {
+      await db.update(roomsTable).set({ status: "VACANT", updatedAt: new Date() }).where(eq(roomsTable.id, resident.roomId));
+    }
+
+    // Record refund + deductions in ledger
+    const notes = [reason, keyReturned === false ? "Key NOT returned" : null, roomConditionNote].filter(Boolean).join(" | ");
+    if (deductions && Number(deductions) > 0) {
+      await db.insert(ledgerEntriesTable).values({
+        id: newId(), residentId, type: "ADJUSTMENT",
+        amount: Number(deductions).toString(),
+        description: `Check-out deductions: ${notes || "—"}`,
+        isPaid: true, createdBy: req.user?.id, updatedAt: new Date(),
+      });
+    }
+    if (refundAmount && Number(refundAmount) > 0) {
+      await db.insert(ledgerEntriesTable).values({
+        id: newId(), residentId, type: "DEPOSIT",
+        amount: (-Number(refundAmount)).toString(),
+        description: `Security deposit refund`,
+        isPaid: true, createdBy: req.user?.id, updatedAt: new Date(),
+      });
+    }
+
+    const [row] = await db.select().from(residentsTable).where(eq(residentsTable.id, residentId));
+    res.json({ success: true, data: await enrichResident(row!) });
+  } catch (err) {
+    req.log.error(err);
+    res.status(500).json({ success: false, error: "Internal server error" });
+  }
+});
+
+// Bulk rent charge for a property + month
+router.post("/bulk-rent", authenticate, async (req, res) => {
+  try {
+    const { propertyId, month, year } = req.body;
+    if (!propertyId || month == null || year == null) {
+      res.status(400).json({ success: false, error: "propertyId, month, year required" });
+      return;
+    }
+    const monthLabel = new Date(year, month - 1, 1).toLocaleString("en-US", { month: "long", year: "numeric" });
+    const dueDate = new Date(year, month - 1, 5);
+    const activeResidents = await db.select().from(residentsTable).where(
+      and(eq(residentsTable.propertyId, propertyId), eq(residentsTable.status, "ACTIVE"))
+    );
+    let success = 0, failed = 0;
+    for (const r of activeResidents) {
+      try {
+        if (!r.monthlyRent || Number(r.monthlyRent) <= 0) { failed++; continue; }
+        await db.insert(ledgerEntriesTable).values({
+          id: newId(), residentId: r.id, type: "RENT",
+          amount: r.monthlyRent.toString(),
+          description: `Rent for ${monthLabel}`,
+          dueDate, isPaid: false, createdBy: req.user?.id, updatedAt: new Date(),
+        });
+        success++;
+      } catch { failed++; }
+    }
+    res.json({ success: true, data: { success, failed, total: activeResidents.length, month: monthLabel } });
   } catch (err) {
     req.log.error(err);
     res.status(500).json({ success: false, error: "Internal server error" });

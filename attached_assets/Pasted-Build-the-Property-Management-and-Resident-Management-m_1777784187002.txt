@@ -1,0 +1,97 @@
+Build the Property Management and Resident Management modules completely.
+  
+  ═══════════════════════════════════════════════════════
+  PROPERTIES MODULE (/properties)
+  ═══════════════════════════════════════════════════════
+  LIST PAGE:
+  - DataTable of all properties: Name, City, Total Beds, Occupied, Occupancy %, Status, Actions
+  - Top: StatCards — Total Properties, Total Beds, Total Occupied, Avg Occupancy %
+  - Filter by status, city
+  - 'Add Property' button → opens FormModal
+  - Each row: Edit (pencil icon) + View (eye icon)
+  
+  ADD/EDIT PROPERTY FormModal:
+  - Fields: Name*, Address*, City*, State*, Pincode*, Total Beds*, Phone, Email
+  - Status toggle (Active/Inactive/Under Renovation)
+  - Amenities multi-select: Wifi, AC, Laundry, Mess, Security, Gym, Library
+  - Google Maps embed (read-only, auto-loads from address using Maps Embed API)
+  - Lat/Lng auto-filled from geocoding (use free OpenStreetMap Nominatim API)
+  - Zod validation — all * fields required
+  
+  PROPERTY DETAIL PAGE (/properties/:id):
+  - Header: property name, address, status badge, quick stats (beds, occupied, complaints)
+  - Tabs: Overview | Rooms | Residents | Complaints | Documents
+    Overview tab: map embed, amenities list, contact info, warden details
+    Rooms tab: room grid cards (room number, type, capacity, status badge, resident count)
+      - 'Add Room' button, edit room inline, filter by status/type
+    Residents tab: DataTable of residents for this property (link to resident detail)
+    Complaints tab: DataTable of complaints for this property
+    Documents tab: file list with upload, download, delete
+  
+  ═══════════════════════════════════════════════════════
+  RESIDENTS MODULE (/residents)
+  ═══════════════════════════════════════════════════════
+  LIST PAGE:
+  - DataTable: Photo+Name, Property, Room, Phone, Plan, Monthly Rent, Status, Actions
+  - Filters: Property, Status (Active/Notice/Checked Out), search by name/phone
+  - StatCards: Total Active, Checked Out This Month, Pending Documents, Overdue Count
+  - 'Add Resident' button → multi-step FormModal (3 steps)
+  - Export CSV button
+  
+  ADD RESIDENT — 3-STEP MODAL:
+    Step 1 — Personal Info:
+      Name*, Phone*, Email*, DOB, Gender, Photo upload
+      College, Course, Dietary Preferences (Veg/Jain/Vegan/Non-Veg), Allergies (multi-tag)
+    Step 2 — Accommodation:
+      Property* (dropdown), Room* (filtered by property, shows vacant rooms only)
+      Check-In Date*, Plan Type (Monthly/Quarterly/Annual), Monthly Rent*, Security Deposit*
+    Step 3 — Emergency & Docs:
+      Parent Name, Parent Phone, Parent Email, Emergency Contact
+      Document upload slots: Aadhar, College ID, Photo ID, Agreement
+      Preview generated agreement button (auto-fills template with resident data)
+  
+  RESIDENT DETAIL PAGE (/residents/:id):
+  - Header: avatar, name, room+property badge, status, phone, quick actions
+    Quick Actions: Send Message, Record Payment, Raise Complaint, Check Out
+  - Tabs: Profile | Ledger | Payments | Complaints | Documents
+  
+    LEDGER TAB:
+    - Full ledger table: Date, Type, Description, Debit, Credit, Balance
+    - Running balance calculated dynamically
+    - 'Add Entry' button → modal: Type (dropdown), Amount, Description, Due Date
+    - 'Bulk Rent Charge' button: adds rent entry for current month to all residents of a property
+    - Color code: debits red, credits green
+    - Outstanding balance shown prominently at top
+  
+    PAYMENTS TAB:
+    - All payment transactions: Date, Amount, Mode, Status, Reference
+    - 'Record Payment' button → modal: Amount, Mode (UPI/Cash/Bank Transfer/Card), Reference, Notes
+    - Payment marks linked ledger entries as paid (auto-match or manual)
+    - Razorpay payment link generator: inputs amount → calls Razorpay API → shows shareable link
+    - Download receipt button per payment (generates PDF via Puppeteer)
+  
+    COMPLAINTS TAB:
+    - Resident's complaint history with status and resolution notes
+  
+    DOCUMENTS TAB:
+    - Document slots: Aadhar (collected/missing), College ID, Photo ID, Agreement
+    - Upload/replace per document type
+    - 'Generate Agreement' button: auto-fills PDF template with resident name, room, dates, rent
+      (Use Puppeteer to render HTML template → PDF → store in Supabase)
+  
+  CHECK-OUT FLOW:
+  - Triggered from Quick Actions
+  - Modal: Check-out date, reason, final outstanding dues shown
+  - Asset return checklist: key returned?, room condition notes
+  - Security deposit: deductions input, net refund calculated
+  - On confirm: resident status → CHECKED_OUT, room status → VACANT
+  
+  BULK BILLING:
+  - Separate page/modal under Residents
+  - Select property, select month → preview list of all active residents + rent amount
+  - Confirm → creates LedgerEntry RENT for each resident
+  - Shows success count and any failures
+  
+  Make all CRUD fully functional with real API calls.
+  Forms validate with Zod. Tables paginate. Errors show inline.
+  Ledger balance updates in real-time as entries are added.

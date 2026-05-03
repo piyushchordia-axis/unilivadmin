@@ -131,6 +131,16 @@ pnpm --filter @workspace/api-spec run codegen
 - **Reusable components** in `src/components/`: `PageHeader`, `DataTable` (TanStack Table wrapper), `StatCard`, `StatusBadge`, plus `ui/form-modal.tsx` (slide-over right), `ui/empty-state.tsx`, `ui/file-upload.tsx`, `ui/confirm-dialog.tsx`, `ui/avatar.tsx`.
 - **New routes**: `/laundry` (placeholder — no backend), `/communications` (announcements), `/grn`, `/menu-planning`, `/ledger`, `/payments`, `/recipes` (replaces `/kitchen`).
 
+## Properties + Residents Modules
+
+- **Properties** (`/properties`): list with stat cards, city/status filters, occupancy bars; `PropertyFormModal` with amenities chips, Nominatim geocoding (`https://nominatim.openstreetmap.org/search`), OpenStreetMap iframe embed (no API key needed). Detail page has 5 tabs (Overview / Rooms / Residents / Complaints / Documents); Rooms tab supports inline CRUD.
+- **Residents** (`/residents`): list with stat cards, property/status filters, CSV export, 3-step add modal (Personal → Accommodation → Emergency & Docs) with per-step Zod validation, vacant-room dropdown, jsPDF agreement preview. Detail page has 5 tabs (Profile / Ledger / Payments / Complaints / Documents) with running balance ledger, jsPDF receipts, embedded Add Ledger / Record Payment modals, and "Check Out" quick action.
+- **Bulk Rent Charge**: slide-over from Residents page calling `POST /residents/bulk-rent` (creates RENT ledger entries for all active residents in a property for a given month).
+- **Check-out flow**: `POST /residents/:id/checkout` marks resident `CHECKED_OUT`, frees the room (`VACANT`), records deductions/refund as ledger entries.
+- **Custom (non-OpenAPI) endpoints**: bulk-rent and checkout — frontend calls them via `src/lib/api-fetch.ts` (`apiFetch` helper). Response shape is `{ success: boolean, data: ... }` — always read `res.data.X` not `res.X`.
+- **PDF generation**: client-side via `jspdf` (agreements, receipts) — no Puppeteer or backend PDF.
+- **Razorpay**: stubbed in UI ("Generate Payment Link" card) — needs API keys to enable.
+
 ## Key Implementation Notes
 
 - `lib/api-zod/src/index.ts` must only export `from "./generated/api"` (not types) — orval codegen otherwise creates duplicate exports
