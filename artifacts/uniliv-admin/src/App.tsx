@@ -24,6 +24,7 @@ import Attendance from "@/pages/attendance";
 import Leaves from "@/pages/leaves";
 import Recruitment from "@/pages/recruitment";
 import Vendors from "@/pages/vendors";
+import VendorDetail from "@/pages/vendor-detail";
 import Indents from "@/pages/indents";
 import PurchaseOrders from "@/pages/purchase-orders";
 import GRN from "@/pages/grn";
@@ -84,6 +85,7 @@ function Router() {
       <Route path="/courses">{() => <ProtectedRoute component={Courses} />}</Route>
       
       <Route path="/vendors">{() => <ProtectedRoute component={Vendors} />}</Route>
+      <Route path="/vendors/:id">{() => <ProtectedRoute component={VendorDetail} />}</Route>
       <Route path="/indents">{() => <ProtectedRoute component={Indents} />}</Route>
       <Route path="/purchase-orders">{() => <ProtectedRoute component={PurchaseOrders} />}</Route>
       <Route path="/grn">{() => <ProtectedRoute component={GRN} />}</Route>

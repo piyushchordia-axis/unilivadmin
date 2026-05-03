@@ -1,0 +1,91 @@
+Build the complete Procurement and Inventory module.
+  
+  ═══════════════════════════════════════════════════════
+  VENDORS (/procurement/vendors)
+  ═══════════════════════════════════════════════════════
+  LIST: Name, GSTIN, Categories, Rating (stars), Active POs, Status
+  ADD/EDIT: Name*, Phone*, Email, GSTIN, PAN, Address, Categories (multi-select:
+    Groceries, Electrical, Plumbing, Housekeeping, IT, Furniture, Laundry, Other),
+    Bank Account, IFSC, Status
+  VENDOR DETAIL PAGE (/procurement/vendors/:id):
+  - Tabs: Profile | Rate Contracts | Purchase Orders | Compliance | Performance
+    Rate Contracts: table of item → rate → unit → valid from/to. Add/edit rates.
+    Performance: bar chart — delivery accuracy, quality score, complaint count (last 4 quarters)
+    Compliance: document slots (Trade License, FSSAI, GST Cert, others) with expiry dates
+      Alert badge if any document expires within 30 days
+  
+  ═══════════════════════════════════════════════════════
+  INDENTS (/procurement/indents)
+  ═══════════════════════════════════════════════════════
+  LIST: Indent #, Property, Department, Items count, Total Est. Value, Urgency, Status, Created By
+  Filters: Property, Department, Status, Date Range
+  Status flow: DRAFT → SUBMITTED → APPROVED → PO_RAISED → DELIVERED (or REJECTED)
+  
+  CREATE INDENT FormModal:
+  - Property*, Department*, Urgency (Normal/Urgent/Critical), Purpose, Budget Head
+  - Line items (dynamic rows): Item Name*, Specification, Quantity*, Unit*, Est. Unit Price
+    Add row button, remove row button
+    Total estimated value auto-calculated
+  - Save as Draft or Submit (submitted goes for approval)
+  
+  INDENT APPROVAL (for authorized roles):
+  - Pending approvals shown as highlighted cards on list
+  - Approve button → status = APPROVED, timestamps approval
+  - Reject button → requires rejection reason
+  - 'Convert to PO' button (on APPROVED indents) → pre-fills PO form with indent data
+  
+  ═══════════════════════════════════════════════════════
+  PURCHASE ORDERS (/procurement/purchase-orders)
+  ═══════════════════════════════════════════════════════
+  LIST: PO #, Vendor, Property, Total Amount, Status, Delivery Date, Actions
+  
+  CREATE PO FormModal (or converted from indent):
+  - PO Number (auto-generated: PO-YYYYMMDD-XXX), Vendor* (dropdown with search),
+    Property, Delivery Date*, Payment Terms
+  - Line items: Item Name, Spec, Qty, Unit, Rate (auto-filled from vendor rate contract if exists), Amount
+    Auto-calculate line totals + grand total (+ GST toggle)
+  - Notes / special instructions
+  - 'Send to Vendor' button: generates PO PDF (Puppeteer) → sends via email to vendor
+  
+  PO DETAIL PAGE:
+  - Full PO preview (formatted like a real purchase order document)
+  - Status timeline: DRAFT → SENT → ACKNOWLEDGED → PARTIAL_DELIVERY → DELIVERED
+  - 'Create GRN' button (active when status = SENT or PARTIAL)
+  - Amendment log: if PO edited after sending, creates amendment version
+  
+  ═══════════════════════════════════════════════════════
+  GRN (/procurement/grn)
+  ═══════════════════════════════════════════════════════
+  LIST: GRN #, PO #, Vendor, Property, Items, Status, Received By, Date
+  
+  CREATE GRN (linked to PO):
+  - PO details pre-filled (vendor, items ordered)
+  - For each item: Quantity Ordered (read-only) | Quantity Received* | Condition (Good/Damaged/Short)
+    Damage notes if damaged, shortage notes if short
+  - Vendor Invoice Number, Invoice Photo upload
+  - QC check: Overall pass/fail with notes
+  - On confirm: updates PO status, creates inventory movements (adds received qty to stock)
+  - If any item damaged/short: auto-creates vendor complaint ticket in complaints module
+  
+  ═══════════════════════════════════════════════════════
+  INVENTORY (/procurement/inventory)
+  ═══════════════════════════════════════════════════════
+  LIST: Item Name, SKU, Category, Property, Current Stock, Min Stock, Unit, Expiry, Status
+  Status: OK (green), LOW STOCK (yellow, stock < minStock), EXPIRING SOON (orange), OUT OF STOCK (red)
+  Filters: Property, Category, Status
+  StatCards: Total SKUs, Low Stock Items, Expiring This Week, Out of Stock
+  
+  ADD ITEM: Name*, Category*, Unit*, Min Stock*, Property, SKU, Location, Expiry Date
+    Is Asset toggle: if yes → show Asset Tag field, Condition (New/Good/Fair/Poor)
+  
+  STOCK MOVEMENTS (per item detail):
+  - Log: Date, Type (IN/OUT/ADJUSTMENT), Quantity, Reference (GRN # or manual), Notes
+  - 'Record Consumption' button: quantity used, purpose/department
+  - 'Stock Audit' button: enter physical count → system shows variance vs book
+  
+  STOCK ALERTS:
+  - Alerts panel: all items below min stock + all items expiring within 7 days
+  - 'Create Indent' from alert: pre-fills indent for that item
+  
+  Build all procurement modules with real API. PO PDF generation must work.
+
