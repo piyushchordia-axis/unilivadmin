@@ -1,0 +1,139 @@
+// ═══════════════════════════════════════════════════════════════
+  // UNILIV WALLET — RESIDENT MOBILE APP SCREENS
+  // Add to artifacts/uniliv-resident/
+  // ═══════════════════════════════════════════════════════════════
+  
+  // ──────────────────────────────────────────────────────────────
+  // 1. HOME SCREEN UPDATE — add wallet balance card
+  // app/(tabs)/index.tsx — add between dues card and quick actions
+  // ──────────────────────────────────────────────────────────────
+  
+  // WALLET BALANCE CARD (new, sits below dues card):
+  // GET /api/wallet/:residentId
+  //
+  // Design:
+  //   Compact horizontal card (not full width like dues)
+  //   Left: Wallet icon (lucide) + 'Uniliv Wallet' label
+  //   Right: balance amount (large, coloured)
+  //     Green if > 0, red if negative, gray if 0
+  //   Below balance: tier chip (from gamification store) e.g. '⭐ STAR RESIDENT'
+  //   Tap card → /wallet (wallet detail screen)
+  //
+  // If isActive = false: show 'Wallet closed' badge instead of balance
+  // If balance below lowBalanceAlert: show amber chip 'Low balance — top up'
+  // If balance negative: show red chip '−₹X — please clear dues'
+  
+  // Also update QUICK ACTIONS GRID — replace one tile:
+  // Change 'My XP & Quests' → add as 5th tile, or add 'My Wallet' tile
+  // My Wallet tile: wallet icon, current balance shown as subtitle
+  
+  // ──────────────────────────────────────────────────────────────
+  // 2. WALLET SCREEN  app/wallet/index.tsx
+  // ──────────────────────────────────────────────────────────────
+  
+  // APIs:
+  // GET /api/wallet/:residentId                  → balance + status
+  // GET /api/wallet/:residentId/transactions     → history
+  
+  // HERO SECTION:
+  // Large balance display with animated count-up from 0 on mount
+  // Balance colour: green (positive) / red (negative) / gray (zero)
+  // 'Uniliv Wallet' label above, property name below balance
+  // If negative: amber banner: 'Your balance is −₹X. Please top up at the front desk.'
+  // If low: amber chip: 'Balance below ₹200 — top up soon'
+  
+  // HOW TO TOP UP CARD:
+  // Card with steps: (1) Visit front desk (2) Hand cash to staff (3) Balance updated instantly
+  // Property front desk phone number (from property record)
+  
+  // PAY FROM WALLET BUTTON:
+  // Orange full-width button: 'Pay from Wallet'
+  // Only shown if balance > minimumBalance (i.e. can make at least some payment)
+  // → navigates to /wallet/pay
+  
+  // TRANSACTION HISTORY:
+  // Grouped by month (same as ledger pattern in existing payments screen)
+  // Per transaction row:
+  //   Left: type icon + description (truncated to 1 line)
+  //   Right: amount with sign (+₹X green / −₹X red)
+  //   Below: 'Balance after: ₹X' in muted small text
+  //   Below: relative timestamp (date-fns formatDistanceToNow)
+  // Type → icon mapping:
+  //   TOPUP = Ionicons wallet (green)
+  //   PAYMENT = Ionicons checkmark-circle (blue)
+  //   PARTIAL_PAYMENT = Ionicons git-merge (indigo)
+  //   ADJUSTMENT_CREDIT = Ionicons add-circle (teal)
+  //   ADJUSTMENT_DEBIT = Ionicons remove-circle (orange)
+  //   REFUND_WITHDRAWAL = Ionicons cash (purple)
+  //   REVERSAL = Ionicons refresh (red)
+  // Pull to refresh, FlatList infinite scroll (page=2,3...)
+  
+  // ──────────────────────────────────────────────────────────────
+  // 3. PAY FROM WALLET SCREEN  app/wallet/pay.tsx
+  // ──────────────────────────────────────────────────────────────
+  
+  // APIs:
+  // GET /api/residents/:id/ledger?isPaid=false   → outstanding entries
+  // GET /api/wallet/:residentId                  → current balance
+  // POST /api/wallet/:residentId/pay             → full wallet payment
+  // POST /api/wallet/:residentId/partial-pay     → split payment
+  
+  // STEP 1 — SELECT WHAT TO PAY:
+  // List of outstanding ledger entries (same as payments screen)
+  // Each row: checkbox + type icon + description + amount
+  // Default: all selected
+  // Running total at bottom: 'Selected: ₹X'
+  // Wallet balance shown: 'Wallet balance: ₹Y'
+  // 'Next →' button
+  
+  // STEP 2 — PAYMENT MODE DECISION:
+  // If selectedTotal <= walletBalance - minimumBalance:
+  //   Show: 'Pay ₹X from wallet' as single option — simple flow
+  //   'After payment: ₹Y remaining in wallet'
+  //   'Confirm & Pay' orange button
+  
+  // If selectedTotal > walletBalance - minimumBalance:
+  //   Partial payment mode is shown automatically:
+  //   'Your wallet can cover ₹X of ₹Y total'
+  //   Wallet portion: pre-filled = (walletBalance - minimumBalance)
+  //   Remaining portion: pre-filled = selectedTotal - walletPortion
+  //   Other payment mode selector: UPI | Cash | Card
+  //   If UPI: show reference input field
+  //   'Confirm Split Payment' orange button
+  
+  // STEP 3 — SUCCESS SCREEN:
+  // Animated checkmark (same as existing payment success animation)
+  // 'Payment confirmed!'
+  // Wallet deducted: −₹X
+  // New balance: ₹Y (animated count)
+  // XP earned badge: '+25 XP earned' (orange pill)
+  // 'Download Receipt' button
+  // 'Go Home' button
+  // Haptic: notificationAsync(SUCCESS)
+  
+  // ──────────────────────────────────────────────────────────────
+  // 4. PAYMENTS SCREEN UPDATE — add wallet as payment option
+  // app/payments/index.tsx — existing file, add wallet option to pay flow
+  // ──────────────────────────────────────────────────────────────
+  
+  // In PAY NOW FLOW Step 2 (payment mode choice):
+  // Add 'Pay with Wallet' as first option (above Razorpay):
+  //   Show only if wallet.isActive=true and balance > minimumBalance
+  //   Card: wallet icon, 'Wallet Balance: ₹X', 'Use wallet'
+  //   If selectedTotal > walletMaxPay → show 'Partial: ₹X from wallet' note
+  //   Tapping this → goes to /wallet/pay (pre-filled with selected entries)
+  
+  // ──────────────────────────────────────────────────────────────
+  // 5. NOTIFICATIONS — wallet push notifications
+  // Already handled by backend. On mobile: handle these types.
+  // ──────────────────────────────────────────────────────────────
+  
+  // In app/notifications.tsx — add type icons + deep links:
+  // WALLET_TOPUP → Ionicons wallet → /wallet
+  // WALLET_PAYMENT → Ionicons checkmark-circle → /wallet
+  // WALLET_LOW_BALANCE → Ionicons warning → /wallet
+  // WALLET_CHECKOUT_REFUND → Ionicons cash → /wallet
+  
+  // In root _layout.tsx — handle foreground notification for wallet types:
+  // Show custom in-app toast with wallet icon + amount
+  // Example: 'Wallet topped up  +₹500' (green toast)
