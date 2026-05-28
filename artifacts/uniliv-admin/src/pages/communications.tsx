@@ -29,8 +29,15 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 
+interface BulkPrefill {
+  body: string;
+  channel: string;
+  subject?: string;
+}
+
 export default function Communications() {
   const [tab, setTab] = React.useState("announcements");
+  const [bulkPrefill, setBulkPrefill] = React.useState<BulkPrefill | null>(null);
   
   return (
     <div className="space-y-6">
@@ -48,8 +55,8 @@ export default function Communications() {
         </TabsList>
         <div className="mt-6">
           <TabsContent value="announcements"><AnnouncementsTab /></TabsContent>
-          <TabsContent value="bulk"><BulkMessagesTab /></TabsContent>
-          <TabsContent value="templates"><TemplatesTab onUseTemplate={(b) => { setTab("bulk"); /* Note: prefill handled by global store or event in a real app, keeping simple here */ }} /></TabsContent>
+          <TabsContent value="bulk"><BulkMessagesTab prefill={bulkPrefill} onPrefillConsumed={() => setBulkPrefill(null)} /></TabsContent>
+          <TabsContent value="templates"><TemplatesTab onUseTemplate={(tmpl) => { setBulkPrefill({ body: tmpl.body, channel: tmpl.channel, subject: tmpl.subject }); setTab("bulk"); }} /></TabsContent>
           <TabsContent value="audit"><AuditLogTab /></TabsContent>
         </div>
       </Tabs>
@@ -196,12 +203,24 @@ function AnnouncementsTab() {
   );
 }
 
-function BulkMessagesTab() {
+function BulkMessagesTab({ prefill, onPrefillConsumed }: { prefill: BulkPrefill | null; onPrefillConsumed: () => void }) {
   const { toast } = useToast();
   const { data: propsRes } = useGetProperties();
   const properties = propsRes?.data || [];
   
   const [form, setForm] = React.useState({ propertyId: "ALL", audience: "ACTIVE", channel: "EMAIL", subject: "", body: "" });
+
+  // Apply template prefill when switched from Templates tab
+  React.useEffect(() => {
+    if (!prefill) return;
+    setForm(prev => ({
+      ...prev,
+      channel: prefill.channel || prev.channel,
+      body: prefill.body || prev.body,
+      subject: prefill.subject || prev.subject,
+    }));
+    onPrefillConsumed();
+  }, [prefill]);
 
   const mutPreview = useMutation({
     mutationFn: (data: any) => apiFetch("/communications/preview", { method: "POST", body: JSON.stringify(data) })

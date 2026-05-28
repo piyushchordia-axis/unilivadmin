@@ -28,7 +28,11 @@ export default function Laundry() {
   const { data: propsRes } = useGetProperties();
   const { data: laundryRes, isLoading } = useQuery({
     queryKey: ["laundry", propertyId, status],
-    queryFn: () => apiFetch(`/laundry${propertyId !== "ALL" ? `?propertyId=${propertyId}` : ''}`)
+    queryFn: () => {
+      const params = new URLSearchParams({ limit: "100" });
+      if (propertyId !== "ALL") params.set("propertyId", propertyId);
+      return apiFetch(`/laundry?${params.toString()}`);
+    }
   });
   
   const batches = (laundryRes as any)?.data || [];

@@ -34,12 +34,14 @@ router.get("/", authenticate, async (req, res) => {
     const { page, limit, offset } = getPagination(req.query as Record<string, unknown>);
     const propertyId = req.query["propertyId"] as string | undefined;
     const status = req.query["status"] as string | undefined;
+    const category = req.query["category"] as string | undefined;
     const priority = req.query["priority"] as string | undefined;
     const search = req.query["search"] as string | undefined;
 
     const conditions = [];
     if (propertyId) conditions.push(eq(complaintsTable.propertyId, propertyId));
     if (status) conditions.push(eq(complaintsTable.status, status as "OPEN" | "ASSIGNED" | "IN_PROGRESS" | "RESOLVED" | "CLOSED" | "REOPENED"));
+    if (category) conditions.push(eq(complaintsTable.category, category as "ELECTRICAL" | "PLUMBING" | "INTERNET" | "HOUSEKEEPING" | "SECURITY" | "FOOD" | "LAUNDRY" | "OTHER"));
     if (priority) conditions.push(eq(complaintsTable.priority, priority as "LOW" | "MEDIUM" | "HIGH" | "CRITICAL"));
     if (search) conditions.push(or(ilike(complaintsTable.title, `%${search}%`), ilike(complaintsTable.ticketNo, `%${search}%`))!);
 

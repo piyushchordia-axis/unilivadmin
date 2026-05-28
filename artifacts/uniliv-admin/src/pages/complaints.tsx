@@ -74,11 +74,16 @@ export default function Complaints() {
   });
   const stats = (statsRes as any)?.data || { totalOpen: 0, slaBreached: 0, resolvedToday: 0, avgResolutionHours: 0, heatmap: [], trend: [], slaCompliance: [], topCategories: [] };
 
-  const { data: complaintsRes, isLoading } = useGetComplaints({
+  const apiParams = {
     propertyId: propertyId !== "ALL" ? propertyId : undefined,
     category: category !== "ALL" ? category : undefined,
     status: status !== "ALL" ? status : undefined,
-  }, { query: { queryKey: getGetComplaintsQueryKey({ propertyId: propertyId !== "ALL" ? propertyId : undefined, category: category !== "ALL" ? category : undefined, status: status !== "ALL" ? status : undefined }) } });
+    limit: 100,
+  } as any;
+
+  const { data: complaintsRes, isLoading } = useGetComplaints(apiParams, {
+    query: { queryKey: getGetComplaintsQueryKey(apiParams) },
+  });
   
   const complaints = complaintsRes?.data || [];
 
