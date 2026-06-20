@@ -9,6 +9,8 @@ import { db } from "@workspace/db";
 import { usersTable, refreshTokensTable } from "@workspace/db";
 import { eq, or } from "drizzle-orm";
 import { authenticate, signAccessToken, signRefreshToken } from "../middlewares/auth.js";
+import { authRateLimiter } from "../middlewares/security.js";
+import { COOKIE_SECURE } from "../config/env.js";
 import { newId } from "../lib/id.js";
 import {
   createChallenge,
@@ -71,7 +73,7 @@ export async function issueSession(res: Response, user: DbUser) {
   });
   res.cookie("refreshToken", refreshToken, {
     httpOnly: true,
-    secure: process.env["NODE_ENV"] === "production",
+    secure: COOKIE_SECURE,
     sameSite: "lax",
     maxAge: 7 * 24 * 60 * 60 * 1000,
     path: "/", // explicit: sent to /api/auth/refresh regardless of which route set it
@@ -89,7 +91,7 @@ async function findByIdentifier(identifier: string): Promise<DbUser | undefined>
 }
 
 /* ── Step 1: validate credentials → issue OTP challenge ─────────────────── */
-router.post("/login", async (req, res) => {
+router.post("/login", authRateLimiter, async (req, res) => {
   try {
     const { identifier, email, password } = req.body || {};
     const id = identifier || email; // accept legacy {email}
@@ -156,7 +158,7 @@ router.post("/login", async (req, res) => {
 });
 
 /* ── Step 2: verify OTP → issue tokens ──────────────────────────────────── */
-router.post("/verify-otp", async (req, res) => {
+router.post("/verify-otp", authRateLimiter, async (req, res) => {
   try {
     const { challengeId, code } = req.body || {};
     if (!challengeId || !code) {
@@ -181,7 +183,7 @@ router.post("/verify-otp", async (req, res) => {
   }
 });
 
-router.post("/resend-otp", async (req, res) => {
+router.post("/resend-otp", authRateLimiter, async (req, res) => {
   try {
     const { challengeId } = req.body || {};
     if (!challengeId) {
@@ -201,7 +203,7 @@ router.post("/resend-otp", async (req, res) => {
 });
 
 /* ── Forgot username ────────────────────────────────────────────────────── */
-router.post("/forgot-username", async (req, res) => {
+router.post("/forgot-username", authRateLimiter, async (req, res) => {
   try {
     const { phone } = req.body || {};
     if (!phone) {
@@ -227,7 +229,7 @@ router.post("/forgot-username", async (req, res) => {
   }
 });
 
-router.post("/forgot-username/verify", async (req, res) => {
+router.post("/forgot-username/verify", authRateLimiter, async (req, res) => {
   try {
     const { challengeId, code } = req.body || {};
     const result = await verifyChallenge(challengeId, String(code), "FORGOT_USERNAME");
@@ -259,7 +261,7 @@ router.post("/forgot-username/verify", async (req, res) => {
 });
 
 /** Redeems the emailed single-use link and returns the username (dedicated page). */
-router.post("/recover-username", async (req, res) => {
+router.post("/recover-username", authRateLimiter, async (req, res) => {
   try {
     const { token } = req.body || {};
     if (!token) { res.status(400).json({ success: false, error: "token required" }); return; }
@@ -277,7 +279,7 @@ router.post("/recover-username", async (req, res) => {
 });
 
 /* ── Forgot password ────────────────────────────────────────────────────── */
-router.post("/forgot-password", async (req, res) => {
+router.post("/forgot-password", authRateLimiter, async (req, res) => {
   try {
     const { identifier, email } = req.body || {};
     const idv = identifier || email;
@@ -305,7 +307,7 @@ router.post("/forgot-password", async (req, res) => {
   }
 });
 
-router.post("/forgot-password/verify", async (req, res) => {
+router.post("/forgot-password/verify", authRateLimiter, async (req, res) => {
   try {
     const { challengeId, code } = req.body || {};
     const result = await verifyChallenge(challengeId, String(code), "FORGOT_PASSWORD");
@@ -336,7 +338,7 @@ router.post("/forgot-password/verify", async (req, res) => {
   }
 });
 
-router.post("/reset-password", async (req, res) => {
+router.post("/reset-password", authRateLimiter, async (req, res) => {
   try {
     const { verificationToken, newPassword } = req.body || {};
     if (!verificationToken || !newPassword) {

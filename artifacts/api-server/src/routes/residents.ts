@@ -3,6 +3,8 @@ import { db } from "@workspace/db";
 import { residentsTable, ledgerEntriesTable, paymentsTable, propertiesTable, roomsTable } from "@workspace/db";
 import { eq, sql, ilike, or, and, inArray } from "drizzle-orm";
 import { authenticate } from "../middlewares/auth.js";
+import { authorize } from "../middlewares/authorize.js";
+import { pick, assertPropertyAccess, scopedPropertyId } from "../lib/authz.js";
 import { getPagination, buildMeta } from "../lib/paginate.js";
 import { newId } from "../lib/id.js";
 import { isKycGateEnabled, residentMeetsActivationRequirements } from "./kyc-esign.js";
@@ -23,7 +25,7 @@ async function enrichResident(r: typeof residentsTable.$inferSelect) {
   return { ...r, monthlyRent: r.monthlyRent ? Number(r.monthlyRent) : null, securityDeposit: r.securityDeposit ? Number(r.securityDeposit) : null, propertyName, roomNumber };
 }
 
-router.get("/", authenticate, async (req, res) => {
+router.get("/", authenticate, authorize("RESIDENTS", "view"), async (req, res) => {
   try {
     const { page, limit, offset } = getPagination(req.query as Record<string, unknown>);
     const search = req.query["search"] as string | undefined;
@@ -31,6 +33,8 @@ router.get("/", authenticate, async (req, res) => {
     const status = req.query["status"] as string | undefined;
 
     const conditions = [];
+    const scope = scopedPropertyId(req);
+    if (scope) conditions.push(eq(residentsTable.propertyId, scope));
     if (propertyId) conditions.push(eq(residentsTable.propertyId, propertyId));
     if (status) conditions.push(eq(residentsTable.status, status as "ACTIVE" | "CHECKED_OUT" | "NOTICE_PERIOD"));
     if (search) conditions.push(or(ilike(residentsTable.name, `%${search}%`), ilike(residentsTable.email, `%${search}%`), ilike(residentsTable.phone, `%${search}%`))!);
@@ -47,7 +51,7 @@ router.get("/", authenticate, async (req, res) => {
   }
 });
 
-router.post("/", authenticate, async (req, res) => {
+router.post("/", authenticate, authorize("RESIDENTS", "create"), async (req, res) => {
   try {
     const body = req.body;
     const requestedStatus = body.status || "ACTIVE";
@@ -89,10 +93,11 @@ router.post("/", authenticate, async (req, res) => {
   }
 });
 
-router.get("/:id", authenticate, async (req, res) => {
+router.get("/:id", authenticate, authorize("RESIDENTS", "view"), async (req, res) => {
   try {
     const [row] = await db.select().from(residentsTable).where(eq(residentsTable.id, req.params["id"]!));
     if (!row) { res.status(404).json({ success: false, error: "Not found" }); return; }
+    assertPropertyAccess(req, row.propertyId);
     res.json({ success: true, data: await enrichResident(row) });
   } catch (err) {
     req.log.error(err);
@@ -100,9 +105,18 @@ router.get("/:id", authenticate, async (req, res) => {
   }
 });
 
-router.put("/:id", authenticate, async (req, res) => {
+router.put("/:id", authenticate, authorize("RESIDENTS", "edit"), async (req, res) => {
   try {
-    const body = req.body;
+    const [existing] = await db.select().from(residentsTable).where(eq(residentsTable.id, req.params["id"]!));
+    if (!existing) { res.status(404).json({ success: false, error: "Not found" }); return; }
+    assertPropertyAccess(req, existing.propertyId);
+
+    const body = pick(req.body, [
+      "name", "email", "phone", "dob", "gender", "college", "course",
+      "parentName", "parentPhone", "parentEmail", "dietaryPref", "allergies",
+      "checkInDate", "checkOutDate", "planType", "monthlyRent", "securityDeposit",
+      "roomId", "status", "propertyId",
+    ]);
     if (body?.status === "ACTIVE" && (await isKycGateEnabled())) {
       const check = await residentMeetsActivationRequirements(req.params["id"]!);
       if (!check.ok) {
@@ -125,8 +139,11 @@ router.put("/:id", authenticate, async (req, res) => {
   }
 });
 
-router.delete("/:id", authenticate, async (req, res) => {
+router.delete("/:id", authenticate, authorize("RESIDENTS", "delete"), async (req, res) => {
   try {
+    const [existing] = await db.select().from(residentsTable).where(eq(residentsTable.id, req.params["id"]!));
+    if (!existing) { res.status(404).json({ success: false, error: "Not found" }); return; }
+    assertPropertyAccess(req, existing.propertyId);
     await db.delete(residentsTable).where(eq(residentsTable.id, req.params["id"]!));
     res.json({ success: true, message: "Deleted" });
   } catch (err) {
@@ -136,7 +153,7 @@ router.delete("/:id", authenticate, async (req, res) => {
 });
 
 // Ledger
-router.get("/:id/ledger", authenticate, async (req, res) => {
+router.get("/:id/ledger", authenticate, authorize("RESIDENTS", "view"), async (req, res) => {
   try {
     const rows = await db.select().from(ledgerEntriesTable).where(eq(ledgerEntriesTable.residentId, req.params["id"]!)).orderBy(ledgerEntriesTable.createdAt);
     res.json({ success: true, data: rows.map(r => ({ ...r, amount: Number(r.amount) })) });
@@ -146,7 +163,7 @@ router.get("/:id/ledger", authenticate, async (req, res) => {
   }
 });
 
-router.post("/:id/ledger", authenticate, async (req, res) => {
+router.post("/:id/ledger", authenticate, authorize("RESIDENTS", "edit"), async (req, res) => {
   try {
     const body = req.body;
     if (body?.amount == null || Number.isNaN(Number(body.amount))) {
@@ -173,7 +190,7 @@ router.post("/:id/ledger", authenticate, async (req, res) => {
 });
 
 // Payments
-router.get("/:id/payments", authenticate, async (req, res) => {
+router.get("/:id/payments", authenticate, authorize("RESIDENTS", "view"), async (req, res) => {
   try {
     const rows = await db.select().from(paymentsTable).where(eq(paymentsTable.residentId, req.params["id"]!)).orderBy(paymentsTable.createdAt);
     res.json({ success: true, data: rows.map(r => ({ ...r, amount: Number(r.amount) })) });
@@ -183,7 +200,7 @@ router.get("/:id/payments", authenticate, async (req, res) => {
   }
 });
 
-router.post("/:id/payments", authenticate, async (req, res) => {
+router.post("/:id/payments", authenticate, authorize("RESIDENTS", "edit"), async (req, res) => {
   try {
     const body = req.body;
     if (body?.amount == null || Number.isNaN(Number(body.amount))) {
@@ -208,12 +225,13 @@ router.post("/:id/payments", authenticate, async (req, res) => {
 });
 
 // Check-out resident
-router.post("/:id/checkout", authenticate, async (req, res) => {
+router.post("/:id/checkout", authenticate, authorize("RESIDENTS", "edit"), async (req, res) => {
   try {
     const { checkoutDate, reason, deductions, refundAmount, keyReturned, roomConditionNote } = req.body;
     const residentId = req.params["id"]!;
     const [resident] = await db.select().from(residentsTable).where(eq(residentsTable.id, residentId));
     if (!resident) { res.status(404).json({ success: false, error: "Not found" }); return; }
+    assertPropertyAccess(req, resident.propertyId);
 
     // Record refund + deductions in ledger
     const notes = [reason, keyReturned === false ? "Key NOT returned" : null, roomConditionNote].filter(Boolean).join(" | ");
@@ -259,13 +277,14 @@ router.post("/:id/checkout", authenticate, async (req, res) => {
 });
 
 // Bulk rent charge for a property + month
-router.post("/bulk-rent", authenticate, async (req, res) => {
+router.post("/bulk-rent", authenticate, authorize("RESIDENTS", "edit"), async (req, res) => {
   try {
     const { propertyId, month, year } = req.body;
     if (!propertyId || month == null || year == null) {
       res.status(400).json({ success: false, error: "propertyId, month, year required" });
       return;
     }
+    assertPropertyAccess(req, propertyId);
     const monthLabel = new Date(year, month - 1, 1).toLocaleString("en-US", { month: "long", year: "numeric" });
     const dueDate = new Date(year, month - 1, 5);
     const activeResidents = await db.select().from(residentsTable).where(

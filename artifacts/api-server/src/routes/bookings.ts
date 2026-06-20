@@ -6,13 +6,30 @@ import {
   roomsTable,
   type PortfolioAttributes,
 } from "@workspace/db";
-import { and, eq, gt, lt, ne, desc, inArray } from "drizzle-orm";
+import { and, eq, gt, lt, ne, desc, inArray, sql } from "drizzle-orm";
+import { randomInt } from "crypto";
 import { authenticate } from "../middlewares/auth.js";
+import { authorize } from "../middlewares/authorize.js";
+import { assertPropertyAccess, scopedPropertyId } from "../lib/authz.js";
+import { getPagination, buildMeta } from "../lib/paginate.js";
 import { newId } from "../lib/id.js";
 
 const router: Router = Router();
 
 const ACTIVE_STATUSES = ["CONFIRMED", "CHECKED_IN"] as const;
+
+// Render typed authz errors (e.g. assertPropertyAccess -> 403) with their
+// intended status instead of letting the generic catch mask them as 500.
+// Returns true if it handled the error.
+function sendAuthzError(err: unknown, res: import("express").Response): boolean {
+  const status = (err as { statusCode?: number } | null)?.statusCode;
+  if (typeof status === "number") {
+    const message = (err as { message?: string }).message || "Forbidden";
+    res.status(status).json({ success: false, error: message });
+    return true;
+  }
+  return false;
+}
 
 function parseDate(v: unknown): Date | null {
   if (typeof v !== "string" && !(v instanceof Date)) return null;
@@ -47,7 +64,7 @@ function computeInvoice(
 }
 
 // List bookings, optionally filtered by property/room/status/date range.
-router.get("/", authenticate, async (req, res) => {
+router.get("/", authenticate, authorize("RESIDENTS", "view"), async (req, res) => {
   try {
     const propertyId = req.query["propertyId"] as string | undefined;
     const roomId = req.query["roomId"] as string | undefined;
@@ -56,6 +73,8 @@ router.get("/", authenticate, async (req, res) => {
     const to = parseDate(req.query["to"]);
 
     const conds = [];
+    const scope = scopedPropertyId(req);
+    if (scope) conds.push(eq(bookingsTable.propertyId, scope));
     if (propertyId) conds.push(eq(bookingsTable.propertyId, propertyId));
     if (roomId) conds.push(eq(bookingsTable.roomId, roomId));
     if (status) conds.push(eq(bookingsTable.status, status as never));
@@ -66,12 +85,19 @@ router.get("/", authenticate, async (req, res) => {
     }
     const where = conds.length ? and(...conds) : undefined;
 
+    const { page, limit, offset } = getPagination(req.query as Record<string, unknown>);
+    const [countResult] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(bookingsTable)
+      .where(where);
+
     const rows = await db
       .select()
       .from(bookingsTable)
       .where(where)
       .orderBy(desc(bookingsTable.checkInDate))
-      .limit(500);
+      .limit(limit)
+      .offset(offset);
 
     const roomIds = Array.from(
       new Set(rows.map((r) => r.roomId).filter((v): v is string => !!v)),
@@ -88,15 +114,16 @@ router.get("/", authenticate, async (req, res) => {
       ...r,
       roomNumber: r.roomId ? roomMap[r.roomId]?.number || null : null,
     }));
-    res.json({ success: true, data });
+    res.json({ success: true, data, meta: buildMeta(countResult?.count ?? 0, page, limit) });
   } catch (err) {
+    if (sendAuthzError(err, res)) return;
     req.log.error(err);
     res.status(500).json({ success: false, error: "Internal server error" });
   }
 });
 
 // Availability: list bookings overlapping the requested window per room.
-router.get("/availability", authenticate, async (req, res) => {
+router.get("/availability", authenticate, authorize("RESIDENTS", "view"), async (req, res) => {
   try {
     const propertyId = req.query["propertyId"] as string | undefined;
     const from = parseDate(req.query["from"]);
@@ -107,6 +134,7 @@ router.get("/availability", authenticate, async (req, res) => {
         .json({ success: false, error: "propertyId, from and to are required" });
       return;
     }
+    assertPropertyAccess(req, propertyId);
     if (to <= from) {
       res
         .status(400)
@@ -156,12 +184,13 @@ router.get("/availability", authenticate, async (req, res) => {
     }));
     res.json({ success: true, data });
   } catch (err) {
+    if (sendAuthzError(err, res)) return;
     req.log.error(err);
     res.status(500).json({ success: false, error: "Internal server error" });
   }
 });
 
-router.get("/:id", authenticate, async (req, res) => {
+router.get("/:id", authenticate, authorize("RESIDENTS", "view"), async (req, res) => {
   try {
     const [row] = await db
       .select()
@@ -171,6 +200,7 @@ router.get("/:id", authenticate, async (req, res) => {
       res.status(404).json({ success: false, error: "Not found" });
       return;
     }
+    assertPropertyAccess(req, row.propertyId);
     let roomNumber: string | null = null;
     if (row.roomId) {
       const [r] = await db
@@ -181,15 +211,17 @@ router.get("/:id", authenticate, async (req, res) => {
     }
     res.json({ success: true, data: { ...row, roomNumber } });
   } catch (err) {
+    if (sendAuthzError(err, res)) return;
     req.log.error(err);
     res.status(500).json({ success: false, error: "Internal server error" });
   }
 });
 
-router.post("/", authenticate, async (req, res) => {
+router.post("/", authenticate, authorize("RESIDENTS", "create"), async (req, res) => {
   try {
     const b = req.body || {};
     const propertyId: string | undefined = b.propertyId;
+    if (propertyId) assertPropertyAccess(req, propertyId);
     const roomId: string | undefined = b.roomId || undefined;
     const checkIn = parseDate(b.checkInDate);
     const checkOut = parseDate(b.checkOutDate);
@@ -260,10 +292,13 @@ router.post("/", authenticate, async (req, res) => {
 
     const nights = diffNights(checkIn, checkOut);
     const invoice = computeInvoice(nights, ratePeriod, ratePerPeriod);
-    const bookingNo = `BK-${Date.now().toString(36).toUpperCase()}-${Math.random()
+    // Use a CSPRNG (randomInt) for the random suffix instead of Math.random,
+    // and widen it to ~40 bits so references aren't predictable/collision-prone.
+    const rand = (randomInt(0, 0xffffffff) * 0x100 + randomInt(0, 0xff))
       .toString(36)
-      .slice(2, 6)
-      .toUpperCase()}`;
+      .toUpperCase()
+      .padStart(8, "0");
+    const bookingNo = `BK-${Date.now().toString(36).toUpperCase()}-${rand}`;
 
     const [row] = await db
       .insert(bookingsTable)
@@ -301,12 +336,13 @@ router.post("/", authenticate, async (req, res) => {
     }
     res.status(201).json({ success: true, data: { ...row, roomNumber } });
   } catch (err) {
+    if (sendAuthzError(err, res)) return;
     req.log.error(err);
     res.status(500).json({ success: false, error: "Internal server error" });
   }
 });
 
-router.put("/:id", authenticate, async (req, res) => {
+router.put("/:id", authenticate, authorize("RESIDENTS", "edit"), async (req, res) => {
   try {
     const b = req.body || {};
     const id = req.params["id"]!;
@@ -318,6 +354,7 @@ router.put("/:id", authenticate, async (req, res) => {
       res.status(404).json({ success: false, error: "Not found" });
       return;
     }
+    assertPropertyAccess(req, existing.propertyId);
 
     const checkIn = b.checkInDate ? parseDate(b.checkInDate) : existing.checkInDate;
     const checkOut = b.checkOutDate ? parseDate(b.checkOutDate) : existing.checkOutDate;
@@ -404,14 +441,24 @@ router.put("/:id", authenticate, async (req, res) => {
     }
     res.json({ success: true, data: { ...row, roomNumber } });
   } catch (err) {
+    if (sendAuthzError(err, res)) return;
     req.log.error(err);
     res.status(500).json({ success: false, error: "Internal server error" });
   }
 });
 
-router.delete("/:id", authenticate, async (req, res) => {
+router.delete("/:id", authenticate, authorize("RESIDENTS", "delete"), async (req, res) => {
   try {
     const id = req.params["id"]!;
+    const [existing] = await db
+      .select()
+      .from(bookingsTable)
+      .where(eq(bookingsTable.id, id));
+    if (!existing) {
+      res.status(404).json({ success: false, error: "Booking not found" });
+      return;
+    }
+    assertPropertyAccess(req, existing.propertyId);
     const [row] = await db
       .update(bookingsTable)
       .set({ status: "CANCELLED", updatedAt: new Date() })
@@ -423,6 +470,7 @@ router.delete("/:id", authenticate, async (req, res) => {
     }
     res.json({ success: true, message: "Cancelled", data: row });
   } catch (err) {
+    if (sendAuthzError(err, res)) return;
     req.log.error(err);
     res.status(500).json({ success: false, error: "Internal server error" });
   }

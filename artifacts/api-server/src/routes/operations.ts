@@ -20,8 +20,16 @@ import { eq, and, desc, sql, gte, lte, lt } from "drizzle-orm";
 import { authenticate } from "../middlewares/auth.js";
 import { authorize } from "../middlewares/authorize.js";
 import { newId } from "../lib/id.js";
-import { randomBytes } from "crypto";
+import { rateLimit } from "../middlewares/security.js";
+import { randomBytes, timingSafeEqual } from "crypto";
 import { z } from "zod";
+
+/** Constant-time compare for the IoT device ingestion token (guards length first). */
+function safeTokenEqual(a: string, b: string): boolean {
+  const ab = Buffer.from(a);
+  const bb = Buffer.from(b);
+  return ab.length === bb.length && timingSafeEqual(ab, bb);
+}
 
 // Facility
 export const facilityRouter: Router = Router();
@@ -739,7 +747,10 @@ const ingestSchema = z.object({
   recordedAt: z.string().optional(),
 });
 
-iotIngestionRouter.post("/ingest", async (req, res) => {
+// Per-IP strict limiter for the unauthenticated ingest endpoint (write amplification / DB-exhaustion defence).
+const ingestRateLimiter = rateLimit({ windowMs: 60_000, max: 120 });
+
+iotIngestionRouter.post("/ingest", ingestRateLimiter, async (req, res) => {
   try {
     const auth = req.headers["authorization"] || req.headers["x-device-token"];
     const token = typeof auth === "string" ? (auth.startsWith("Bearer ") ? auth.slice(7) : auth) : null;
@@ -751,7 +762,7 @@ iotIngestionRouter.post("/ingest", async (req, res) => {
 
     const [device] = await db.select().from(iotDevicesTable).where(eq(iotDevicesTable.id, b.deviceId));
     if (!device) { res.status(404).json({ success: false, error: "Device not found" }); return; }
-    if (device.ingestionToken !== token) { res.status(403).json({ success: false, error: "Invalid device token" }); return; }
+    if (!safeTokenEqual(device.ingestionToken, token)) { res.status(403).json({ success: false, error: "Invalid device token" }); return; }
     if (device.status === "INACTIVE") { res.status(403).json({ success: false, error: "Device is inactive" }); return; }
 
     // Adapter: normalize value based on device.adapter

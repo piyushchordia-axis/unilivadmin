@@ -3,12 +3,33 @@ import { db } from "@workspace/db";
 import { propertiesTable, residentsTable } from "@workspace/db";
 import { eq, sql, ilike, or } from "drizzle-orm";
 import { authenticate } from "../middlewares/auth.js";
+import { authorize } from "../middlewares/authorize.js";
+import { pick } from "../lib/authz.js";
 import { getPagination, buildMeta } from "../lib/paginate.js";
 import { newId } from "../lib/id.js";
 
 const router = Router();
 
-router.get("/", authenticate, async (req, res) => {
+/** Client-writable property columns (never id/createdAt/updatedAt). */
+const PROPERTY_FIELDS = [
+  "name",
+  "address",
+  "city",
+  "state",
+  "pincode",
+  "lat",
+  "lng",
+  "totalBeds",
+  "status",
+  "portfolioType",
+  "portfolioAttributes",
+  "wardenId",
+  "phone",
+  "email",
+  "amenities",
+] as const;
+
+router.get("/", authenticate, authorize("PROPERTIES", "view"), async (req, res) => {
   try {
     const { page, limit, offset } = getPagination(req.query as Record<string, unknown>);
     const search = req.query["search"] as string | undefined;
@@ -37,9 +58,9 @@ router.get("/", authenticate, async (req, res) => {
   }
 });
 
-router.post("/", authenticate, async (req, res) => {
+router.post("/", authenticate, authorize("PROPERTIES", "create"), async (req, res) => {
   try {
-    const body = req.body;
+    const body = pick(req.body, PROPERTY_FIELDS);
     const [row] = await db.insert(propertiesTable).values({
       id: newId(),
       name: body.name,
@@ -66,7 +87,7 @@ router.post("/", authenticate, async (req, res) => {
   }
 });
 
-router.get("/:id", authenticate, async (req, res) => {
+router.get("/:id", authenticate, authorize("PROPERTIES", "view"), async (req, res) => {
   try {
     const [row] = await db.select().from(propertiesTable).where(eq(propertiesTable.id, req.params["id"]!));
     if (!row) { res.status(404).json({ success: false, error: "Not found" }); return; }
@@ -78,9 +99,9 @@ router.get("/:id", authenticate, async (req, res) => {
   }
 });
 
-router.put("/:id", authenticate, async (req, res) => {
+router.put("/:id", authenticate, authorize("PROPERTIES", "edit"), async (req, res) => {
   try {
-    const body = req.body;
+    const body = pick(req.body, PROPERTY_FIELDS);
     const [row] = await db.update(propertiesTable).set({ ...body, updatedAt: new Date() }).where(eq(propertiesTable.id, req.params["id"]!)).returning();
     if (!row) { res.status(404).json({ success: false, error: "Not found" }); return; }
     const [r] = await db.select({ count: sql<number>`count(*)::int` }).from(residentsTable).where(eq(residentsTable.propertyId, row.id));
@@ -91,7 +112,7 @@ router.put("/:id", authenticate, async (req, res) => {
   }
 });
 
-router.delete("/:id", authenticate, async (req, res) => {
+router.delete("/:id", authenticate, authorize("PROPERTIES", "delete"), async (req, res) => {
   try {
     await db.delete(propertiesTable).where(eq(propertiesTable.id, req.params["id"]!));
     res.json({ success: true, message: "Deleted" });

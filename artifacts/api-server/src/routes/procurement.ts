@@ -6,8 +6,12 @@ import {
 } from "@workspace/db";
 import { eq, sql, ilike, and, desc, lte, gte, lt } from "drizzle-orm";
 import { authenticate } from "../middlewares/auth.js";
+import { authorize } from "../middlewares/authorize.js";
+import { pick } from "../lib/authz.js";
 import { getPagination, buildMeta } from "../lib/paginate.js";
 import { newId } from "../lib/id.js";
+
+const VENDOR_FIELDS = ["name", "gstin", "pan", "phone", "email", "address", "categories", "bankAccount", "ifscCode", "rating", "status"] as const;
 
 const num = (v: unknown) => v === null || v === undefined || v === "" ? null : Number(v);
 
@@ -18,7 +22,7 @@ export const procurementRouter = Router();
 // for powering creatable item-name comboboxes in indent/PO forms.
 // Line items live in JSON `items` arrays on indents/purchase_orders (each entry has
 // an `itemName` key); rate_contracts has a real `item_name` text column. UNION all.
-procurementRouter.get("/item-suggestions", authenticate, async (req, res) => {
+procurementRouter.get("/item-suggestions", authenticate, authorize("INVENTORY", "view"), async (req, res) => {
   try {
     const result = await db.execute(sql`
       SELECT DISTINCT name FROM (
@@ -41,7 +45,7 @@ procurementRouter.get("/item-suggestions", authenticate, async (req, res) => {
 // =================== VENDORS ===================
 export const vendorRouter = Router();
 
-vendorRouter.get("/", authenticate, async (req, res) => {
+vendorRouter.get("/", authenticate, authorize("VENDORS", "view"), async (req, res) => {
   try {
     const { page, limit, offset } = getPagination(req.query as Record<string, unknown>);
     const search = req.query["search"] as string | undefined;
@@ -66,14 +70,15 @@ vendorRouter.get("/", authenticate, async (req, res) => {
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-vendorRouter.post("/", authenticate, async (req, res) => {
+vendorRouter.post("/", authenticate, authorize("VENDORS", "create"), async (req, res) => {
   try {
-    const [row] = await db.insert(vendorsTable).values({ id: newId(), ...req.body, categories: req.body.categories || [], updatedAt: new Date() }).returning();
+    const data = pick(req.body, VENDOR_FIELDS);
+    const [row] = await db.insert(vendorsTable).values({ id: newId(), ...data, categories: req.body.categories || [], updatedAt: new Date() } as typeof vendorsTable.$inferInsert).returning();
     res.status(201).json({ success: true, data: row });
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-vendorRouter.get("/:id", authenticate, async (req, res) => {
+vendorRouter.get("/:id", authenticate, authorize("VENDORS", "view"), async (req, res) => {
   try {
     const [row] = await db.select().from(vendorsTable).where(eq(vendorsTable.id, req.params["id"]!));
     if (!row) { res.status(404).json({ success: false, error: "Not found" }); return; }
@@ -81,23 +86,24 @@ vendorRouter.get("/:id", authenticate, async (req, res) => {
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-vendorRouter.put("/:id", authenticate, async (req, res) => {
+vendorRouter.put("/:id", authenticate, authorize("VENDORS", "edit"), async (req, res) => {
   try {
-    const [row] = await db.update(vendorsTable).set({ ...req.body, updatedAt: new Date() }).where(eq(vendorsTable.id, req.params["id"]!)).returning();
+    const data = pick(req.body, VENDOR_FIELDS);
+    const [row] = await db.update(vendorsTable).set({ ...data, updatedAt: new Date() }).where(eq(vendorsTable.id, req.params["id"]!)).returning();
     if (!row) { res.status(404).json({ success: false, error: "Not found" }); return; }
     res.json({ success: true, data: row });
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
 // Vendor Rate Contracts
-vendorRouter.get("/:id/rate-contracts", authenticate, async (req, res) => {
+vendorRouter.get("/:id/rate-contracts", authenticate, authorize("VENDORS", "view"), async (req, res) => {
   try {
     const rows = await db.select().from(rateContractsTable).where(eq(rateContractsTable.vendorId, req.params["id"]!)).orderBy(desc(rateContractsTable.createdAt));
     res.json({ success: true, data: rows.map(r => ({ ...r, rate: Number(r.rate) })) });
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-vendorRouter.post("/:id/rate-contracts", authenticate, async (req, res) => {
+vendorRouter.post("/:id/rate-contracts", authenticate, authorize("VENDORS", "edit"), async (req, res) => {
   try {
     const b = req.body;
     const [row] = await db.insert(rateContractsTable).values({
@@ -108,7 +114,7 @@ vendorRouter.post("/:id/rate-contracts", authenticate, async (req, res) => {
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-vendorRouter.put("/rate-contracts/:rcId", authenticate, async (req, res) => {
+vendorRouter.put("/rate-contracts/:rcId", authenticate, authorize("VENDORS", "edit"), async (req, res) => {
   try {
     const b = { ...req.body };
     if (b.rate !== undefined) b.rate = String(b.rate);
@@ -120,7 +126,7 @@ vendorRouter.put("/rate-contracts/:rcId", authenticate, async (req, res) => {
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-vendorRouter.delete("/rate-contracts/:rcId", authenticate, async (req, res) => {
+vendorRouter.delete("/rate-contracts/:rcId", authenticate, authorize("VENDORS", "delete"), async (req, res) => {
   try {
     await db.delete(rateContractsTable).where(eq(rateContractsTable.id, req.params["rcId"]!));
     res.json({ success: true });
@@ -128,7 +134,7 @@ vendorRouter.delete("/rate-contracts/:rcId", authenticate, async (req, res) => {
 });
 
 // Vendor Documents
-vendorRouter.get("/:id/documents", authenticate, async (req, res) => {
+vendorRouter.get("/:id/documents", authenticate, authorize("VENDORS", "view"), async (req, res) => {
   try {
     const rows = await db.select().from(vendorDocumentsTable).where(eq(vendorDocumentsTable.vendorId, req.params["id"]!));
     const now = new Date();
@@ -144,7 +150,7 @@ vendorRouter.get("/:id/documents", authenticate, async (req, res) => {
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-vendorRouter.post("/:id/documents", authenticate, async (req, res) => {
+vendorRouter.post("/:id/documents", authenticate, authorize("VENDORS", "edit"), async (req, res) => {
   try {
     const b = req.body;
     const [row] = await db.insert(vendorDocumentsTable).values({
@@ -155,7 +161,7 @@ vendorRouter.post("/:id/documents", authenticate, async (req, res) => {
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-vendorRouter.delete("/documents/:docId", authenticate, async (req, res) => {
+vendorRouter.delete("/documents/:docId", authenticate, authorize("VENDORS", "delete"), async (req, res) => {
   try {
     await db.delete(vendorDocumentsTable).where(eq(vendorDocumentsTable.id, req.params["docId"]!));
     res.json({ success: true });
@@ -163,7 +169,7 @@ vendorRouter.delete("/documents/:docId", authenticate, async (req, res) => {
 });
 
 // Vendor performance metrics — derived from POs/GRNs
-vendorRouter.get("/:id/performance", authenticate, async (req, res) => {
+vendorRouter.get("/:id/performance", authenticate, authorize("VENDORS", "view"), async (req, res) => {
   try {
     const vendorId = req.params["id"]!;
     // Last 4 quarters
@@ -212,7 +218,7 @@ vendorRouter.get("/:id/performance", authenticate, async (req, res) => {
 });
 
 // Vendor POs list (for detail page)
-vendorRouter.get("/:id/purchase-orders", authenticate, async (req, res) => {
+vendorRouter.get("/:id/purchase-orders", authenticate, authorize("VENDORS", "view"), async (req, res) => {
   try {
     const rows = await db.select().from(purchaseOrdersTable).where(eq(purchaseOrdersTable.vendorId, req.params["id"]!)).orderBy(desc(purchaseOrdersTable.createdAt));
     res.json({ success: true, data: rows.map(r => ({ ...r, totalAmount: Number(r.totalAmount), subtotal: Number(r.subtotal), gstAmount: Number(r.gstAmount) })) });
@@ -229,7 +235,7 @@ const nextIndentNumber = async (d: DbLike = db): Promise<string> => {
   return `IND-${String(next).padStart(5, "0")}`;
 };
 
-indentRouter.get("/", authenticate, async (req, res) => {
+indentRouter.get("/", authenticate, authorize("INDENTS", "view"), async (req, res) => {
   try {
     const { page, limit, offset } = getPagination(req.query as Record<string, unknown>);
     const propertyId = req.query["propertyId"] as string | undefined;
@@ -250,7 +256,7 @@ indentRouter.get("/", authenticate, async (req, res) => {
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-indentRouter.get("/:id", authenticate, async (req, res) => {
+indentRouter.get("/:id", authenticate, authorize("INDENTS", "view"), async (req, res) => {
   try {
     const [row] = await db.select().from(indentsTable).where(eq(indentsTable.id, req.params["id"]!));
     if (!row) { res.status(404).json({ success: false, error: "Not found" }); return; }
@@ -258,7 +264,7 @@ indentRouter.get("/:id", authenticate, async (req, res) => {
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-indentRouter.post("/", authenticate, async (req, res) => {
+indentRouter.post("/", authenticate, authorize("INDENTS", "create"), async (req, res) => {
   try {
     const b = req.body;
     const items = (b.items || []) as Array<Record<string, unknown>>;
@@ -286,7 +292,7 @@ indentRouter.post("/", authenticate, async (req, res) => {
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-indentRouter.put("/:id", authenticate, async (req, res) => {
+indentRouter.put("/:id", authenticate, authorize("INDENTS", "edit"), async (req, res) => {
   try {
     const b = { ...req.body };
     if (b.items) {
@@ -300,7 +306,7 @@ indentRouter.put("/:id", authenticate, async (req, res) => {
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-indentRouter.post("/:id/approve", authenticate, async (req, res) => {
+indentRouter.post("/:id/approve", authenticate, authorize("INDENTS", "edit"), async (req, res) => {
   try {
     const [row] = await db.update(indentsTable).set({
       status: "APPROVED", approvedBy: req.user!.id, approvedAt: new Date(), updatedAt: new Date(),
@@ -310,7 +316,7 @@ indentRouter.post("/:id/approve", authenticate, async (req, res) => {
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-indentRouter.post("/:id/reject", authenticate, async (req, res) => {
+indentRouter.post("/:id/reject", authenticate, authorize("INDENTS", "edit"), async (req, res) => {
   try {
     const reason = req.body?.reason || "";
     if (!reason) { res.status(400).json({ success: false, error: "reason required" }); return; }
@@ -333,7 +339,7 @@ const nextPoNumber = async (d: DbLike = db): Promise<string> => {
   return `PO-${yyyymmdd}-${String(next).padStart(3, "0")}`;
 };
 
-poRouter.get("/", authenticate, async (req, res) => {
+poRouter.get("/", authenticate, authorize("PURCHASE_ORDERS", "view"), async (req, res) => {
   try {
     const { page, limit, offset } = getPagination(req.query as Record<string, unknown>);
     const status = req.query["status"] as string | undefined;
@@ -357,7 +363,7 @@ poRouter.get("/", authenticate, async (req, res) => {
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-poRouter.get("/:id", authenticate, async (req, res) => {
+poRouter.get("/:id", authenticate, authorize("PURCHASE_ORDERS", "view"), async (req, res) => {
   try {
     const [row] = await db.select().from(purchaseOrdersTable).where(eq(purchaseOrdersTable.id, req.params["id"]!));
     if (!row) { res.status(404).json({ success: false, error: "Not found" }); return; }
@@ -375,7 +381,7 @@ poRouter.get("/:id", authenticate, async (req, res) => {
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-poRouter.post("/", authenticate, async (req, res) => {
+poRouter.post("/", authenticate, authorize("PURCHASE_ORDERS", "create"), async (req, res) => {
   try {
     const b = req.body;
     const items = (b.items || []) as Array<Record<string, unknown>>;
@@ -418,7 +424,7 @@ poRouter.post("/", authenticate, async (req, res) => {
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-poRouter.put("/:id", authenticate, async (req, res) => {
+poRouter.put("/:id", authenticate, authorize("PURCHASE_ORDERS", "edit"), async (req, res) => {
   try {
     const b = { ...req.body };
     if (b.items) {
@@ -436,7 +442,7 @@ poRouter.put("/:id", authenticate, async (req, res) => {
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-poRouter.post("/:id/send", authenticate, async (req, res) => {
+poRouter.post("/:id/send", authenticate, authorize("PURCHASE_ORDERS", "edit"), async (req, res) => {
   try {
     const [row] = await db.update(purchaseOrdersTable).set({
       status: "SENT", sentAt: new Date(), updatedAt: new Date(),
@@ -455,7 +461,7 @@ const nextGrnNumber = async (d: DbLike = db): Promise<string> => {
   return `GRN-${String(next).padStart(5, "0")}`;
 };
 
-grnRouter.get("/", authenticate, async (req, res) => {
+grnRouter.get("/", authenticate, authorize("GRN", "view"), async (req, res) => {
   try {
     const { page, limit, offset } = getPagination(req.query as Record<string, unknown>);
     const propertyId = req.query["propertyId"] as string | undefined;
@@ -490,7 +496,7 @@ async function withUniqueRetry<T>(fn: () => Promise<T>, attempts = 5): Promise<T
   throw lastErr;
 }
 
-grnRouter.post("/", authenticate, async (req, res) => {
+grnRouter.post("/", authenticate, authorize("GRN", "create"), async (req, res) => {
   try {
     const b = req.body;
     if (!b.poId) { res.status(400).json({ success: false, error: "poId required" }); return; }
@@ -614,7 +620,7 @@ grnRouter.post("/", authenticate, async (req, res) => {
   }
 });
 
-grnRouter.get("/:id", authenticate, async (req, res) => {
+grnRouter.get("/:id", authenticate, authorize("GRN", "view"), async (req, res) => {
   try {
     const [row] = await db.select().from(grnTable).where(eq(grnTable.id, req.params["id"]!));
     if (!row) { res.status(404).json({ success: false, error: "Not found" }); return; }
@@ -644,7 +650,7 @@ const computeStatus = (item: typeof inventoryTable.$inferSelect): string => {
   return "OK";
 };
 
-inventoryRouter.get("/", authenticate, async (req, res) => {
+inventoryRouter.get("/", authenticate, authorize("INVENTORY", "view"), async (req, res) => {
   try {
     const { page, limit, offset } = getPagination(req.query as Record<string, unknown>);
     const search = req.query["search"] as string | undefined;
@@ -670,7 +676,7 @@ inventoryRouter.get("/", authenticate, async (req, res) => {
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-inventoryRouter.get("/stats", authenticate, async (req, res) => {
+inventoryRouter.get("/stats", authenticate, authorize("INVENTORY", "view"), async (req, res) => {
   try {
     const all = await db.select().from(inventoryTable);
     const totalSkus = all.length;
@@ -685,7 +691,7 @@ inventoryRouter.get("/stats", authenticate, async (req, res) => {
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-inventoryRouter.get("/alerts", authenticate, async (req, res) => {
+inventoryRouter.get("/alerts", authenticate, authorize("INVENTORY", "view"), async (req, res) => {
   try {
     const all = await db.select().from(inventoryTable);
     const lowStock = all.filter(r => Number(r.currentStock) <= Number(r.minStock));
@@ -698,7 +704,7 @@ inventoryRouter.get("/alerts", authenticate, async (req, res) => {
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-inventoryRouter.get("/:id", authenticate, async (req, res) => {
+inventoryRouter.get("/:id", authenticate, authorize("INVENTORY", "view"), async (req, res) => {
   try {
     const [row] = await db.select().from(inventoryTable).where(eq(inventoryTable.id, req.params["id"]!));
     if (!row) { res.status(404).json({ success: false, error: "Not found" }); return; }
@@ -709,7 +715,7 @@ inventoryRouter.get("/:id", authenticate, async (req, res) => {
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-inventoryRouter.post("/", authenticate, async (req, res) => {
+inventoryRouter.post("/", authenticate, authorize("INVENTORY", "create"), async (req, res) => {
   try {
     const b = req.body;
     const [row] = await db.insert(inventoryTable).values({
@@ -736,7 +742,7 @@ inventoryRouter.post("/", authenticate, async (req, res) => {
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-inventoryRouter.put("/:id", authenticate, async (req, res) => {
+inventoryRouter.put("/:id", authenticate, authorize("INVENTORY", "edit"), async (req, res) => {
   try {
     const b = { ...req.body };
     if (b.currentStock !== undefined) b.currentStock = String(b.currentStock);
@@ -752,14 +758,14 @@ inventoryRouter.put("/:id", authenticate, async (req, res) => {
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-inventoryRouter.get("/:id/movements", authenticate, async (req, res) => {
+inventoryRouter.get("/:id/movements", authenticate, authorize("INVENTORY", "view"), async (req, res) => {
   try {
     const rows = await db.select().from(stockMovementsTable).where(eq(stockMovementsTable.inventoryId, req.params["id"]!)).orderBy(desc(stockMovementsTable.createdAt));
     res.json({ success: true, data: rows.map(r => ({ ...r, quantity: Number(r.quantity) })) });
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-inventoryRouter.post("/:id/consume", authenticate, async (req, res) => {
+inventoryRouter.post("/:id/consume", authenticate, authorize("INVENTORY", "edit"), async (req, res) => {
   try {
     const b = req.body;
     const qty = Number(b.quantity);
@@ -787,7 +793,7 @@ inventoryRouter.post("/:id/consume", authenticate, async (req, res) => {
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-inventoryRouter.post("/:id/audit", authenticate, async (req, res) => {
+inventoryRouter.post("/:id/audit", authenticate, authorize("INVENTORY", "edit"), async (req, res) => {
   try {
     const physical = Number(req.body?.physicalCount);
     if (Number.isNaN(physical)) { res.status(400).json({ success: false, error: "physicalCount required" }); return; }

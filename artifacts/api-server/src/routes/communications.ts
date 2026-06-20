@@ -3,21 +3,26 @@ import { db } from "@workspace/db";
 import { messageTemplatesTable, communicationLogsTable, residentsTable, ledgerEntriesTable } from "@workspace/db";
 import { eq, sql, and } from "drizzle-orm";
 import { authenticate } from "../middlewares/auth.js";
+import { authorize } from "../middlewares/authorize.js";
+import { pick, scopedPropertyId } from "../lib/authz.js";
+import { notify } from "../lib/notification-service.js";
 import { getPagination, buildMeta } from "../lib/paginate.js";
 import { newId } from "../lib/id.js";
 
 export const templatesRouter = Router();
 
-templatesRouter.get("/", authenticate, async (req, res) => {
+templatesRouter.get("/", authenticate, authorize("COMMUNICATIONS", "view"), async (req, res) => {
   try {
-    const rows = await db.select().from(messageTemplatesTable).orderBy(messageTemplatesTable.createdAt);
-    res.json({ success: true, data: rows });
+    const { page, limit, offset } = getPagination(req.query as Record<string, unknown>);
+    const [countResult] = await db.select({ count: sql<number>`count(*)::int` }).from(messageTemplatesTable);
+    const rows = await db.select().from(messageTemplatesTable).limit(limit).offset(offset).orderBy(messageTemplatesTable.createdAt);
+    res.json({ success: true, data: rows, meta: buildMeta(countResult.count, page, limit) });
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-templatesRouter.post("/", authenticate, async (req, res) => {
+templatesRouter.post("/", authenticate, authorize("COMMUNICATIONS", "create"), async (req, res) => {
   try {
-    const body = req.body;
+    const body = pick(req.body, ["name", "channel", "body", "variables"]);
     const [row] = await db.insert(messageTemplatesTable).values({
       id: newId(),
       name: body.name,
@@ -31,9 +36,9 @@ templatesRouter.post("/", authenticate, async (req, res) => {
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-templatesRouter.put("/:id", authenticate, async (req, res) => {
+templatesRouter.put("/:id", authenticate, authorize("COMMUNICATIONS", "edit"), async (req, res) => {
   try {
-    const body = req.body;
+    const body = pick(req.body, ["name", "channel", "body", "variables"]);
     const [row] = await db.update(messageTemplatesTable).set({
       name: body.name, channel: body.channel, body: body.body, variables: body.variables || [], updatedAt: new Date(),
     }).where(eq(messageTemplatesTable.id, req.params["id"]!)).returning();
@@ -42,7 +47,7 @@ templatesRouter.put("/:id", authenticate, async (req, res) => {
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-templatesRouter.delete("/:id", authenticate, async (req, res) => {
+templatesRouter.delete("/:id", authenticate, authorize("COMMUNICATIONS", "delete"), async (req, res) => {
   try {
     await db.delete(messageTemplatesTable).where(eq(messageTemplatesTable.id, req.params["id"]!));
     res.json({ success: true, message: "Deleted" });
@@ -51,7 +56,7 @@ templatesRouter.delete("/:id", authenticate, async (req, res) => {
 
 export const commsRouter = Router();
 
-commsRouter.get("/logs", authenticate, async (req, res) => {
+commsRouter.get("/logs", authenticate, authorize("COMMUNICATIONS", "view"), async (req, res) => {
   try {
     const { page, limit, offset } = getPagination(req.query as Record<string, unknown>);
     const [countResult] = await db.select({ count: sql<number>`count(*)::int` }).from(communicationLogsTable);
@@ -60,21 +65,31 @@ commsRouter.get("/logs", authenticate, async (req, res) => {
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-commsRouter.post("/bulk-send", authenticate, async (req, res) => {
+commsRouter.post("/bulk-send", authenticate, authorize("COMMUNICATIONS", "create"), async (req, res) => {
   try {
     const { channel, body, subject, propertyId, status } = req.body;
     const conditions = [];
+    // Property-bound roles (WARDEN/UNIT_LEAD) can only broadcast within their own
+    // property; org-wide roles are unrestricted (scope is null → no-op).
+    const scope = scopedPropertyId(req);
+    if (scope) conditions.push(eq(residentsTable.propertyId, scope));
     if (propertyId) conditions.push(eq(residentsTable.propertyId, propertyId));
     if (status === "ACTIVE" || status === "NOTICE_PERIOD" || status === "CHECKED_OUT") {
       conditions.push(eq(residentsTable.status, status));
     }
     let recipients: { id: string; name: string; phone: string; email: string }[] = [];
     if (status === "OVERDUE") {
-      // residents with unpaid ledger entries past due
+      // residents with unpaid ledger entries past due (still bounded by any property scope)
+      const overdueConditions = [
+        eq(ledgerEntriesTable.isPaid, false),
+        sql`${ledgerEntriesTable.dueDate} < NOW()`,
+      ];
+      if (scope) overdueConditions.push(eq(residentsTable.propertyId, scope));
+      if (propertyId) overdueConditions.push(eq(residentsTable.propertyId, propertyId));
       const overdueRows = await db.select({
         id: residentsTable.id, name: residentsTable.name, phone: residentsTable.phone, email: residentsTable.email,
       }).from(residentsTable).innerJoin(ledgerEntriesTable, eq(ledgerEntriesTable.residentId, residentsTable.id))
-        .where(and(eq(ledgerEntriesTable.isPaid, false), sql`${ledgerEntriesTable.dueDate} < NOW()`));
+        .where(and(...overdueConditions));
       const seen = new Set<string>();
       recipients = overdueRows.filter(r => { if (seen.has(r.id)) return false; seen.add(r.id); return true; });
     } else {
@@ -83,7 +98,28 @@ commsRouter.post("/bulk-send", authenticate, async (req, res) => {
         id: residentsTable.id, name: residentsTable.name, phone: residentsTable.phone, email: residentsTable.email,
       }).from(residentsTable).where(where);
     }
-    // No actual SMS/email send (no provider keys) — log only
+
+    const resolvedChannel = String(channel || "SMS").toUpperCase();
+    // Actually dispatch: enqueue one notify() per recipient through the shared
+    // notification engine (durable outbox + pluggable transport). Best-effort —
+    // notify() never throws, and the audit log row below is still written.
+    await Promise.all(
+      recipients.map((r) =>
+        notify({
+          userId: r.id,
+          title: subject || "Message from Uniliv",
+          body,
+          type: "BULK_COMMS",
+          entityType: "COMMUNICATION",
+          skipInApp: true,
+          ...(resolvedChannel === "EMAIL"
+            ? { email: { subject: subject || "Message from Uniliv", text: body } }
+            : { sms: body }),
+        }),
+      ),
+    );
+
+    // Audit log row (kept): records the broadcast + resolved recipient count.
     const [log] = await db.insert(communicationLogsTable).values({
       id: newId(),
       channel: channel || "SMS",
@@ -101,10 +137,12 @@ function mergeTpl(tpl: string, vars: Record<string, string>): string {
   return tpl.replace(/\{\{(\w+)\}\}/g, (_, key: string) => vars[key] ?? `{{${key}}}`);
 }
 
-commsRouter.post("/preview", authenticate, async (req, res) => {
+commsRouter.post("/preview", authenticate, authorize("COMMUNICATIONS", "view"), async (req, res) => {
   try {
     const { propertyId, status, body: bodyTpl = "", subject: subjectTpl = "" } = req.body;
     const conditions = [];
+    const scope = scopedPropertyId(req);
+    if (scope) conditions.push(eq(residentsTable.propertyId, scope));
     if (propertyId) conditions.push(eq(residentsTable.propertyId, propertyId));
     if (status === "ACTIVE" || status === "NOTICE_PERIOD" || status === "CHECKED_OUT") {
       conditions.push(eq(residentsTable.status, status));

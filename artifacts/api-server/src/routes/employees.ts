@@ -7,6 +7,8 @@ import {
 } from "@workspace/db";
 import { eq, sql, ilike, or, and, inArray, gte, lte } from "drizzle-orm";
 import { authenticate } from "../middlewares/auth.js";
+import { authorize } from "../middlewares/authorize.js";
+import { pick, forbidden } from "../lib/authz.js";
 import { getPagination, buildMeta } from "../lib/paginate.js";
 import { newId, withUniqueRetry } from "../lib/id.js";
 
@@ -20,7 +22,7 @@ async function nextEmpCode(): Promise<string> {
 }
 
 // Employees
-router.get("/", authenticate, async (req, res) => {
+router.get("/", authenticate, authorize("EMPLOYEES", "view"), async (req, res) => {
   try {
     const { page, limit, offset } = getPagination(req.query as Record<string, unknown>);
     const search = req.query["search"] as string | undefined;
@@ -44,9 +46,13 @@ router.get("/", authenticate, async (req, res) => {
   }
 });
 
-router.post("/", authenticate, async (req, res) => {
+router.post("/", authenticate, authorize("EMPLOYEES", "create"), async (req, res) => {
   try {
-    const body = req.body;
+    const body = pick(req.body, [
+      "name", "email", "phone", "dob", "gender", "photo", "department", "designation",
+      "propertyId", "managerId", "joiningDate", "ctc", "basic", "hra", "specialAllowance",
+      "bankAccount", "ifscCode", "panNumber", "pfNumber", "esicNumber", "status",
+    ]) as Record<string, any>;
     const row = await withUniqueRetry(async () => {
       const [r] = await db.insert(employeesTable).values({
       id: newId(),
@@ -89,7 +95,7 @@ router.post("/", authenticate, async (req, res) => {
   }
 });
 
-router.get("/:id", authenticate, async (req, res) => {
+router.get("/:id", authenticate, authorize("EMPLOYEES", "view"), async (req, res) => {
   try {
     const [row] = await db.select().from(employeesTable).where(eq(employeesTable.id, req.params["id"]!));
     if (!row) { res.status(404).json({ success: false, error: "Not found" }); return; }
@@ -100,9 +106,13 @@ router.get("/:id", authenticate, async (req, res) => {
   }
 });
 
-router.put("/:id", authenticate, async (req, res) => {
+router.put("/:id", authenticate, authorize("EMPLOYEES", "edit"), async (req, res) => {
   try {
-    const body = req.body;
+    const body = pick(req.body, [
+      "name", "email", "phone", "dob", "gender", "photo", "department", "designation",
+      "propertyId", "managerId", "joiningDate", "ctc", "basic", "hra", "specialAllowance",
+      "bankAccount", "ifscCode", "panNumber", "pfNumber", "esicNumber", "status",
+    ]) as Record<string, unknown>;
     const updateData: Record<string, unknown> = { updatedAt: new Date() };
     for (const [k, v] of Object.entries(body)) {
       if (k === "dob" && v) updateData["dob"] = new Date(v as string);
@@ -119,7 +129,7 @@ router.put("/:id", authenticate, async (req, res) => {
   }
 });
 
-router.delete("/:id", authenticate, async (req, res) => {
+router.delete("/:id", authenticate, authorize("EMPLOYEES", "delete"), async (req, res) => {
   try {
     await db.delete(employeesTable).where(eq(employeesTable.id, req.params["id"]!));
     res.json({ success: true, message: "Deleted" });
@@ -130,7 +140,7 @@ router.delete("/:id", authenticate, async (req, res) => {
 });
 
 // Employee leave balances
-router.get("/:id/leave-balances", authenticate, async (req, res) => {
+router.get("/:id/leave-balances", authenticate, authorize("EMPLOYEES", "view"), async (req, res) => {
   try {
     const year = parseInt(req.query["year"] as string || String(new Date().getFullYear()), 10);
     const rows = await db.select().from(leaveBalancesTable).where(and(eq(leaveBalancesTable.employeeId, req.params["id"]!), eq(leaveBalancesTable.year, year)));
@@ -139,7 +149,7 @@ router.get("/:id/leave-balances", authenticate, async (req, res) => {
 });
 
 // Employee attendance for a month
-router.get("/:id/attendance", authenticate, async (req, res) => {
+router.get("/:id/attendance", authenticate, authorize("EMPLOYEES", "view"), async (req, res) => {
   try {
     const year = parseInt(req.query["year"] as string || String(new Date().getFullYear()), 10);
     const month = parseInt(req.query["month"] as string || String(new Date().getMonth() + 1), 10);
@@ -152,14 +162,14 @@ router.get("/:id/attendance", authenticate, async (req, res) => {
 });
 
 // Performance notes
-router.get("/:id/performance", authenticate, async (req, res) => {
+router.get("/:id/performance", authenticate, authorize("EMPLOYEES", "view"), async (req, res) => {
   try {
     const rows = await db.select().from(performanceNotesTable).where(eq(performanceNotesTable.employeeId, req.params["id"]!)).orderBy(performanceNotesTable.date);
     res.json({ success: true, data: rows });
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-router.post("/:id/performance", authenticate, async (req, res) => {
+router.post("/:id/performance", authenticate, authorize("EMPLOYEES", "create"), async (req, res) => {
   try {
     const [row] = await db.insert(performanceNotesTable).values({
       id: newId(), employeeId: req.params["id"]!, type: req.body.type, text: req.body.text,
@@ -170,7 +180,7 @@ router.post("/:id/performance", authenticate, async (req, res) => {
 });
 
 // Exits
-router.post("/:id/exit", authenticate, async (req, res) => {
+router.post("/:id/exit", authenticate, authorize("EMPLOYEES", "create"), async (req, res) => {
   try {
     const empId = req.params["id"]!;
     const [exit] = await db.insert(exitsTable).values({
@@ -189,7 +199,7 @@ router.post("/:id/exit", authenticate, async (req, res) => {
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-router.get("/:id/exit", authenticate, async (req, res) => {
+router.get("/:id/exit", authenticate, authorize("EMPLOYEES", "view"), async (req, res) => {
   try {
     const [exit] = await db.select().from(exitsTable).where(eq(exitsTable.employeeId, req.params["id"]!)).orderBy(sql`${exitsTable.createdAt} DESC`).limit(1);
     if (!exit) { res.json({ success: true, data: null }); return; }
@@ -199,7 +209,7 @@ router.get("/:id/exit", authenticate, async (req, res) => {
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-router.put("/exit-clearances/:cid", authenticate, async (req, res) => {
+router.put("/exit-clearances/:cid", authenticate, authorize("EMPLOYEES", "edit"), async (req, res) => {
   try {
     const [row] = await db.update(exitClearancesTable).set({
       status: req.body.status || "CLEARED", clearedBy: req.user?.id, clearedAt: new Date(),
@@ -208,7 +218,7 @@ router.put("/exit-clearances/:cid", authenticate, async (req, res) => {
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-router.put("/exit-assets/:aid", authenticate, async (req, res) => {
+router.put("/exit-assets/:aid", authenticate, authorize("EMPLOYEES", "edit"), async (req, res) => {
   try {
     const [row] = await db.update(exitAssetsTable).set({ returned: !!req.body.returned })
       .where(eq(exitAssetsTable.id, req.params["aid"]!)).returning();
@@ -216,7 +226,7 @@ router.put("/exit-assets/:aid", authenticate, async (req, res) => {
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-router.post("/exits/:eid/finalize", authenticate, async (req, res) => {
+router.post("/exits/:eid/finalize", authenticate, authorize("EMPLOYEES", "edit"), async (req, res) => {
   try {
     const eid = req.params["eid"]!;
     const clearances = await db.select().from(exitClearancesTable).where(eq(exitClearancesTable.exitId, eid));
@@ -232,7 +242,7 @@ router.post("/exits/:eid/finalize", authenticate, async (req, res) => {
 });
 
 // Stats
-router.get("/stats/overview", authenticate, async (req, res) => {
+router.get("/stats/overview", authenticate, authorize("EMPLOYEES", "view"), async (req, res) => {
   try {
     const all = await db.select().from(employeesTable);
     const today = new Date(); today.setHours(0, 0, 0, 0);
@@ -256,7 +266,7 @@ export { router as employeeRouter };
 // Attendance
 const attendanceRouter = Router();
 
-attendanceRouter.get("/", authenticate, async (req, res) => {
+attendanceRouter.get("/", authenticate, authorize("EMPLOYEES", "view"), async (req, res) => {
   try {
     const { page, limit, offset } = getPagination(req.query as Record<string, unknown>);
     const employeeId = req.query["employeeId"] as string | undefined;
@@ -277,7 +287,7 @@ attendanceRouter.get("/", authenticate, async (req, res) => {
 });
 
 // Bulk mark attendance
-attendanceRouter.post("/bulk", authenticate, async (req, res) => {
+attendanceRouter.post("/bulk", authenticate, authorize("EMPLOYEES", "create"), async (req, res) => {
   try {
     const { employeeIds, date, status } = req.body;
     if (!Array.isArray(employeeIds) || !date || !status) {
@@ -309,7 +319,7 @@ attendanceRouter.post("/bulk", authenticate, async (req, res) => {
 });
 
 // Attendance for a specific date (all employees)
-attendanceRouter.get("/by-date", authenticate, async (req, res) => {
+attendanceRouter.get("/by-date", authenticate, authorize("EMPLOYEES", "view"), async (req, res) => {
   try {
     const date = req.query["date"] as string;
     if (!date) { res.status(400).json({ success: false, error: "date required" }); return; }
@@ -329,7 +339,7 @@ attendanceRouter.get("/by-date", authenticate, async (req, res) => {
 });
 
 // Export attendance CSV for a month
-attendanceRouter.get("/export-csv", authenticate, async (req, res) => {
+attendanceRouter.get("/export-csv", authenticate, authorize("EMPLOYEES", "view"), async (req, res) => {
   try {
     const year = parseInt(req.query["year"] as string || String(new Date().getFullYear()), 10);
     const month = parseInt(req.query["month"] as string || String(new Date().getMonth() + 1), 10);
@@ -357,7 +367,7 @@ attendanceRouter.get("/export-csv", authenticate, async (req, res) => {
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-attendanceRouter.post("/", authenticate, async (req, res) => {
+attendanceRouter.post("/", authenticate, authorize("EMPLOYEES", "create"), async (req, res) => {
   try {
     const body = req.body;
     const [row] = await db.insert(attendanceTable).values({
@@ -377,9 +387,9 @@ attendanceRouter.post("/", authenticate, async (req, res) => {
   }
 });
 
-attendanceRouter.put("/:id", authenticate, async (req, res) => {
+attendanceRouter.put("/:id", authenticate, authorize("EMPLOYEES", "edit"), async (req, res) => {
   try {
-    const body = req.body;
+    const body = pick(req.body, ["employeeId", "date", "status", "inTime", "outTime", "notes"]) as Record<string, any>;
     const [row] = await db.update(attendanceTable).set({ ...body, date: body.date ? new Date(body.date) : undefined }).where(eq(attendanceTable.id, req.params["id"]!)).returning();
     if (!row) { res.status(404).json({ success: false, error: "Not found" }); return; }
     const [emp] = await db.select({ name: employeesTable.name }).from(employeesTable).where(eq(employeesTable.id, row.employeeId));
@@ -395,7 +405,7 @@ export { attendanceRouter };
 // Leaves
 const leavesRouter = Router();
 
-leavesRouter.get("/", authenticate, async (req, res) => {
+leavesRouter.get("/", authenticate, authorize("EMPLOYEES", "view"), async (req, res) => {
   try {
     const { page, limit, offset } = getPagination(req.query as Record<string, unknown>);
     const employeeId = req.query["employeeId"] as string | undefined;
@@ -419,7 +429,7 @@ leavesRouter.get("/", authenticate, async (req, res) => {
   }
 });
 
-leavesRouter.post("/", authenticate, async (req, res) => {
+leavesRouter.post("/", authenticate, authorize("EMPLOYEES", "create"), async (req, res) => {
   try {
     const body = req.body;
     const [row] = await db.insert(leavesTable).values({
@@ -440,12 +450,23 @@ leavesRouter.post("/", authenticate, async (req, res) => {
   }
 });
 
-leavesRouter.put("/:id", authenticate, async (req, res) => {
+leavesRouter.put("/:id", authenticate, authorize("EMPLOYEES", "edit"), async (req, res) => {
   try {
-    const body = req.body;
+    const body = pick(req.body, ["type", "fromDate", "toDate", "days", "reason", "status", "approvedBy"]) as Record<string, any>;
     const [prev] = await db.select().from(leavesTable).where(eq(leavesTable.id, req.params["id"]!));
     if (!prev) { res.status(404).json({ success: false, error: "Not found" }); return; }
-    const [row] = await db.update(leavesTable).set({ ...body, updatedAt: new Date() }).where(eq(leavesTable.id, req.params["id"]!)).returning();
+    // Block self-approval/rejection: a user may not approve or reject their own leave request.
+    if (body.status === "APPROVED" || body.status === "REJECTED") {
+      const [emp] = await db.select({ id: employeesTable.id, email: employeesTable.email })
+        .from(employeesTable).where(eq(employeesTable.id, prev.employeeId));
+      if (emp && (emp.id === req.user?.id || (!!req.user?.email && emp.email === req.user.email))) {
+        throw forbidden("You cannot approve or reject your own leave request");
+      }
+    }
+    const updateData: Record<string, unknown> = { ...body, updatedAt: new Date() };
+    if (body.fromDate) updateData["fromDate"] = new Date(body.fromDate);
+    if (body.toDate) updateData["toDate"] = new Date(body.toDate);
+    const [row] = await db.update(leavesTable).set(updateData as Partial<typeof leavesTable.$inferInsert>).where(eq(leavesTable.id, req.params["id"]!)).returning();
     if (!row) { res.status(404).json({ success: false, error: "Not found" }); return; }
     // Reconcile balances: subtract prev contribution if it was APPROVED, then add new contribution if now APPROVED.
     const adjust = async (employeeId: string, year: number, type: string, delta: number) => {
@@ -463,6 +484,8 @@ leavesRouter.put("/:id", authenticate, async (req, res) => {
     const [emp] = await db.select({ name: employeesTable.name }).from(employeesTable).where(eq(employeesTable.id, row.employeeId));
     res.json({ success: true, data: { ...row, employeeName: emp?.name || null } });
   } catch (err) {
+    const status = (err as { statusCode?: number })?.statusCode;
+    if (status) { res.status(status).json({ success: false, error: (err as Error).message }); return; }
     req.log.error(err);
     res.status(500).json({ success: false, error: "Internal server error" });
   }
@@ -473,7 +496,7 @@ export { leavesRouter };
 // Recruitment
 const recruitmentRouter = Router();
 
-recruitmentRouter.get("/job-requisitions", authenticate, async (req, res) => {
+recruitmentRouter.get("/job-requisitions", authenticate, authorize("RECRUITMENT", "view"), async (req, res) => {
   try {
     const { page, limit, offset } = getPagination(req.query as Record<string, unknown>);
     const [countResult] = await db.select({ count: sql<number>`count(*)::int` }).from(jobRequisitionsTable);
@@ -489,9 +512,10 @@ recruitmentRouter.get("/job-requisitions", authenticate, async (req, res) => {
   }
 });
 
-recruitmentRouter.post("/job-requisitions", authenticate, async (req, res) => {
+recruitmentRouter.post("/job-requisitions", authenticate, authorize("RECRUITMENT", "create"), async (req, res) => {
   try {
-    const [row] = await db.insert(jobRequisitionsTable).values({ id: newId(), ...req.body, updatedAt: new Date() }).returning();
+    const body = pick(req.body, ["role", "department", "headcount", "status"]);
+    const [row] = await db.insert(jobRequisitionsTable).values({ id: newId(), ...body, updatedAt: new Date() } as typeof jobRequisitionsTable.$inferInsert).returning();
     res.status(201).json({ success: true, data: { ...row, candidateCount: 0 } });
   } catch (err) {
     req.log.error(err);
@@ -499,7 +523,7 @@ recruitmentRouter.post("/job-requisitions", authenticate, async (req, res) => {
   }
 });
 
-recruitmentRouter.get("/candidates", authenticate, async (req, res) => {
+recruitmentRouter.get("/candidates", authenticate, authorize("RECRUITMENT", "view"), async (req, res) => {
   try {
     const { page, limit, offset } = getPagination(req.query as Record<string, unknown>);
     const search = req.query["search"] as string | undefined;
@@ -519,9 +543,10 @@ recruitmentRouter.get("/candidates", authenticate, async (req, res) => {
   }
 });
 
-recruitmentRouter.post("/candidates", authenticate, async (req, res) => {
+recruitmentRouter.post("/candidates", authenticate, authorize("RECRUITMENT", "create"), async (req, res) => {
   try {
-    const [row] = await db.insert(candidatesTable).values({ id: newId(), ...req.body, updatedAt: new Date() }).returning();
+    const body = pick(req.body, ["jobRequisitionId", "name", "email", "phone", "resumeUrl", "source", "stage", "bgvStatus", "offerStatus", "notes"]);
+    const [row] = await db.insert(candidatesTable).values({ id: newId(), ...body, updatedAt: new Date() } as typeof candidatesTable.$inferInsert).returning();
     res.status(201).json({ success: true, data: row });
   } catch (err) {
     req.log.error(err);
@@ -529,9 +554,10 @@ recruitmentRouter.post("/candidates", authenticate, async (req, res) => {
   }
 });
 
-recruitmentRouter.put("/candidates/:id", authenticate, async (req, res) => {
+recruitmentRouter.put("/candidates/:id", authenticate, authorize("RECRUITMENT", "edit"), async (req, res) => {
   try {
-    const [row] = await db.update(candidatesTable).set({ ...req.body, updatedAt: new Date() }).where(eq(candidatesTable.id, req.params["id"]!)).returning();
+    const body = pick(req.body, ["jobRequisitionId", "name", "email", "phone", "resumeUrl", "source", "stage", "bgvStatus", "offerStatus", "notes"]);
+    const [row] = await db.update(candidatesTable).set({ ...body, updatedAt: new Date() }).where(eq(candidatesTable.id, req.params["id"]!)).returning();
     if (!row) { res.status(404).json({ success: false, error: "Not found" }); return; }
     res.json({ success: true, data: row });
   } catch (err) {
@@ -540,7 +566,7 @@ recruitmentRouter.put("/candidates/:id", authenticate, async (req, res) => {
   }
 });
 
-recruitmentRouter.get("/candidates/:id", authenticate, async (req, res) => {
+recruitmentRouter.get("/candidates/:id", authenticate, authorize("RECRUITMENT", "view"), async (req, res) => {
   try {
     const [c] = await db.select().from(candidatesTable).where(eq(candidatesTable.id, req.params["id"]!));
     if (!c) { res.status(404).json({ success: false, error: "Not found" }); return; }
@@ -550,7 +576,7 @@ recruitmentRouter.get("/candidates/:id", authenticate, async (req, res) => {
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-recruitmentRouter.post("/candidates/:id/interviews", authenticate, async (req, res) => {
+recruitmentRouter.post("/candidates/:id/interviews", authenticate, authorize("RECRUITMENT", "create"), async (req, res) => {
   try {
     const [row] = await db.insert(interviewsTable).values({
       id: newId(), candidateId: req.params["id"]!, scheduledAt: new Date(req.body.scheduledAt),
@@ -560,7 +586,7 @@ recruitmentRouter.post("/candidates/:id/interviews", authenticate, async (req, r
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-recruitmentRouter.post("/candidates/:id/offers", authenticate, async (req, res) => {
+recruitmentRouter.post("/candidates/:id/offers", authenticate, authorize("RECRUITMENT", "create"), async (req, res) => {
   try {
     const [row] = await db.insert(offersTable).values({
       id: newId(), candidateId: req.params["id"]!, ctc: req.body.ctc?.toString(), joiningDate: new Date(req.body.joiningDate),

@@ -20,6 +20,45 @@ export const kycRouter: Router = Router();
 export const esignRouter: Router = Router();
 export const esignPublicRouter: Router = Router();
 
+// ---------------------------------------------------------------------
+// Government-ID masking — never echo a raw Aadhaar/PAN back to a client.
+// ---------------------------------------------------------------------
+
+/** Mask an Aadhaar to its last 4 digits, e.g. "XXXX XXXX 1234". */
+function maskAadhaar(value: string | null | undefined): string | null {
+  if (!value) return value ?? null;
+  const digits = value.replace(/\D/g, "");
+  const last4 = digits.slice(-4);
+  if (!last4) return "XXXX XXXX XXXX";
+  return `XXXX XXXX ${last4}`;
+}
+
+/** Mask a PAN (or any other id) to its last 4 chars, e.g. "XXXXXX1234". */
+function maskPan(value: string | null | undefined): string | null {
+  if (!value) return value ?? null;
+  const last4 = value.slice(-4);
+  return `${"X".repeat(Math.max(0, value.length - 4))}${last4}`;
+}
+
+/** Mask the stored government-id number based on its idType. */
+function maskIdNumber(idType: string | null | undefined, idNumber: string | null | undefined): string | null {
+  if (!idNumber) return idNumber ?? null;
+  return String(idType).toUpperCase() === "AADHAAR" ? maskAadhaar(idNumber) : maskPan(idNumber);
+}
+
+type KycRow = typeof kycRequestsTable.$inferSelect;
+
+/** List projection: mask the id number and drop raw document/selfie images. */
+function kycListView(row: KycRow) {
+  const { idImageFront: _f, idImageBack: _b, selfieImage: _s, providerData: _p, ...rest } = row;
+  return { ...rest, idNumber: maskIdNumber(row.idType, row.idNumber) };
+}
+
+/** Detail/create projection: mask the id number but keep document images. */
+function kycDetailView(row: KycRow) {
+  return { ...row, idNumber: maskIdNumber(row.idType, row.idNumber) };
+}
+
 // =====================================================================
 // KYC
 // =====================================================================
@@ -32,7 +71,7 @@ kycRouter.get("/residents/:id/kyc", authenticate, authorize("RESIDENTS", "view")
       .from(kycRequestsTable)
       .where(eq(kycRequestsTable.residentId, req.params["id"] as string))
       .orderBy(desc(kycRequestsTable.createdAt));
-    res.json({ success: true, data: rows });
+    res.json({ success: true, data: rows.map(kycListView) });
   } catch (err) {
     req.log.error(err);
     res.status(500).json({ success: false, error: "Internal server error" });
@@ -86,7 +125,7 @@ kycRouter.post("/residents/:id/kyc", authenticate, authorize("RESIDENTS", "edit"
     await logKycEvent(row.id, "CREATED", req.user?.id ?? null, clientIp(req), req.headers["user-agent"] ?? null, {
       idType, provider: adapter.name, status: verifyResult.status,
     });
-    res.status(201).json({ success: true, data: row });
+    res.status(201).json({ success: true, data: kycDetailView(row) });
   } catch (err) {
     req.log.error(err);
     res.status(500).json({ success: false, error: "Internal server error" });
@@ -129,7 +168,7 @@ kycRouter.post("/kyc/:id/verify", authenticate, authorize("RESIDENTS", "edit"), 
       req.headers["user-agent"] ?? null,
       { rejectionReason: rejectionReason ?? null },
     );
-    res.json({ success: true, data: row });
+    res.json({ success: true, data: kycDetailView(row) });
   } catch (err) {
     req.log.error(err);
     res.status(500).json({ success: false, error: "Internal server error" });
@@ -158,7 +197,7 @@ kycRouter.get("/kyc/:id", authenticate, authorize("RESIDENTS", "view"), async (r
       res.status(404).json({ success: false, error: "Not found" });
       return;
     }
-    res.json({ success: true, data: row });
+    res.json({ success: true, data: kycDetailView(row) });
   } catch (err) {
     req.log.error(err);
     res.status(500).json({ success: false, error: "Internal server error" });
@@ -291,9 +330,13 @@ esignRouter.get("/esign/:id", authenticate, authorize("RESIDENTS", "view"), asyn
       .orderBy(desc(esignEventsTable.createdAt));
     const origin =
       req.headers["origin"] || `${req.protocol}://${req.headers["host"]}`;
+    // Strip the bearer capability secret (signerToken) and the full base64 PDF.
+    // The token is only surfaced inside the intentional signerUrl; the signed
+    // PDF is served by the dedicated /esign/:id/pdf stream.
+    const { signerToken: _t, signedPdf: _pdf, ...safeRow } = row;
     res.json({
       success: true,
-      data: { ...row, signerUrl: `${origin}/esign/sign/${row.signerToken}`, events },
+      data: { ...safeRow, signerUrl: `${origin}/esign/sign/${row.signerToken}`, events },
     });
   } catch (err) {
     req.log.error(err);

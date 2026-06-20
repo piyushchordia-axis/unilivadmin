@@ -35,6 +35,9 @@ RUN pnpm install --frozen-lockfile --offline
 # API build — esbuild bundles all deps into one ESM file (no runtime node_modules).
 # ─────────────────────────────────────────────────────────────────────────────
 FROM base AS api-build
+# Skip pino-pretty worker bundles — they embed absolute build paths that break
+# when the runtime image copies dist/ to a different WORKDIR (/app).
+ENV API_BUNDLE_TARGET=production
 RUN pnpm --filter @workspace/api-server run build
 
 # ─────────────────────────────────────────────────────────────────────────────

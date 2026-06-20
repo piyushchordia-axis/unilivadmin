@@ -28,6 +28,13 @@ const DEFAULTS = {
   lockoutMinutes: 15,
 };
 
+/** bcrypt work factor for OTP code hashes. */
+const OTP_BCRYPT_COST = 10;
+/** Minimum interval between OTP sends for a single challenge. */
+const RESEND_COOLDOWN_MS = 30_000;
+/** TTL for a verification token once a challenge is VERIFIED (independent of OTP TTL). */
+const VERIFICATION_TOKEN_TTL_MS = 15 * 60_000;
+
 const isProd = () => process.env["NODE_ENV"] === "production";
 
 /** Reads numeric config from system_config, tolerating plain or wrapped values. */
@@ -105,7 +112,7 @@ export async function createChallenge(args: {
 }): Promise<ChallengeResult> {
   const cfg = await readConfig();
   const code = genCode(cfg.otpLength);
-  const codeHash = await bcrypt.hash(code, 8);
+  const codeHash = await bcrypt.hash(code, OTP_BCRYPT_COST);
   const expiresAt = new Date(Date.now() + cfg.ttlMinutes * 60_000);
   const id = newId();
 
@@ -150,9 +157,16 @@ export async function resendChallenge(challengeId: string): Promise<
   if (ch.resendCount >= ch.maxResend) {
     return { ok: false, error: `Maximum ${ch.maxResend} resends reached. Please start again.` };
   }
+  if (ch.lastSentAt) {
+    const sinceLast = Date.now() - new Date(ch.lastSentAt).getTime();
+    if (sinceLast < RESEND_COOLDOWN_MS) {
+      const wait = Math.ceil((RESEND_COOLDOWN_MS - sinceLast) / 1000);
+      return { ok: false, error: `Please wait ${wait}s before requesting another code.` };
+    }
+  }
   const cfg = await readConfig();
   const code = genCode(cfg.otpLength);
-  const codeHash = await bcrypt.hash(code, 8);
+  const codeHash = await bcrypt.hash(code, OTP_BCRYPT_COST);
   const expiresAt = new Date(Date.now() + cfg.ttlMinutes * 60_000);
   await db
     .update(otpChallengesTable)
@@ -242,6 +256,16 @@ export async function consumeVerificationToken(
     .where(eq(otpChallengesTable.verificationToken, token));
   if (!ch || ch.purpose !== purpose || ch.status !== "VERIFIED") {
     return { ok: false, error: "Invalid or expired verification" };
+  }
+  // The token must not be redeemable forever: enforce a short TTL from the
+  // moment the challenge was verified (consumedAt), independent of the OTP TTL.
+  const verifiedAt = ch.consumedAt ? new Date(ch.consumedAt).getTime() : null;
+  if (verifiedAt == null || Date.now() - verifiedAt > VERIFICATION_TOKEN_TTL_MS) {
+    await db
+      .update(otpChallengesTable)
+      .set({ status: "EXPIRED", verificationToken: null })
+      .where(eq(otpChallengesTable.id, ch.id));
+    return { ok: false, error: "expired" };
   }
   await db
     .update(otpChallengesTable)

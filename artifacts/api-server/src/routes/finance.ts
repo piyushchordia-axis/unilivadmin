@@ -23,6 +23,8 @@ import { authenticate } from "../middlewares/auth.js";
 import { authorize } from "../middlewares/authorize.js";
 import { newId } from "../lib/id.js";
 import { logger } from "../lib/logger.js";
+import { badRequest, httpError } from "../lib/authz.js";
+import { notify } from "../lib/notification-service.js";
 
 export const financeRouter: Router = Router();
 
@@ -341,17 +343,40 @@ async function sendReminder(
         });
       }
     } else {
-      // EMAIL / SMS — log via communication_logs (same pipeline as the broadcast comms module).
-      // No external provider keys are configured; downstream provider integration is a follow-up.
-      await db.insert(communicationLogsTable).values({
-        id: newId(),
-        channel: rule.channel,
-        subject,
-        body,
-        recipientCount: 1,
-        recipientFilter: { residentId: resident.id, ruleId: rule.id, ledgerEntryId: entry.id },
-        sentBy: triggeredBy === "MANUAL" || triggeredBy === "SCHEDULER" ? null : triggeredBy,
-      });
+      // EMAIL / SMS — dispatch through the notify engine (enqueueAndSend → SES/SMTP/Twilio).
+      // Resolve resident → user account by email; notify() resolves the actual email/phone from
+      // the user row and routes the requested channel.
+      const linkedUser = resident.email
+        ? await db.select({ id: usersTable.id }).from(usersTable).where(eq(usersTable.email, resident.email)).limit(1)
+        : [];
+      if (linkedUser.length > 0 && linkedUser[0]) {
+        await notify({
+          userId: linkedUser[0].id,
+          title: subject || "Rent reminder",
+          body,
+          type: "RENT_REMINDER",
+          link: `/residents/${resident.id}`,
+          entityType: "LEDGER_ENTRY",
+          entityId: entry.id,
+          skipInApp: true,
+          ...(rule.channel === "EMAIL" ? { email: { subject: subject || "Rent reminder", text: body } } : {}),
+          ...(rule.channel === "SMS" ? { sms: body } : {}),
+        });
+      } else {
+        // No linked user account → no email/phone to dispatch to. Record the attempt in
+        // communication_logs and mark the reminder FAILED so bookkeeping reflects non-delivery.
+        await db.insert(communicationLogsTable).values({
+          id: newId(),
+          channel: rule.channel,
+          subject,
+          body,
+          recipientCount: 1,
+          recipientFilter: { residentId: resident.id, ruleId: rule.id, ledgerEntryId: entry.id, fallback: "no_user_account" },
+          sentBy: triggeredBy === "MANUAL" || triggeredBy === "SCHEDULER" ? null : triggeredBy,
+        });
+        status = "FAILED";
+        error = "No linked user account for resident — no email/phone to dispatch to";
+      }
     }
   } catch (e) {
     status = "FAILED";
@@ -490,53 +515,80 @@ financeRouter.post("/bank-lines/:id/confirm", authenticate, authorize("BANKING",
       return;
     }
     const useResident = residentId || line.matchedResidentId;
-    let useEntry: string | null = ledgerEntryId || line.matchedLedgerEntryId || null;
+    const preselectedEntry: string | null = ledgerEntryId || line.matchedLedgerEntryId || null;
     if (!useResident) { res.status(400).json({ success: false, error: "residentId required" }); return; }
-    // Fallback: when no ledger entry was selected/suggested, try to find one for this resident
-    // matching the amount (preferred) else the oldest unpaid entry.
-    if (!useEntry) {
-      const unpaid = await db.select().from(ledgerEntriesTable)
-        .where(and(eq(ledgerEntriesTable.residentId, useResident), eq(ledgerEntriesTable.isPaid, false)))
-        .orderBy(ledgerEntriesTable.createdAt);
-      const match = unpaid.find((e) => Math.abs(Number(e.amount) - Number(line.amount)) < 0.01) || unpaid[0];
-      if (match) useEntry = match.id;
-    }
 
-    // Create payment & mark ledger paid
-    const [pay] = await db.insert(paymentsTable).values({
-      id: newId(),
-      residentId: useResident,
-      amount: line.amount.toString(),
-      mode: "BANK_TRANSFER",
-      status: "SUCCESS",
-      reference: line.reference || `BANK:${line.id}`,
-      notes: `Reconciled from import line: ${line.description}`,
-      updatedAt: new Date(),
-    }).returning();
+    // Wrap payment-insert + ledger-update + import-counter update in one transaction.
+    // The chosen ledger entry is locked FOR UPDATE and re-verified unpaid inside the tx so two
+    // bank lines confirmed concurrently can't both pay the same entry (idempotent double-pay guard).
+    const pay = await db.transaction(async (tx) => {
+      // Resolve the ledger entry to settle. Lock the candidate row(s) FOR UPDATE so the isPaid
+      // re-check below sees a consistent, serialized view.
+      let useEntry: string | null = null;
+      if (preselectedEntry) {
+        const [entry] = await tx.select().from(ledgerEntriesTable)
+          .where(eq(ledgerEntriesTable.id, preselectedEntry)).for("update");
+        if (!entry) throw badRequest("Ledger entry not found");
+        if (entry.isPaid) throw httpError(409, "Ledger entry already paid");
+        useEntry = entry.id;
+      } else {
+        // Fallback: lock this resident's unpaid entries, then pick the amount match (preferred)
+        // else the oldest unpaid entry — all under the row locks.
+        const unpaid = await tx.select().from(ledgerEntriesTable)
+          .where(and(eq(ledgerEntriesTable.residentId, useResident), eq(ledgerEntriesTable.isPaid, false)))
+          .orderBy(ledgerEntriesTable.createdAt).for("update");
+        const match = unpaid.find((e) => Math.abs(Number(e.amount) - Number(line.amount)) < 0.01) || unpaid[0];
+        if (match) useEntry = match.id;
+      }
 
-    if (useEntry) {
-      await db.update(ledgerEntriesTable).set({ isPaid: true, paidOn: line.txnDate, updatedAt: new Date() }).where(eq(ledgerEntriesTable.id, useEntry));
-    }
+      // Create payment & mark ledger paid
+      const [payment] = await tx.insert(paymentsTable).values({
+        id: newId(),
+        residentId: useResident,
+        amount: line.amount.toString(),
+        mode: "BANK_TRANSFER",
+        status: "SUCCESS",
+        reference: line.reference || `BANK:${line.id}`,
+        notes: `Reconciled from import line: ${line.description}`,
+        updatedAt: new Date(),
+      }).returning();
 
-    await db.update(bankStatementLinesTable).set({
-      status: "MATCHED",
-      matchedResidentId: useResident,
-      matchedLedgerEntryId: useEntry || null,
-      matchedPaymentId: pay.id,
-      reconciledAt: new Date(),
-      reconciledBy: req.user?.id,
-    }).where(eq(bankStatementLinesTable.id, line.id));
+      if (useEntry) {
+        // Guarded update: only flips an entry that is still unpaid. The row is locked above, so a
+        // zero-rowcount here means a concurrent confirm already paid it — abort idempotently.
+        const updated = await tx.update(ledgerEntriesTable)
+          .set({ isPaid: true, paidOn: line.txnDate, updatedAt: new Date() })
+          .where(and(eq(ledgerEntriesTable.id, useEntry), eq(ledgerEntriesTable.isPaid, false)))
+          .returning({ id: ledgerEntriesTable.id });
+        if (updated.length === 0) throw httpError(409, "Ledger entry already paid");
+      }
 
-    // Update import counter and flip to RECONCILED when fully matched
-    const [{ count }] = await db.select({ count: sql<number>`count(*)::int` }).from(bankStatementLinesTable)
-      .where(and(eq(bankStatementLinesTable.importId, line.importId), eq(bankStatementLinesTable.status, "MATCHED")));
-    const [imp] = await db.select({ totalLines: bankImportsTable.totalLines }).from(bankImportsTable).where(eq(bankImportsTable.id, line.importId));
-    const importUpdates: Record<string, unknown> = { matchedLines: count };
-    if (imp && count >= imp.totalLines) importUpdates["status"] = "RECONCILED";
-    await db.update(bankImportsTable).set(importUpdates as never).where(eq(bankImportsTable.id, line.importId));
+      await tx.update(bankStatementLinesTable).set({
+        status: "MATCHED",
+        matchedResidentId: useResident,
+        matchedLedgerEntryId: useEntry || null,
+        matchedPaymentId: payment!.id,
+        reconciledAt: new Date(),
+        reconciledBy: req.user?.id,
+      }).where(eq(bankStatementLinesTable.id, line.id));
+
+      // Update import counter and flip to RECONCILED when fully matched
+      const [{ count }] = await tx.select({ count: sql<number>`count(*)::int` }).from(bankStatementLinesTable)
+        .where(and(eq(bankStatementLinesTable.importId, line.importId), eq(bankStatementLinesTable.status, "MATCHED")));
+      const [imp] = await tx.select({ totalLines: bankImportsTable.totalLines }).from(bankImportsTable).where(eq(bankImportsTable.id, line.importId));
+      const importUpdates: Record<string, unknown> = { matchedLines: count };
+      if (imp && count >= imp.totalLines) importUpdates["status"] = "RECONCILED";
+      await tx.update(bankImportsTable).set(importUpdates as never).where(eq(bankImportsTable.id, line.importId));
+
+      return payment!;
+    });
 
     res.json({ success: true, data: { paymentId: pay.id } });
-  } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
+  } catch (err: any) {
+    if (err?.statusCode === 409) { res.status(409).json({ success: false, error: err.message }); return; }
+    if (err?.statusCode === 400) { res.status(400).json({ success: false, error: err.message }); return; }
+    req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" });
+  }
 });
 
 financeRouter.post("/bank-lines/:id/ignore", authenticate, authorize("BANKING", "edit"), async (req, res) => {

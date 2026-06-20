@@ -10,6 +10,9 @@ globalThis.require = createRequire(import.meta.url);
 
 const artifactDir = path.dirname(fileURLToPath(import.meta.url));
 
+/** Docker / production images log JSON to stdout — no pino-pretty worker threads. */
+const prodBundle = process.env.API_BUNDLE_TARGET === "production";
+
 async function buildAll() {
   const distDir = path.resolve(artifactDir, "dist");
   await rm(distDir, { recursive: true, force: true });
@@ -51,6 +54,7 @@ async function buildAll() {
       "mongodb-client-encryption",
       "nodemailer",
       "twilio",
+      "web-push",
       "bullmq",
       "ioredis",
       "handlebars",
@@ -105,10 +109,15 @@ async function buildAll() {
       "electron",
     ],
     sourcemap: "linked",
-    plugins: [
-      // pino relies on workers to handle logging, instead of externalizing it we use a plugin to handle it
-      esbuildPluginPino({ transports: ["pino-pretty"] })
-    ],
+    plugins: prodBundle
+      ? []
+      : [
+          // Dev/local bundles only: pino-pretty uses worker threads whose paths are
+          // resolved relative to the build output dir. Production Docker runs from a
+          // different WORKDIR, so skip the plugin there (logger.ts already avoids
+          // pino-pretty when NODE_ENV=production).
+          esbuildPluginPino({ transports: ["pino-pretty"] }),
+        ],
     // Make sure packages that are cjs only (e.g. express) but are bundled continue to work in our esm output file
     banner: {
       js: `import { createRequire as __bannerCrReq } from 'node:module';

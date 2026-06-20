@@ -6,6 +6,7 @@ import {
   Repeat, BellRing, Landmark, Receipt, Wrench, Zap, ClipboardCheck, Radio, Wallet,
   UtensilsCrossed, ListOrdered, FilePlus2, Soup, Send, CheckCircle2, Trash2, SlidersHorizontal,
   Network, Home,
+  DoorOpen, CalendarCheck, CalendarX, LineChart,
   type LucideIcon,
 } from "lucide-react"
 import { type Module } from "@/lib/permissions"
@@ -20,6 +21,7 @@ export const navGroups: NavGroup[] = [
   ]},
   { title: "Operations", items: [
     { title: "Properties", href: "/properties", icon: Building2, module: "PROPERTIES" },
+    { title: "Rooms", href: "/rooms", icon: DoorOpen, module: "PROPERTIES" },
     { title: "Residents", href: "/residents", icon: Users, module: "RESIDENTS" },
     { title: "Complaints", href: "/complaints", icon: AlertCircle, module: "COMPLAINTS" },
     { title: "Laundry", href: "/laundry", icon: WashingMachine, module: "LAUNDRY" },
@@ -31,6 +33,8 @@ export const navGroups: NavGroup[] = [
   ]},
   { title: "People", items: [
     { title: "Employees", href: "/employees", icon: UserCheck, module: "EMPLOYEES" },
+    { title: "Attendance", href: "/attendance", icon: CalendarCheck, module: "EMPLOYEES" },
+    { title: "Leaves", href: "/leaves", icon: CalendarX, module: "EMPLOYEES" },
     { title: "Recruitment", href: "/recruitment", icon: Briefcase, module: "RECRUITMENT" },
     { title: "Learning & Dev", href: "/courses", icon: GraduationCap, module: "LND" },
   ]},
@@ -60,6 +64,7 @@ export const navGroups: NavGroup[] = [
     { title: "Settings", href: "/food/settings", icon: SlidersHorizontal, module: "FOOD_SETTINGS" },
   ]},
   { title: "Growth", items: [
+    { title: "Sales Dashboard", href: "/sales/dashboard", icon: LineChart, module: "SALES_DASHBOARD" },
     { title: "Sales CRM", href: "/leads", icon: TrendingUp, module: "SALES_LEADS" },
     { title: "Property Leads", href: "/property-leads", icon: MapPin, module: "PROPERTY_LEADS" },
   ]},

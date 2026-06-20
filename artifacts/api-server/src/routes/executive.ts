@@ -32,7 +32,14 @@ executiveRouter.get("/kpis", async (_req, res) => {
 
 executiveRouter.get("/revenue-trend", async (_req, res) => {
   try {
-    const months: Array<{ month: string; rent: number; food: number; laundry: number; total: number }> = [];
+    // NOTE: payments are not tagged by revenue source (rent/food/laundry) — the
+    // payments table has no category column. The per-category split below is an
+    // ESTIMATE produced by applying fixed ratios to the real monthly total; only
+    // `total` is actual collected revenue. The response flags this via `estimated`.
+    const RENT_RATIO = 0.7;
+    const FOOD_RATIO = 0.2;
+    const LAUNDRY_RATIO = 0.1;
+    const months: Array<{ month: string; rent: number; food: number; laundry: number; total: number; estimated: boolean }> = [];
     const now = new Date();
     for (let i = 11; i >= 0; i--) {
       const monthStart = new Date(now.getFullYear(), now.getMonth() - i, 1);
@@ -43,13 +50,21 @@ executiveRouter.get("/revenue-trend", async (_req, res) => {
       const total = r.total || 0;
       months.push({
         month: monthStart.toLocaleString("en", { month: "short", year: "2-digit" }),
-        rent: Math.round(total * 0.7),
-        food: Math.round(total * 0.2),
-        laundry: Math.round(total * 0.1),
+        rent: Math.round(total * RENT_RATIO),
+        food: Math.round(total * FOOD_RATIO),
+        laundry: Math.round(total * LAUNDRY_RATIO),
         total,
+        estimated: true,
       });
     }
-    res.json({ success: true, data: months });
+    res.json({
+      success: true,
+      data: months,
+      meta: {
+        splitEstimated: true,
+        note: "rent/food/laundry are estimated by applying fixed 70/20/10 ratios to the actual monthly total; payments are not tagged by revenue source. Only `total` is actual collected revenue.",
+      },
+    });
   } catch (err) { _req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 

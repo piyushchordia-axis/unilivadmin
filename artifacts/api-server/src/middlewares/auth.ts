@@ -2,8 +2,11 @@ import { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
 import { db, usersTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
+import { SESSION_SECRET, JWT_ISSUER, JWT_AUDIENCE } from "../config/env.js";
 
-const JWT_SECRET = process.env["SESSION_SECRET"] || "uniliv-secret";
+// Single source of truth for the signing secret. Validated/fail-closed in
+// config/env.ts — there is intentionally no insecure inline fallback here.
+const JWT_SECRET = SESSION_SECRET;
 
 export interface AuthUser {
   id: string;
@@ -31,10 +34,18 @@ export async function authenticate(req: Request, res: Response, next: NextFuncti
     return;
   }
 
-  let payload: AuthUser;
+  let payload: AuthUser & { typ?: string };
   try {
-    payload = jwt.verify(token, JWT_SECRET) as AuthUser;
+    payload = jwt.verify(token, JWT_SECRET, {
+      issuer: JWT_ISSUER,
+      audience: JWT_AUDIENCE,
+    }) as AuthUser & { typ?: string };
   } catch {
+    res.status(401).json({ success: false, error: "Invalid or expired token" });
+    return;
+  }
+  // A refresh token (typ:"refresh") must never be accepted as an access token.
+  if (payload.typ && payload.typ !== "access") {
     res.status(401).json({ success: false, error: "Invalid or expired token" });
     return;
   }
@@ -91,9 +102,17 @@ export function authorize(...roles: string[]) {
 }
 
 export function signAccessToken(user: AuthUser): string {
-  return jwt.sign(user, JWT_SECRET, { expiresIn: "15m" });
+  return jwt.sign({ ...user, typ: "access" }, JWT_SECRET, {
+    expiresIn: "15m",
+    issuer: JWT_ISSUER,
+    audience: JWT_AUDIENCE,
+  });
 }
 
 export function signRefreshToken(userId: string): string {
-  return jwt.sign({ userId }, JWT_SECRET, { expiresIn: "7d" });
+  return jwt.sign({ userId, typ: "refresh" }, JWT_SECRET, {
+    expiresIn: "7d",
+    issuer: JWT_ISSUER,
+    audience: JWT_AUDIENCE,
+  });
 }

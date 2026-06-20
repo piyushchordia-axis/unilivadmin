@@ -464,8 +464,21 @@ foodOpsRouter.post("/orders/:id/reject", authenticate, authorize("FOOD_KITCHEN_S
  * Dispatch trips (Persona st.24)
  * ════════════════════════════════════════════════════════════════════════ */
 
+/** A dispatch is accessible if at least one of its orders is in the caller's scope. */
+async function isDispatchAccessible(dispatchId: string, ids: string[] | null): Promise<boolean> {
+  if (ids === null) return true;
+  if (!ids.length) return false;
+  const orders = await db.select({ propertyId: foodOrdersTable.propertyId }).from(foodOrdersTable).where(eq(foodOrdersTable.dispatchId, dispatchId));
+  return orders.some((o) => isAccessible(o.propertyId, ids));
+}
+
 foodOpsRouter.get("/dispatches", authenticate, authorize("FOOD_DISPATCH", "view"), async (req, res) => {
   try {
+    const ids = await resolveAccessiblePropertyIds(req.user!);
+    // Org-wide roles see all; scoped roles only see trips that include an accessible order.
+    const scope = ids === null ? undefined : (ids.length
+      ? sql`exists (select 1 from ${foodOrdersTable} where ${foodOrdersTable.dispatchId} = ${foodDispatchesTable.id} and ${inArray(foodOrdersTable.propertyId, ids)})`
+      : sql`false`);
     const rows = await db.select({
       d: foodDispatchesTable,
       kitchenName: kitchensTable.name,
@@ -475,6 +488,7 @@ foodOpsRouter.get("/dispatches", authenticate, authorize("FOOD_DISPATCH", "view"
     }).from(foodDispatchesTable)
       .leftJoin(kitchensTable, eq(foodDispatchesTable.kitchenId, kitchensTable.id))
       .leftJoin(agenciesTable, eq(foodDispatchesTable.deliveryPartnerId, agenciesTable.id))
+      .where(scope)
       .orderBy(desc(foodDispatchesTable.createdAt)).limit(100);
     res.json({ success: true, data: rows.map((r) => ({ ...r.d, kitchenName: r.kitchenName, kitchenCode: r.kitchenCode, partnerName: r.partnerName, orderCount: r.orderCount })) });
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
@@ -490,6 +504,8 @@ foodOpsRouter.get("/dispatches/:id", authenticate, authorize("FOOD_DISPATCH", "v
       .leftJoin(agenciesTable, eq(foodDispatchesTable.deliveryPartnerId, agenciesTable.id))
       .where(eq(foodDispatchesTable.id, id));
     if (!row) { res.status(404).json({ success: false, error: "Not found" }); return; }
+    const ids = await resolveAccessiblePropertyIds(req.user!);
+    if (!(await isDispatchAccessible(id, ids))) { res.status(403).json({ success: false, error: "Dispatch not accessible" }); return; }
     const orders = await db.select({
       o: foodOrdersTable, propertyName: propertiesTable.name,
     }).from(foodOrdersTable).leftJoin(propertiesTable, eq(foodOrdersTable.propertyId, propertiesTable.id))
@@ -557,6 +573,8 @@ foodOpsRouter.patch("/dispatches/:id/status", authenticate, authorize("FOOD_DISP
   try {
     const status = req.body?.status as string;
     if (!["LOADING", "IN_TRANSIT", "DELIVERED", "PARTIAL"].includes(status)) { res.status(400).json({ success: false, error: "Invalid status" }); return; }
+    const ids = await resolveAccessiblePropertyIds(req.user!);
+    if (!(await isDispatchAccessible(req.params["id"]!, ids))) { res.status(403).json({ success: false, error: "Dispatch not accessible" }); return; }
     const [row] = await db.update(foodDispatchesTable).set({ status: status as never, updatedAt: new Date() }).where(eq(foodDispatchesTable.id, req.params["id"]!)).returning();
     if (!row) { res.status(404).json({ success: false, error: "Not found" }); return; }
     res.json({ success: true, data: row });
@@ -699,6 +717,8 @@ foodOpsRouter.post("/menu/share", authenticate, authorize("FOOD_PLACE_ORDER", "v
   try {
     const b = req.body || {};
     if (!b.propertyId || !b.brand || !b.channel) { res.status(400).json({ success: false, error: "propertyId, brand, channel required" }); return; }
+    const ids = await resolveAccessiblePropertyIds(req.user!);
+    if (!isAccessible(b.propertyId, ids)) { res.status(403).json({ success: false, error: "Property not accessible" }); return; }
     let recipients: string[] = Array.isArray(b.recipients) ? b.recipients : [];
     if (b.recipientType === "GUESTS") {
       const rows = await db.select({ id: residentsTable.id, name: residentsTable.name, phone: residentsTable.phone })
@@ -991,14 +1011,21 @@ foodOpsRouter.get("/revenue", authenticate, authorize("FOOD_DASHBOARD", "view"),
 });
 
 /** Active-guest list with global search (name/phone/email/room/PAN/Aadhaar). */
-async function fetchGuests(req: any) {
+async function fetchGuests(req: any, res: any): Promise<{ where: any } | null> {
   const ids = await resolveAccessiblePropertyIds(req.user!);
   const propertyId = req.query["propertyId"] as string | undefined;
   const search = (req.query["search"] as string | undefined)?.trim();
 
+  // An explicit propertyId must never bypass the caller's accessible scope.
+  if (propertyId && !isAccessible(propertyId, ids)) {
+    res.status(403).json({ success: false, error: "Property not accessible" });
+    return null;
+  }
+
   const conds = [eq(residentsTable.status, "ACTIVE")] as any[];
+  // Always apply the accessible-property scope; the explicit filter narrows within it.
+  if (ids !== null) conds.push(ids.length ? inArray(residentsTable.propertyId, ids) : sql`false`);
   if (propertyId) conds.push(eq(residentsTable.propertyId, propertyId));
-  else if (ids !== null) conds.push(ids.length ? inArray(residentsTable.propertyId, ids) : sql`false`);
 
   if (search) {
     const like = `%${search}%`;
@@ -1021,7 +1048,8 @@ async function fetchGuests(req: any) {
 foodOpsRouter.get("/guests", authenticate, authorize("FOOD_DASHBOARD", "view"), async (req, res) => {
   try {
     const { page, limit, offset } = getPagination(req.query as Record<string, unknown>);
-    const { where } = await fetchGuests(req);
+    const guard = await fetchGuests(req, res); if (!guard) return;
+    const { where } = guard;
     const [c] = await db.select({ count: sql<number>`count(*)::int` }).from(residentsTable).where(where);
     const rows = await db.select({
       r: residentsTable, propertyName: propertiesTable.name, roomNumber: roomsTable.number,
@@ -1039,8 +1067,9 @@ foodOpsRouter.get("/guests", authenticate, authorize("FOOD_DASHBOARD", "view"), 
 });
 
 const GUEST_HEADERS = ["Guest ID", "Name", "Mobile", "Email", "Gender", "Room", "Property", "Guest Since"];
-async function guestExportRows(req: any) {
-  const { where } = await fetchGuests(req);
+async function guestExportRows(req: any, res: any): Promise<(string | number | null | undefined)[][] | null> {
+  const guard = await fetchGuests(req, res); if (!guard) return null;
+  const { where } = guard;
   const rows = await db.select({ r: residentsTable, propertyName: propertiesTable.name, roomNumber: roomsTable.number })
     .from(residentsTable).leftJoin(propertiesTable, eq(residentsTable.propertyId, propertiesTable.id))
     .leftJoin(roomsTable, eq(residentsTable.roomId, roomsTable.id)).where(where).orderBy(residentsTable.name);
@@ -1052,7 +1081,7 @@ async function guestExportRows(req: any) {
 
 foodOpsRouter.get("/guests/export.xlsx", authenticate, authorize("FOOD_DASHBOARD", "view"), async (req, res) => {
   try {
-    const rows = await guestExportRows(req);
+    const rows = await guestExportRows(req, res); if (!rows) return;
     res.setHeader("Content-Type", "application/vnd.ms-excel");
     res.setHeader("Content-Disposition", "attachment; filename=active-guests.xls");
     res.send(toXls({ title: "Active Guests", headers: GUEST_HEADERS, rows }));
@@ -1061,7 +1090,7 @@ foodOpsRouter.get("/guests/export.xlsx", authenticate, authorize("FOOD_DASHBOARD
 
 foodOpsRouter.get("/guests/export.pdf", authenticate, authorize("FOOD_DASHBOARD", "view"), async (req, res) => {
   try {
-    const rows = await guestExportRows(req);
+    const rows = await guestExportRows(req, res); if (!rows) return;
     const pdf = await toPdf({ title: "Active Guests", headers: GUEST_HEADERS, rows });
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", "attachment; filename=active-guests.pdf");

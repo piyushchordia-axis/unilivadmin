@@ -884,7 +884,7 @@ foodRouter.get("/reports/export", authenticate, authorize("FOOD_REPORTS", "view"
  * Master data — Lookups
  * ──────────────────────────────────────────────────────────────────────────── */
 
-foodRouter.get("/lookups", authenticate, async (req, res) => {
+foodRouter.get("/lookups", authenticate, authorize("FOOD_SETTINGS", "view"), async (req, res) => {
   try {
     const properties = await db.select({
       id: propertiesTable.id, name: propertiesTable.name,
@@ -911,7 +911,7 @@ foodRouter.get("/lookups", authenticate, async (req, res) => {
  * Master data — Dishes
  * ──────────────────────────────────────────────────────────────────────────── */
 
-foodRouter.get("/dishes", authenticate, async (req, res) => {
+foodRouter.get("/dishes", authenticate, authorize("FOOD_SETTINGS", "view"), async (req, res) => {
   try {
     const component = req.query["component"] as string | undefined;
     const search = req.query["search"] as string | undefined;
@@ -975,7 +975,7 @@ foodRouter.post("/dishes", authenticate, authorize("FOOD_SETTINGS", "create"), a
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-foodRouter.get("/dishes/:id", authenticate, async (req, res) => {
+foodRouter.get("/dishes/:id", authenticate, authorize("FOOD_SETTINGS", "view"), async (req, res) => {
   try {
     const [row] = await db.select().from(dishesTable).where(eq(dishesTable.id, req.params["id"]!));
     if (!row) { res.status(404).json({ success: false, error: "Not found" }); return; }
@@ -1009,7 +1009,7 @@ foodRouter.delete("/dishes/:id", authenticate, authorize("FOOD_SETTINGS", "delet
  * Master data — Raw materials (ingredients)
  * ──────────────────────────────────────────────────────────────────────────── */
 
-foodRouter.get("/raw-materials", authenticate, async (req, res) => {
+foodRouter.get("/raw-materials", authenticate, authorize("FOOD_SETTINGS", "view"), async (req, res) => {
   try {
     const search = req.query["search"] as string | undefined;
     const active = req.query["active"] as string | undefined;
@@ -1055,7 +1055,7 @@ foodRouter.delete("/raw-materials/:id", authenticate, authorize("FOOD_SETTINGS",
  * Master data — Menu rotation
  * ──────────────────────────────────────────────────────────────────────────── */
 
-foodRouter.get("/menu-rotation/resolve", authenticate, async (req, res) => {
+foodRouter.get("/menu-rotation/resolve", authenticate, authorize("FOOD_SETTINGS", "view"), async (req, res) => {
   try {
     const propertyId = req.query["propertyId"] as string | undefined;
     let brand = req.query["brand"] as string | undefined;
@@ -1073,7 +1073,7 @@ foodRouter.get("/menu-rotation/resolve", authenticate, async (req, res) => {
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-foodRouter.get("/menu-rotation", authenticate, async (req, res) => {
+foodRouter.get("/menu-rotation", authenticate, authorize("FOOD_SETTINGS", "view"), async (req, res) => {
   try {
     const brand = req.query["brand"] as string | undefined;
     const kitchenId = req.query["kitchenId"] as string | undefined;
@@ -1231,7 +1231,7 @@ foodRouter.put("/menu-rotation/slot", authenticate, authorize("FOOD_SETTINGS", "
 });
 
 // Validate the chosen dishes against the composition rule + flag shared ingredients.
-foodRouter.get("/menu-rotation/validate", authenticate, async (req, res) => {
+foodRouter.get("/menu-rotation/validate", authenticate, authorize("FOOD_SETTINGS", "view"), async (req, res) => {
   try {
     const brand = req.query["brand"] as string | undefined;
     const mealType = req.query["mealType"] as string | undefined;
@@ -1248,7 +1248,7 @@ foodRouter.get("/menu-rotation/validate", authenticate, async (req, res) => {
 });
 
 // Suggested dishes to satisfy the composition rule for a (kitchen, brand, meal).
-foodRouter.get("/menu-rotation/auto-fill", authenticate, async (req, res) => {
+foodRouter.get("/menu-rotation/auto-fill", authenticate, authorize("FOOD_SETTINGS", "view"), async (req, res) => {
   try {
     const brand = req.query["brand"] as string | undefined;
     const mealType = req.query["mealType"] as string | undefined;
@@ -1286,7 +1286,7 @@ foodRouter.delete("/menu-rotation/:id", authenticate, authorize("FOOD_SETTINGS",
  * Master data — Per-resident rules
  * ──────────────────────────────────────────────────────────────────────────── */
 
-foodRouter.get("/rules", authenticate, async (req, res) => {
+foodRouter.get("/rules", authenticate, authorize("FOOD_SETTINGS", "view"), async (req, res) => {
   try {
     const brand = req.query["brand"] as string | undefined;
     const mealType = req.query["mealType"] as string | undefined;
@@ -1367,7 +1367,7 @@ const slotValues = (ruleId: string, slots: any[]) =>
     updatedAt: new Date(),
   }));
 
-foodRouter.get("/composition-rules", authenticate, async (req, res) => {
+foodRouter.get("/composition-rules", authenticate, authorize("FOOD_SETTINGS", "view"), async (req, res) => {
   try {
     const brand = req.query["brand"] as string | undefined;
     const mealType = req.query["mealType"] as string | undefined;
@@ -1436,7 +1436,7 @@ foodRouter.delete("/composition-rules/:id", authenticate, authorize("FOOD_SETTIN
  * Master data — Delivery partners
  * ──────────────────────────────────────────────────────────────────────────── */
 
-foodRouter.get("/delivery-partners", authenticate, async (req, res) => {
+foodRouter.get("/delivery-partners", authenticate, authorize("FOOD_SETTINGS", "view"), async (req, res) => {
   try {
     const active = req.query["active"] as string | undefined;
     const where = active !== undefined ? eq(deliveryPartnersTable.isActive, active === "true") : undefined;
@@ -1484,7 +1484,7 @@ foodRouter.delete("/delivery-partners/:id", authenticate, authorize("FOOD_SETTIN
  * Master data — Delivery agencies (→ locations + vehicles)
  * ──────────────────────────────────────────────────────────────────────────── */
 
-foodRouter.get("/agencies", authenticate, async (req, res) => {
+foodRouter.get("/agencies", authenticate, authorize("FOOD_ORG", "view"), async (req, res) => {
   try {
     const active = req.query["active"] as string | undefined;
     const where = active !== undefined ? eq(agenciesTable.isActive, active === "true") : undefined;
@@ -1498,7 +1498,7 @@ foodRouter.get("/agencies", authenticate, async (req, res) => {
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-foodRouter.post("/agencies", authenticate, authorize("FOOD_SETTINGS", "create"), async (req, res) => {
+foodRouter.post("/agencies", authenticate, authorize("FOOD_ORG", "create"), async (req, res) => {
   try {
     const b = req.body || {};
     if (!b.name) { res.status(400).json({ success: false, error: "name required" }); return; }
@@ -1510,7 +1510,7 @@ foodRouter.post("/agencies", authenticate, authorize("FOOD_SETTINGS", "create"),
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-foodRouter.put("/agencies/:id", authenticate, authorize("FOOD_SETTINGS", "edit"), async (req, res) => {
+foodRouter.put("/agencies/:id", authenticate, authorize("FOOD_ORG", "edit"), async (req, res) => {
   try {
     const b = req.body || {};
     const u: Record<string, unknown> = { updatedAt: new Date() };
@@ -1521,7 +1521,7 @@ foodRouter.put("/agencies/:id", authenticate, authorize("FOOD_SETTINGS", "edit")
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-foodRouter.delete("/agencies/:id", authenticate, authorize("FOOD_SETTINGS", "delete"), async (req, res) => {
+foodRouter.delete("/agencies/:id", authenticate, authorize("FOOD_ORG", "delete"), async (req, res) => {
   try {
     const [row] = await db.update(agenciesTable).set({ isActive: false, updatedAt: new Date() }).where(eq(agenciesTable.id, req.params["id"]!)).returning();
     if (!row) { res.status(404).json({ success: false, error: "Not found" }); return; }
@@ -1530,7 +1530,7 @@ foodRouter.delete("/agencies/:id", authenticate, authorize("FOOD_SETTINGS", "del
 });
 
 // Nested locations (flat update/delete paths to avoid :id collisions)
-foodRouter.post("/agencies/:id/locations", authenticate, authorize("FOOD_SETTINGS", "create"), async (req, res) => {
+foodRouter.post("/agencies/:id/locations", authenticate, authorize("FOOD_ORG", "create"), async (req, res) => {
   try {
     const b = req.body || {};
     if (!b.name) { res.status(400).json({ success: false, error: "name required" }); return; }
@@ -1543,7 +1543,7 @@ foodRouter.post("/agencies/:id/locations", authenticate, authorize("FOOD_SETTING
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-foodRouter.put("/agency-locations/:id", authenticate, authorize("FOOD_SETTINGS", "edit"), async (req, res) => {
+foodRouter.put("/agency-locations/:id", authenticate, authorize("FOOD_ORG", "edit"), async (req, res) => {
   try {
     const b = req.body || {};
     const u: Record<string, unknown> = { updatedAt: new Date() };
@@ -1554,7 +1554,7 @@ foodRouter.put("/agency-locations/:id", authenticate, authorize("FOOD_SETTINGS",
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-foodRouter.delete("/agency-locations/:id", authenticate, authorize("FOOD_SETTINGS", "delete"), async (req, res) => {
+foodRouter.delete("/agency-locations/:id", authenticate, authorize("FOOD_ORG", "delete"), async (req, res) => {
   try {
     await db.delete(agencyLocationsTable).where(eq(agencyLocationsTable.id, req.params["id"]!));
     res.json({ success: true });
@@ -1562,7 +1562,7 @@ foodRouter.delete("/agency-locations/:id", authenticate, authorize("FOOD_SETTING
 });
 
 // Nested vehicles
-foodRouter.post("/agencies/:id/vehicles", authenticate, authorize("FOOD_SETTINGS", "create"), async (req, res) => {
+foodRouter.post("/agencies/:id/vehicles", authenticate, authorize("FOOD_ORG", "create"), async (req, res) => {
   try {
     const b = req.body || {};
     if (!b.vehicleNumber) { res.status(400).json({ success: false, error: "vehicleNumber required" }); return; }
@@ -1574,7 +1574,7 @@ foodRouter.post("/agencies/:id/vehicles", authenticate, authorize("FOOD_SETTINGS
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-foodRouter.put("/agency-vehicles/:id", authenticate, authorize("FOOD_SETTINGS", "edit"), async (req, res) => {
+foodRouter.put("/agency-vehicles/:id", authenticate, authorize("FOOD_ORG", "edit"), async (req, res) => {
   try {
     const b = req.body || {};
     const u: Record<string, unknown> = { updatedAt: new Date() };
@@ -1585,7 +1585,7 @@ foodRouter.put("/agency-vehicles/:id", authenticate, authorize("FOOD_SETTINGS", 
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-foodRouter.delete("/agency-vehicles/:id", authenticate, authorize("FOOD_SETTINGS", "delete"), async (req, res) => {
+foodRouter.delete("/agency-vehicles/:id", authenticate, authorize("FOOD_ORG", "delete"), async (req, res) => {
   try {
     await db.delete(agencyVehiclesTable).where(eq(agencyVehiclesTable.id, req.params["id"]!));
     res.json({ success: true });
@@ -1596,14 +1596,14 @@ foodRouter.delete("/agency-vehicles/:id", authenticate, authorize("FOOD_SETTINGS
  * Master data — Geographic hierarchy
  * ──────────────────────────────────────────────────────────────────────────── */
 
-foodRouter.get("/zones", authenticate, async (req, res) => {
+foodRouter.get("/zones", authenticate, authorize("FOOD_ORG", "view"), async (req, res) => {
   try {
     const rows = await db.select().from(zonesTable).orderBy(zonesTable.name);
     res.json({ success: true, data: rows });
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-foodRouter.post("/zones", authenticate, authorize("FOOD_SETTINGS", "create"), async (req, res) => {
+foodRouter.post("/zones", authenticate, authorize("FOOD_ORG", "create"), async (req, res) => {
   try {
     const b = req.body || {};
     if (!b.name) { res.status(400).json({ success: false, error: "name required" }); return; }
@@ -1614,7 +1614,7 @@ foodRouter.post("/zones", authenticate, authorize("FOOD_SETTINGS", "create"), as
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-foodRouter.put("/zones/:id", authenticate, authorize("FOOD_SETTINGS", "edit"), async (req, res) => {
+foodRouter.put("/zones/:id", authenticate, authorize("FOOD_ORG", "edit"), async (req, res) => {
   try {
     const b = req.body || {};
     const u: Record<string, unknown> = { updatedAt: new Date() };
@@ -1625,14 +1625,14 @@ foodRouter.put("/zones/:id", authenticate, authorize("FOOD_SETTINGS", "edit"), a
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-foodRouter.delete("/zones/:id", authenticate, authorize("FOOD_SETTINGS", "delete"), async (req, res) => {
+foodRouter.delete("/zones/:id", authenticate, authorize("FOOD_ORG", "delete"), async (req, res) => {
   try {
     await db.delete(zonesTable).where(eq(zonesTable.id, req.params["id"]!));
     res.json({ success: true });
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-foodRouter.get("/cities", authenticate, async (req, res) => {
+foodRouter.get("/cities", authenticate, authorize("FOOD_ORG", "view"), async (req, res) => {
   try {
     const zoneId = req.query["zoneId"] as string | undefined;
     const where = zoneId ? eq(citiesTable.zoneId, zoneId) : undefined;
@@ -1641,7 +1641,7 @@ foodRouter.get("/cities", authenticate, async (req, res) => {
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-foodRouter.post("/cities", authenticate, authorize("FOOD_SETTINGS", "create"), async (req, res) => {
+foodRouter.post("/cities", authenticate, authorize("FOOD_ORG", "create"), async (req, res) => {
   try {
     const b = req.body || {};
     if (!b.name) { res.status(400).json({ success: false, error: "name required" }); return; }
@@ -1652,7 +1652,7 @@ foodRouter.post("/cities", authenticate, authorize("FOOD_SETTINGS", "create"), a
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-foodRouter.put("/cities/:id", authenticate, authorize("FOOD_SETTINGS", "edit"), async (req, res) => {
+foodRouter.put("/cities/:id", authenticate, authorize("FOOD_ORG", "edit"), async (req, res) => {
   try {
     const b = req.body || {};
     const u: Record<string, unknown> = { updatedAt: new Date() };
@@ -1663,14 +1663,14 @@ foodRouter.put("/cities/:id", authenticate, authorize("FOOD_SETTINGS", "edit"), 
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-foodRouter.delete("/cities/:id", authenticate, authorize("FOOD_SETTINGS", "delete"), async (req, res) => {
+foodRouter.delete("/cities/:id", authenticate, authorize("FOOD_ORG", "delete"), async (req, res) => {
   try {
     await db.delete(citiesTable).where(eq(citiesTable.id, req.params["id"]!));
     res.json({ success: true });
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-foodRouter.get("/clusters", authenticate, async (req, res) => {
+foodRouter.get("/clusters", authenticate, authorize("FOOD_ORG", "view"), async (req, res) => {
   try {
     const cityId = req.query["cityId"] as string | undefined;
     const where = cityId ? eq(clustersTable.cityId, cityId) : undefined;
@@ -1679,7 +1679,7 @@ foodRouter.get("/clusters", authenticate, async (req, res) => {
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-foodRouter.post("/clusters", authenticate, authorize("FOOD_SETTINGS", "create"), async (req, res) => {
+foodRouter.post("/clusters", authenticate, authorize("FOOD_ORG", "create"), async (req, res) => {
   try {
     const b = req.body || {};
     if (!b.name || !b.cityId) { res.status(400).json({ success: false, error: "name, cityId required" }); return; }
@@ -1690,7 +1690,7 @@ foodRouter.post("/clusters", authenticate, authorize("FOOD_SETTINGS", "create"),
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-foodRouter.put("/clusters/:id", authenticate, authorize("FOOD_SETTINGS", "edit"), async (req, res) => {
+foodRouter.put("/clusters/:id", authenticate, authorize("FOOD_ORG", "edit"), async (req, res) => {
   try {
     const b = req.body || {};
     const u: Record<string, unknown> = { updatedAt: new Date() };
@@ -1701,14 +1701,14 @@ foodRouter.put("/clusters/:id", authenticate, authorize("FOOD_SETTINGS", "edit")
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-foodRouter.delete("/clusters/:id", authenticate, authorize("FOOD_SETTINGS", "delete"), async (req, res) => {
+foodRouter.delete("/clusters/:id", authenticate, authorize("FOOD_ORG", "delete"), async (req, res) => {
   try {
     await db.delete(clustersTable).where(eq(clustersTable.id, req.params["id"]!));
     res.json({ success: true });
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-foodRouter.post("/properties/:id/assign-cluster", authenticate, authorize("FOOD_SETTINGS", "edit"), async (req, res) => {
+foodRouter.post("/properties/:id/assign-cluster", authenticate, authorize("FOOD_ORG", "edit"), async (req, res) => {
   try {
     const clusterId = req.body?.clusterId ?? null;
     const [row] = await db.update(propertiesTable).set({ clusterId, updatedAt: new Date() }).where(eq(propertiesTable.id, req.params["id"]!)).returning();
@@ -1721,7 +1721,7 @@ foodRouter.post("/properties/:id/assign-cluster", authenticate, authorize("FOOD_
  * Master data — User scopes
  * ──────────────────────────────────────────────────────────────────────────── */
 
-foodRouter.get("/scopes", authenticate, async (req, res) => {
+foodRouter.get("/scopes", authenticate, authorize("FOOD_ORG", "view"), async (req, res) => {
   try {
     const userId = req.query["userId"] as string | undefined;
     const where = userId ? eq(userScopesTable.userId, userId) : undefined;
@@ -1730,10 +1730,19 @@ foodRouter.get("/scopes", authenticate, async (req, res) => {
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-foodRouter.post("/scopes", authenticate, authorize("FOOD_SETTINGS", "create"), async (req, res) => {
+foodRouter.post("/scopes", authenticate, authorize("FOOD_ORG", "edit"), async (req, res) => {
   try {
     const b = req.body || {};
     if (!b.userId || !b.scopeLevel) { res.status(400).json({ success: false, error: "userId, scopeLevel required" }); return; }
+    // This is the org's access-control plane: forbid granting a scope to yourself
+    // (no self-escalation), and restrict minting GLOBAL access to the two
+    // genuinely org-wide roles. Respond inline (not throw) so the route's local
+    // catch can't downgrade the 403 to a generic 500.
+    if (b.userId === req.user!.id) { res.status(403).json({ success: false, error: "Cannot grant an access scope to yourself" }); return; }
+    if (b.scopeLevel === "GLOBAL" && req.user!.role !== "SUPER_ADMIN" && req.user!.role !== "OPS_EXCELLENCE") {
+      res.status(403).json({ success: false, error: "Only SUPER_ADMIN or OPS_EXCELLENCE may grant a GLOBAL scope" });
+      return;
+    }
     const geoIdByLevel: Record<string, string | undefined> = {
       ZONE: b.zoneId,
       CITY: b.cityId,
@@ -1760,7 +1769,7 @@ foodRouter.post("/scopes", authenticate, authorize("FOOD_SETTINGS", "create"), a
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-foodRouter.delete("/scopes/:id", authenticate, authorize("FOOD_SETTINGS", "delete"), async (req, res) => {
+foodRouter.delete("/scopes/:id", authenticate, authorize("FOOD_ORG", "delete"), async (req, res) => {
   try {
     await db.delete(userScopesTable).where(eq(userScopesTable.id, req.params["id"]!));
     res.json({ success: true });
@@ -1771,7 +1780,7 @@ foodRouter.delete("/scopes/:id", authenticate, authorize("FOOD_SETTINGS", "delet
  * Master data — Food users
  * ──────────────────────────────────────────────────────────────────────────── */
 
-foodRouter.get("/food-users", authenticate, async (req, res) => {
+foodRouter.get("/food-users", authenticate, authorize("FOOD_ORG", "view"), async (req, res) => {
   try {
     const rows = await db.select({
       id: usersTable.id,

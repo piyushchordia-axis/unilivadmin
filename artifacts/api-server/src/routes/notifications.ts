@@ -1,8 +1,9 @@
 import { Router } from "express";
 import { db, notificationsTable, refreshTokensTable } from "@workspace/db";
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, desc, sql } from "drizzle-orm";
 import { authenticate } from "../middlewares/auth.js";
 import { newId } from "../lib/id.js";
+import { getPagination, buildMeta } from "../lib/paginate.js";
 import { onNotification, emitNotification } from "../lib/notification-events.js";
 
 export const notificationsRouter = Router();
@@ -40,14 +41,32 @@ notificationsRouter.get("/stream", async (req, res) => {
 
 notificationsRouter.get("/", authenticate, async (req, res) => {
   try {
+    const { page, limit, offset } = getPagination(req.query as Record<string, unknown>);
+    const owned = eq(notificationsTable.userId, req.user!.id);
+
     const rows = await db
       .select()
       .from(notificationsTable)
-      .where(eq(notificationsTable.userId, req.user!.id))
+      .where(owned)
       .orderBy(desc(notificationsTable.createdAt))
-      .limit(20);
-    const unreadCount = rows.filter((r) => !r.isRead).length;
-    res.json({ success: true, data: rows, meta: { unreadCount } });
+      .limit(limit)
+      .offset(offset);
+
+    // Count over the FULL owned set, not just the returned page.
+    const [{ total }] = await db
+      .select({ total: sql<number>`count(*)::int` })
+      .from(notificationsTable)
+      .where(owned);
+    const [{ unreadCount }] = await db
+      .select({ unreadCount: sql<number>`count(*)::int` })
+      .from(notificationsTable)
+      .where(and(owned, eq(notificationsTable.isRead, false)));
+
+    res.json({
+      success: true,
+      data: rows,
+      meta: { ...buildMeta(total, page, limit), unreadCount },
+    });
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 

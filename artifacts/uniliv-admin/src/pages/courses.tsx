@@ -21,6 +21,7 @@ import { StatCard } from "@/components/stat-card";
 import { Plus, Play, FileText, Layers, BookOpen, GraduationCap, Award, Download } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
+import jsPDF from "jspdf";
 
 const CATEGORIES = ["Onboarding", "Compliance", "Safety", "Skills", "Leadership", "Customer Service", "Other"];
 const ROLES = ["Property Manager", "Front Desk", "Housekeeping", "Security", "Kitchen", "Maintenance", "Sales", "All"];
@@ -75,6 +76,74 @@ export default function Courses() {
 
   const targetRoles = form.watch("targetRoles") || [];
   const toggleRole = (r: string) => form.setValue("targetRoles", targetRoles.includes(r) ? targetRoles.filter((x) => x !== r) : [...targetRoles, r]);
+
+  // No backend certificate endpoint exists, so we render a printable certificate
+  // client-side (jsPDF) from the data already returned by /courses/stats.
+  const downloadCertificate = (cert: any) => {
+    try {
+      const doc = new jsPDF({ orientation: "landscape", unit: "pt", format: "a4" });
+      const w = doc.internal.pageSize.getWidth();
+      const h = doc.internal.pageSize.getHeight();
+
+      // border
+      doc.setDrawColor(217, 119, 6); // amber-600
+      doc.setLineWidth(3);
+      doc.rect(24, 24, w - 48, h - 48);
+      doc.setLineWidth(1);
+      doc.rect(34, 34, w - 68, h - 68);
+
+      doc.setTextColor(120, 113, 108);
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(12);
+      doc.text("UNILIV · LEARNING & DEVELOPMENT", w / 2, 96, { align: "center" });
+
+      doc.setTextColor(28, 25, 23);
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(34);
+      doc.text("Certificate of Completion", w / 2, 150, { align: "center" });
+
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(13);
+      doc.setTextColor(120, 113, 108);
+      doc.text("This certifies that", w / 2, 200, { align: "center" });
+
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(26);
+      doc.setTextColor(217, 119, 6);
+      doc.text(`${cert.employeeName || "—"}`, w / 2, 240, { align: "center" });
+
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(12);
+      doc.setTextColor(120, 113, 108);
+      doc.text(`Employee Code: ${cert.employeeCode || "—"}`, w / 2, 264, { align: "center" });
+
+      doc.setFontSize(13);
+      doc.setTextColor(28, 25, 23);
+      doc.text("has successfully completed the course", w / 2, 308, { align: "center" });
+
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(20);
+      doc.text(`${cert.courseTitle || "—"}`, w / 2, 344, { align: "center" });
+
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(13);
+      doc.setTextColor(120, 113, 108);
+      const score = cert.score != null ? `${cert.score}%` : "—";
+      const dateStr = cert.completedAt ? new Date(cert.completedAt).toLocaleDateString() : "—";
+      doc.text(`Score: ${score}    ·    Completed: ${dateStr}`, w / 2, 380, { align: "center" });
+
+      // signature line
+      doc.setDrawColor(120, 113, 108);
+      doc.setLineWidth(0.8);
+      doc.line(w / 2 - 110, h - 80, w / 2 + 110, h - 80);
+      doc.setFontSize(11);
+      doc.text("Authorised Signatory · Uniliv", w / 2, h - 62, { align: "center" });
+
+      window.open(doc.output("bloburl"), "_blank");
+    } catch (e: any) {
+      toast({ title: "Could not generate certificate", description: e?.message, variant: "destructive" });
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -156,7 +225,7 @@ export default function Courses() {
                           <td className="p-3">{c.courseTitle}</td>
                           <td className="text-right p-3">{c.score}%</td>
                           <td className="text-right p-3 text-xs">{c.completedAt ? new Date(c.completedAt).toLocaleDateString() : "—"}</td>
-                          <td className="p-3"><Button variant="ghost" size="icon"><Download className="h-4 w-4" /></Button></td>
+                          <td className="p-3"><Button variant="ghost" size="icon" onClick={() => downloadCertificate(c)} title="Download certificate"><Download className="h-4 w-4" /></Button></td>
                         </tr>
                       ))}
                       {!stats.certificates?.length && <tr><td colSpan={5} className="text-center p-6 text-muted-foreground">No certificates yet</td></tr>}

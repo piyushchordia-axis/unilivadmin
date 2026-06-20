@@ -7,10 +7,11 @@ import {
 } from "@workspace/db";
 import { sql, eq, and, gte } from "drizzle-orm";
 import { authenticate } from "../middlewares/auth.js";
+import { authorize } from "../middlewares/authorize.js";
 
 const router = Router();
 
-router.get("/stats", authenticate, async (req, res) => {
+router.get("/stats", authenticate, authorize("DASHBOARD", "view"), async (req, res) => {
   try {
     const propertyId = req.query["propertyId"] as string | undefined;
 
@@ -80,7 +81,7 @@ router.get("/stats", authenticate, async (req, res) => {
   }
 });
 
-router.get("/charts", authenticate, async (req, res) => {
+router.get("/charts", authenticate, authorize("DASHBOARD", "view"), async (req, res) => {
   try {
     const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
     const now = new Date();

@@ -8,12 +8,14 @@ import {
   getGetResidentPaymentsQueryKey,
   useGetComplaints,
   getGetComplaintsQueryKey,
+  useCreateComplaint,
   useCreateLedgerEntry,
   useCreatePayment,
   type LedgerEntryDto,
   type PaymentDto,
   type ReminderRuleDto,
   type ReminderLogDto,
+  type ResidentDto,
 } from "@workspace/api-client-react";
 import { useParams, Link, useLocation } from "wouter";
 import { useQueryClient, useQuery, useMutation } from "@tanstack/react-query";
@@ -52,6 +54,7 @@ import {
   Plus,
   FileText,
   Download,
+  Megaphone,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { ResidentKycTab } from "./resident-kyc-tab";
@@ -135,6 +138,8 @@ export default function ResidentDetail() {
   const [ledgerModalOpen, setLedgerModalOpen] = React.useState(false);
   const [paymentModalOpen, setPaymentModalOpen] = React.useState(false);
   const [checkoutOpen, setCheckoutOpen] = React.useState(false);
+  const [messageModalOpen, setMessageModalOpen] = React.useState(false);
+  const [complaintModalOpen, setComplaintModalOpen] = React.useState(false);
 
   if (residentLoading) {
     return <div className="space-y-6"><Skeleton className="h-48 w-full" /><Skeleton className="h-96 w-full" /></div>;
@@ -216,13 +221,13 @@ export default function ResidentDetail() {
       </div>
 
       <div className="flex flex-wrap gap-2">
-        <Button variant="outline" size="sm" onClick={() => toast({ title: "Coming soon" })} data-testid="button-send-message">
+        <Button variant="outline" size="sm" onClick={() => setMessageModalOpen(true)} data-testid="button-send-message">
           <MessageSquare className="w-4 h-4 mr-2" /> Send Message
         </Button>
         <Button variant="outline" size="sm" onClick={() => setPaymentModalOpen(true)} data-testid="button-record-payment">
           <Receipt className="w-4 h-4 mr-2" /> Record Payment
         </Button>
-        <Button variant="outline" size="sm" onClick={() => toast({ title: "Coming soon" })} data-testid="button-raise-complaint">
+        <Button variant="outline" size="sm" onClick={() => setComplaintModalOpen(true)} data-testid="button-raise-complaint">
           <AlertCircle className="w-4 h-4 mr-2" /> Raise Complaint
         </Button>
         <Button variant="outline" size="sm" className="text-destructive hover:text-destructive" onClick={() => setCheckoutOpen(true)} data-testid="button-checkout">
@@ -464,7 +469,183 @@ export default function ResidentDetail() {
       <AddLedgerModal open={ledgerModalOpen} onOpenChange={setLedgerModalOpen} residentId={id} />
       <AddPaymentModal open={paymentModalOpen} onOpenChange={setPaymentModalOpen} residentId={id} />
       <CheckoutModal open={checkoutOpen} onOpenChange={setCheckoutOpen} resident={resident} ledger={ledger} />
+      <SendMessageModal open={messageModalOpen} onOpenChange={setMessageModalOpen} resident={resident} />
+      <RaiseComplaintModal open={complaintModalOpen} onOpenChange={setComplaintModalOpen} resident={resident} />
     </div>
+  );
+}
+
+function SendMessageModal({ open, onOpenChange, resident }: { open: boolean; onOpenChange: (o: boolean) => void; resident: ResidentDto }) {
+  const [, setLocation] = useLocation();
+  const { toast } = useToast();
+  const [channel, setChannel] = React.useState<"EMAIL" | "SMS">("EMAIL");
+  const [subject, setSubject] = React.useState("");
+  const [body, setBody] = React.useState("");
+
+  React.useEffect(() => {
+    if (open) { setChannel(resident.email ? "EMAIL" : "SMS"); setSubject(""); setBody(""); }
+  }, [open, resident.email]);
+
+  const canSend = channel === "EMAIL" ? !!resident.email && !!body.trim() : !!resident.phone && !!body.trim();
+
+  const send = () => {
+    if (channel === "EMAIL") {
+      if (!resident.email) { toast({ title: "No email on file for this resident", variant: "destructive" }); return; }
+      const href = `mailto:${resident.email}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+      window.location.href = href;
+    } else {
+      if (!resident.phone) { toast({ title: "No phone on file for this resident", variant: "destructive" }); return; }
+      // sms: URI — opens the staff device's SMS composer pre-filled for this resident.
+      const href = `sms:${resident.phone}?body=${encodeURIComponent(body)}`;
+      window.location.href = href;
+    }
+    toast({ title: "Opening your messaging app", description: `Composing a ${channel === "EMAIL" ? "email" : "text"} to ${resident.name}.` });
+    onOpenChange(false);
+  };
+
+  return (
+    <FormModal
+      open={open}
+      onOpenChange={onOpenChange}
+      title={`Message ${resident.name}`}
+      onSave={send}
+      saveLabel={channel === "EMAIL" ? "Open Email" : "Open SMS"}
+      isSaving={false}
+    >
+      <div className="space-y-4">
+        <div className="flex gap-2">
+          <Button type="button" size="sm" variant={channel === "EMAIL" ? "default" : "outline"} onClick={() => setChannel("EMAIL")} data-testid="message-channel-email" className="flex-1">
+            <Mail className="w-4 h-4 mr-2" /> Email
+          </Button>
+          <Button type="button" size="sm" variant={channel === "SMS" ? "default" : "outline"} onClick={() => setChannel("SMS")} data-testid="message-channel-sms" className="flex-1">
+            <MessageSquare className="w-4 h-4 mr-2" /> SMS
+          </Button>
+        </div>
+        <p className="text-xs text-muted-foreground flex items-center gap-1">
+          {channel === "EMAIL"
+            ? <><Mail className="w-3.5 h-3.5" /> {resident.email || "No email on file"}</>
+            : <><Phone className="w-3.5 h-3.5" /> {resident.phone || "No phone on file"}</>}
+        </p>
+        {channel === "EMAIL" && (
+          <div>
+            <Label>Subject</Label>
+            <Input value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="Regarding your stay at Uniliv" data-testid="input-message-subject" />
+          </div>
+        )}
+        <div>
+          <Label>Message *</Label>
+          <Textarea rows={5} value={body} onChange={(e) => setBody(e.target.value)} placeholder={`Hi ${resident.name.split(" ")[0]}, ...`} data-testid="input-message-body" />
+        </div>
+        {!canSend && (
+          <p className="text-xs text-muted-foreground">
+            {channel === "EMAIL" && !resident.email ? "This resident has no email address on file." :
+              channel === "SMS" && !resident.phone ? "This resident has no phone number on file." :
+                "Enter a message to continue."}
+          </p>
+        )}
+        <div className="border-t pt-3">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="text-muted-foreground"
+            onClick={() => { onOpenChange(false); setLocation("/communications"); }}
+            data-testid="button-goto-bulk-comms"
+          >
+            <Megaphone className="w-4 h-4 mr-2" /> Send a templated bulk message instead
+          </Button>
+        </div>
+      </div>
+    </FormModal>
+  );
+}
+
+const COMPLAINT_CATEGORIES = ["ELECTRICAL", "PLUMBING", "INTERNET", "HOUSEKEEPING", "SECURITY", "FOOD", "LAUNDRY", "OTHER"];
+const COMPLAINT_SLA: Record<string, number> = {
+  ELECTRICAL: 4, PLUMBING: 4, INTERNET: 2, HOUSEKEEPING: 8, SECURITY: 1, FOOD: 2, LAUNDRY: 24, OTHER: 24,
+};
+
+function RaiseComplaintModal({ open, onOpenChange, resident }: { open: boolean; onOpenChange: (o: boolean) => void; resident: ResidentDto }) {
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  const mut = useCreateComplaint();
+
+  const [category, setCategory] = React.useState("OTHER");
+  const [priority, setPriority] = React.useState("MEDIUM");
+  const [title, setTitle] = React.useState("");
+  const [description, setDescription] = React.useState("");
+
+  React.useEffect(() => {
+    if (open) { setCategory("OTHER"); setPriority("MEDIUM"); setTitle(""); setDescription(""); }
+  }, [open]);
+
+  const slaHours = COMPLAINT_SLA[category] || 24;
+
+  const onSave = async () => {
+    if (!resident.propertyId) { toast({ title: "Resident has no property assigned", variant: "destructive" }); return; }
+    if (!title.trim() || !description.trim()) { toast({ title: "Title and description are required", variant: "destructive" }); return; }
+    try {
+      await mut.mutateAsync({
+        data: {
+          propertyId: resident.propertyId,
+          residentId: resident.id,
+          category,
+          priority,
+          title,
+          description,
+          slaHours,
+        },
+      });
+      toast({ title: "Complaint raised", description: `Logged for ${resident.name}.` });
+      qc.invalidateQueries({ queryKey: getGetComplaintsQueryKey() });
+      qc.invalidateQueries({ queryKey: getGetComplaintsQueryKey({}) });
+      onOpenChange(false);
+    } catch (e: any) {
+      toast({ title: e?.message || "Failed to raise complaint", variant: "destructive" });
+    }
+  };
+
+  return (
+    <FormModal open={open} onOpenChange={onOpenChange} title={`Raise Complaint for ${resident.name}`} onSave={onSave} isSaving={mut.isPending} saveLabel="Raise Complaint">
+      <div className="space-y-4">
+        <div className="rounded-md bg-surface p-3 text-sm">
+          <span className="text-muted-foreground">For </span>
+          <span className="font-medium text-primary">{resident.name}</span>
+          {resident.propertyName && <span className="text-muted-foreground"> · {resident.propertyName}</span>}
+          {resident.roomNumber && <span className="text-muted-foreground"> · Room {resident.roomNumber}</span>}
+        </div>
+        <div>
+          <Label>Category *</Label>
+          <Select value={category} onValueChange={setCategory}>
+            <SelectTrigger data-testid="select-complaint-category"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {COMPLAINT_CATEGORIES.map((c) => (<SelectItem key={c} value={c}>{c}</SelectItem>))}
+            </SelectContent>
+          </Select>
+          <p className="text-xs text-muted-foreground mt-1">Expected SLA: {slaHours} hours</p>
+        </div>
+        <div>
+          <Label>Priority *</Label>
+          <Select value={priority} onValueChange={setPriority}>
+            <SelectTrigger><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="LOW">Low</SelectItem>
+              <SelectItem value="MEDIUM">Medium</SelectItem>
+              <SelectItem value="HIGH">High</SelectItem>
+              <SelectItem value="CRITICAL">Critical</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div>
+          <Label>Title *</Label>
+          <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Short summary of the issue" data-testid="input-complaint-title" />
+        </div>
+        <div>
+          <Label>Description *</Label>
+          <Textarea rows={4} value={description} onChange={(e) => setDescription(e.target.value)} data-testid="input-complaint-description" />
+        </div>
+      </div>
+    </FormModal>
   );
 }
 

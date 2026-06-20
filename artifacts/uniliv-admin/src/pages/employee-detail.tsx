@@ -41,7 +41,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { ChevronLeft, LogOut, Plus, Check, X, FileText, Award, AlertTriangle, MessageSquare } from "lucide-react";
+import { ChevronLeft, LogOut, Plus, Check, X, FileText, Award, AlertTriangle, MessageSquare, FileCheck2, FileClock } from "lucide-react";
+import { EmptyState } from "@/components/ui/empty-state";
 import { useToast } from "@/hooks/use-toast";
 
 const ATTENDANCE_STATUSES = ["PRESENT", "ABSENT", "HALF_DAY", "WFH", "ON_LEAVE"];
@@ -161,13 +162,7 @@ export default function EmployeeDetail() {
         </TabsContent>
 
         <TabsContent value="documents" className="mt-6">
-          <Card className="shadow-sm">
-            <CardContent className="p-12 text-center text-muted-foreground">
-              <FileText className="w-12 h-12 mx-auto text-muted/30 mb-3" />
-              <p className="font-medium">Document upload coming soon</p>
-              <p className="text-sm mt-1">No documents uploaded yet.</p>
-            </CardContent>
-          </Card>
+          <DocumentsTab employee={employee} onSwitchTab={setTab} />
         </TabsContent>
 
         <TabsContent value="exit" className="mt-6">
@@ -240,6 +235,90 @@ function ProfileTab({ employee, propertyName, managerName }: { employee: any; pr
           <InfoRow label="ESIC Number" value={employee.esicNumber} />
           <InfoRow label="Bank Account" value={maskAccount(employee.bankAccount)} />
           <InfoRow label="IFSC" value={employee.ifscCode} />
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+// Standard HR document checklist. The backend currently has no document-storage
+// endpoint or table, so uploads aren't available yet. We surface the standard
+// expected document set and reflect which compliance identifiers are already on
+// file from the employee record (captured in the Profile tab) so this tab is an
+// honest, informative status view rather than a dead placeholder.
+function DocumentsTab({ employee, onSwitchTab }: { employee: any; onSwitchTab: (t: string) => void }) {
+  const docs: Array<{ label: string; onFile: boolean; detail?: string }> = [
+    { label: "ID Proof (Aadhaar / Passport)", onFile: false },
+    { label: "Address Proof", onFile: false },
+    {
+      label: "PAN Card",
+      onFile: !!employee.panNumber,
+      detail: employee.panNumber ? `PAN ${employee.panNumber} on file` : undefined,
+    },
+    { label: "Offer Letter", onFile: false },
+    { label: "Appointment Letter", onFile: false },
+    {
+      label: "Bank Account Proof (Cancelled Cheque)",
+      onFile: !!employee.bankAccount,
+      detail: employee.bankAccount ? `Account ${maskAccount(employee.bankAccount)} on file` : undefined,
+    },
+    {
+      label: "PF Details",
+      onFile: !!employee.pfNumber,
+      detail: employee.pfNumber ? `PF ${employee.pfNumber} on file` : undefined,
+    },
+    {
+      label: "ESIC Details",
+      onFile: !!employee.esicNumber,
+      detail: employee.esicNumber ? `ESIC ${employee.esicNumber} on file` : undefined,
+    },
+    { label: "Educational Certificates", onFile: false },
+    { label: "Experience / Relieving Letters", onFile: false },
+  ];
+
+  const onFileCount = docs.filter((d) => d.onFile).length;
+
+  return (
+    <div className="space-y-4">
+      <EmptyState
+        icon={FileText}
+        title="No documents uploaded yet"
+        description="File uploads aren't available for employee records yet. The standard document checklist below shows what HR expects to collect; compliance identifiers already captured on the profile are marked as on file."
+        action={
+          <Button variant="outline" onClick={() => onSwitchTab("profile")}>
+            View profile details
+          </Button>
+        }
+      />
+
+      <Card className="shadow-sm">
+        <CardContent className="p-5">
+          <div className="flex items-center justify-between mb-4">
+            <p className="text-xs uppercase tracking-wider text-muted-foreground">Standard Document Checklist</p>
+            <Badge variant="outline" className="text-xs">{onFileCount}/{docs.length} on file</Badge>
+          </div>
+          <div className="space-y-2">
+            {docs.map((d) => (
+              <div key={d.label} className="flex items-center justify-between border rounded-lg p-3">
+                <div className="flex items-center gap-3">
+                  {d.onFile ? (
+                    <FileCheck2 className="w-4 h-4 text-success shrink-0" />
+                  ) : (
+                    <FileClock className="w-4 h-4 text-muted-foreground/50 shrink-0" />
+                  )}
+                  <div>
+                    <span className="text-sm font-medium text-primary">{d.label}</span>
+                    {d.detail && <p className="text-xs text-muted-foreground">{d.detail}</p>}
+                  </div>
+                </div>
+                {d.onFile ? (
+                  <Badge variant="outline" className="text-success border-success/30 text-[10px] uppercase tracking-wider">On file</Badge>
+                ) : (
+                  <Badge variant="outline" className="text-muted-foreground text-[10px] uppercase tracking-wider">Not uploaded</Badge>
+                )}
+              </div>
+            ))}
+          </div>
         </CardContent>
       </Card>
     </div>

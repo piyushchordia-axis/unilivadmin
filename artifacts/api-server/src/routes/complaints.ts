@@ -3,6 +3,8 @@ import { db } from "@workspace/db";
 import { complaintsTable, escalationsTable, residentsTable, propertiesTable, complaintEventsTable } from "@workspace/db";
 import { eq, sql, ilike, or, and } from "drizzle-orm";
 import { authenticate } from "../middlewares/auth.js";
+import { authorize } from "../middlewares/authorize.js";
+import { pick, scopedPropertyId } from "../lib/authz.js";
 import { getPagination, buildMeta } from "../lib/paginate.js";
 import { newId, withUniqueRetry } from "../lib/id.js";
 
@@ -29,7 +31,7 @@ async function enrichComplaint(c: typeof complaintsTable.$inferSelect) {
   return { ...c, residentName, propertyName };
 }
 
-router.get("/", authenticate, async (req, res) => {
+router.get("/", authenticate, authorize("COMPLAINTS", "view"), async (req, res) => {
   try {
     const { page, limit, offset } = getPagination(req.query as Record<string, unknown>);
     const propertyId = req.query["propertyId"] as string | undefined;
@@ -39,6 +41,10 @@ router.get("/", authenticate, async (req, res) => {
     const search = req.query["search"] as string | undefined;
 
     const conditions = [];
+    // Best-effort property scoping for property-bound roles (WARDEN/UNIT_LEAD);
+    // a no-op for org-wide roles so it never restricts admins.
+    const scope = scopedPropertyId(req);
+    if (scope) conditions.push(eq(complaintsTable.propertyId, scope));
     if (propertyId) conditions.push(eq(complaintsTable.propertyId, propertyId));
     if (status) conditions.push(eq(complaintsTable.status, status as "OPEN" | "ASSIGNED" | "IN_PROGRESS" | "RESOLVED" | "CLOSED" | "REOPENED"));
     if (category) conditions.push(eq(complaintsTable.category, category as "ELECTRICAL" | "PLUMBING" | "INTERNET" | "HOUSEKEEPING" | "SECURITY" | "FOOD" | "LAUNDRY" | "OTHER"));
@@ -57,9 +63,16 @@ router.get("/", authenticate, async (req, res) => {
   }
 });
 
-router.post("/", authenticate, async (req, res) => {
+router.post("/", authenticate, authorize("COMPLAINTS", "create"), async (req, res) => {
   try {
-    const body = req.body;
+    const body = pick(req.body, [
+      "propertyId", "residentId", "category", "subCategory",
+      "title", "description", "priority", "assignedTo", "slaHours",
+    ]) as Record<string, any>;
+    // A property-scoped caller can only create complaints for their own property.
+    const scope = scopedPropertyId(req);
+    if (scope) body.propertyId = scope;
+    else if (!body.propertyId) { res.status(400).json({ success: false, error: "propertyId is required" }); return; }
     const slaDeadline = new Date(Date.now() + (body.slaHours || 24) * 60 * 60 * 1000);
     const row = await withUniqueRetry(async () => {
       const [r] = await db.insert(complaintsTable).values({
@@ -86,10 +99,12 @@ router.post("/", authenticate, async (req, res) => {
   }
 });
 
-router.get("/:id", authenticate, async (req, res) => {
+router.get("/:id", authenticate, authorize("COMPLAINTS", "view"), async (req, res) => {
   try {
     const [row] = await db.select().from(complaintsTable).where(eq(complaintsTable.id, req.params["id"]!));
     if (!row) { res.status(404).json({ success: false, error: "Not found" }); return; }
+    const scope = scopedPropertyId(req);
+    if (scope && row.propertyId !== scope) { res.status(403).json({ success: false, error: "Outside your property scope" }); return; }
     res.json({ success: true, data: await enrichComplaint(row) });
   } catch (err) {
     req.log.error(err);
@@ -97,12 +112,14 @@ router.get("/:id", authenticate, async (req, res) => {
   }
 });
 
-router.put("/:id", authenticate, async (req, res) => {
+router.put("/:id", authenticate, authorize("COMPLAINTS", "edit"), async (req, res) => {
   try {
-    const body = req.body;
+    const body = pick(req.body, ["status", "priority", "assignedTo", "resolutionNote", "rating"]) as Record<string, any>;
     const id = req.params["id"]!;
     const [existing] = await db.select().from(complaintsTable).where(eq(complaintsTable.id, id));
     if (!existing) { res.status(404).json({ success: false, error: "Not found" }); return; }
+    const scope = scopedPropertyId(req);
+    if (scope && existing.propertyId !== scope) { res.status(403).json({ success: false, error: "Outside your property scope" }); return; }
 
     const updateData: Record<string, unknown> = { updatedAt: new Date() };
     if (body.status) updateData["status"] = body.status;
@@ -134,8 +151,14 @@ router.put("/:id", authenticate, async (req, res) => {
 });
 
 // Timeline
-router.get("/:id/timeline", authenticate, async (req, res) => {
+router.get("/:id/timeline", authenticate, authorize("COMPLAINTS", "view"), async (req, res) => {
   try {
+    const scope = scopedPropertyId(req);
+    if (scope) {
+      const [parent] = await db.select({ propertyId: complaintsTable.propertyId }).from(complaintsTable).where(eq(complaintsTable.id, req.params["id"]!));
+      if (!parent) { res.status(404).json({ success: false, error: "Not found" }); return; }
+      if (parent.propertyId !== scope) { res.status(403).json({ success: false, error: "Outside your property scope" }); return; }
+    }
     const events = await db.select().from(complaintEventsTable).where(eq(complaintEventsTable.complaintId, req.params["id"]!)).orderBy(complaintEventsTable.createdAt);
     const escalations = await db.select().from(escalationsTable).where(eq(escalationsTable.complaintId, req.params["id"]!)).orderBy(escalationsTable.createdAt);
     res.json({ success: true, data: { events, escalations } });
@@ -143,9 +166,11 @@ router.get("/:id/timeline", authenticate, async (req, res) => {
 });
 
 // Stats / Analytics
-router.get("/stats/overview", authenticate, async (req, res) => {
+router.get("/stats/overview", authenticate, authorize("COMPLAINTS", "view"), async (req, res) => {
   try {
-    const propertyId = req.query["propertyId"] as string | undefined;
+    // Property-scoped roles (WARDEN/UNIT_LEAD) see only their own property's stats.
+    const scope = scopedPropertyId(req);
+    const propertyId = scope ?? (req.query["propertyId"] as string | undefined);
     const all = propertyId
       ? await db.select().from(complaintsTable).where(eq(complaintsTable.propertyId, propertyId))
       : await db.select().from(complaintsTable);
@@ -206,20 +231,36 @@ router.get("/stats/overview", authenticate, async (req, res) => {
 // router serves escalation create/list correctly.
 export const escalationsRouter: Router = Router();
 
-escalationsRouter.get("/", authenticate, async (req, res) => {
+escalationsRouter.get("/", authenticate, authorize("COMPLAINTS", "view"), async (req, res) => {
   try {
     const complaintId = req.query["complaintId"] as string | undefined;
-    const rows = complaintId
-      ? await db.select().from(escalationsTable).where(eq(escalationsTable.complaintId, complaintId)).orderBy(escalationsTable.createdAt)
-      : await db.select().from(escalationsTable).orderBy(escalationsTable.createdAt);
+    const scope = scopedPropertyId(req);
+    if (scope && complaintId) {
+      // A property-scoped caller may only read escalations of complaints in their property.
+      const [parent] = await db.select({ propertyId: complaintsTable.propertyId }).from(complaintsTable).where(eq(complaintsTable.id, complaintId));
+      if (!parent || parent.propertyId !== scope) { res.status(403).json({ success: false, error: "Outside your property scope" }); return; }
+    }
+    const conditions = [];
+    if (complaintId) conditions.push(eq(escalationsTable.complaintId, complaintId));
+    if (scope) {
+      // Restrict to escalations whose parent complaint is in the caller's property.
+      conditions.push(sql`${escalationsTable.complaintId} IN (SELECT ${complaintsTable.id} FROM ${complaintsTable} WHERE ${complaintsTable.propertyId} = ${scope})`);
+    }
+    const where = conditions.length > 0 ? and(...conditions) : undefined;
+    const rows = await db.select().from(escalationsTable).where(where).orderBy(escalationsTable.createdAt);
     res.json({ success: true, data: rows });
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-escalationsRouter.post("/", authenticate, async (req, res) => {
+escalationsRouter.post("/", authenticate, authorize("COMPLAINTS", "edit"), async (req, res) => {
   try {
-    const body = req.body;
+    const body = pick(req.body, ["complaintId", "level", "escalatedTo", "reason"]) as Record<string, any>;
     if (!body.complaintId) { res.status(400).json({ success: false, error: "complaintId is required" }); return; }
+    // Verify the parent complaint exists and is within the caller's property scope.
+    const [parent] = await db.select({ propertyId: complaintsTable.propertyId }).from(complaintsTable).where(eq(complaintsTable.id, body.complaintId));
+    if (!parent) { res.status(404).json({ success: false, error: "Complaint not found" }); return; }
+    const scope = scopedPropertyId(req);
+    if (scope && parent.propertyId !== scope) { res.status(403).json({ success: false, error: "Outside your property scope" }); return; }
     const [row] = await db.insert(escalationsTable).values({
       id: newId(),
       complaintId: body.complaintId,

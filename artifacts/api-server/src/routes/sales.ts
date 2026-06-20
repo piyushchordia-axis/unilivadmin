@@ -10,6 +10,8 @@ import {
 } from "@workspace/db";
 import { eq, sql, ilike, or, and, gte, lte, desc, inArray } from "drizzle-orm";
 import { authenticate } from "../middlewares/auth.js";
+import { authorize } from "../middlewares/authorize.js";
+import { pick } from "../lib/authz.js";
 import { getPagination, buildMeta } from "../lib/paginate.js";
 import { newId } from "../lib/id.js";
 
@@ -46,7 +48,7 @@ async function enrichLead(l: typeof leadsTable.$inferSelect) {
   };
 }
 
-leadsRouter.get("/", authenticate, async (req, res) => {
+leadsRouter.get("/", authenticate, authorize("SALES_LEADS", "view"), async (req, res) => {
   try {
     const { page, limit, offset } = getPagination(req.query as Record<string, unknown>);
     const search = req.query["search"] as string | undefined;
@@ -72,7 +74,7 @@ leadsRouter.get("/", authenticate, async (req, res) => {
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-leadsRouter.get("/stats", authenticate, async (req, res) => {
+leadsRouter.get("/stats", authenticate, authorize("SALES_LEADS", "view"), async (req, res) => {
   try {
     const assignedTo = req.query["assignedTo"] as string | undefined;
     const where = assignedTo ? eq(leadsTable.assignedTo, assignedTo) : undefined;
@@ -105,7 +107,7 @@ leadsRouter.get("/stats", authenticate, async (req, res) => {
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-leadsRouter.get("/export-csv", authenticate, async (req, res) => {
+leadsRouter.get("/export-csv", authenticate, authorize("SALES_LEADS", "view"), async (req, res) => {
   try {
     const rows = await db.select().from(leadsTable).orderBy(desc(leadsTable.createdAt));
     const header = ["Name", "Phone", "Email", "Source", "Stage", "Property", "Created"];
@@ -119,9 +121,12 @@ leadsRouter.get("/export-csv", authenticate, async (req, res) => {
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-leadsRouter.post("/", authenticate, async (req, res) => {
+leadsRouter.post("/", authenticate, authorize("SALES_LEADS", "create"), async (req, res) => {
   try {
-    const body = req.body;
+    const body = pick(req.body, [
+      "name", "phone", "email", "source", "propertyId", "stage", "assignedTo",
+      "budgetMin", "budgetMax", "moveInDate", "visitDate", "followUpAt", "notes",
+    ]) as Record<string, any>;
     const [row] = await db.insert(leadsTable).values({
       id: newId(),
       name: body.name,
@@ -144,7 +149,7 @@ leadsRouter.post("/", authenticate, async (req, res) => {
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-leadsRouter.get("/:id", authenticate, async (req, res) => {
+leadsRouter.get("/:id", authenticate, authorize("SALES_LEADS", "view"), async (req, res) => {
   try {
     const [row] = await db.select().from(leadsTable).where(eq(leadsTable.id, req.params["id"]!));
     if (!row) { res.status(404).json({ success: false, error: "Not found" }); return; }
@@ -152,12 +157,16 @@ leadsRouter.get("/:id", authenticate, async (req, res) => {
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-leadsRouter.put("/:id", authenticate, async (req, res) => {
+leadsRouter.put("/:id", authenticate, authorize("SALES_LEADS", "edit"), async (req, res) => {
   try {
     const id = req.params["id"]!;
     const [prev] = await db.select().from(leadsTable).where(eq(leadsTable.id, id));
     if (!prev) { res.status(404).json({ success: false, error: "Not found" }); return; }
-    const body = { ...req.body };
+    const body = pick(req.body, [
+      "name", "phone", "email", "source", "propertyId", "stage", "assignedTo",
+      "budgetMin", "budgetMax", "moveInDate", "visitDate", "followUpAt", "followUpNote",
+      "notes", "lostReason",
+    ]) as Record<string, any>;
     if (body.stage === "CONVERTED" && prev.stage !== "CONVERTED") {
       res.status(400).json({ success: false, error: "Use POST /leads/:id/convert to move a lead to CONVERTED" });
       return;
@@ -173,7 +182,7 @@ leadsRouter.put("/:id", authenticate, async (req, res) => {
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-leadsRouter.delete("/:id", authenticate, async (req, res) => {
+leadsRouter.delete("/:id", authenticate, authorize("SALES_LEADS", "delete"), async (req, res) => {
   try {
     await db.delete(leadActivitiesTable).where(eq(leadActivitiesTable.leadId, req.params["id"]!));
     await db.delete(leadsTable).where(eq(leadsTable.id, req.params["id"]!));
@@ -182,14 +191,14 @@ leadsRouter.delete("/:id", authenticate, async (req, res) => {
 });
 
 // activities
-leadsRouter.get("/:id/activities", authenticate, async (req, res) => {
+leadsRouter.get("/:id/activities", authenticate, authorize("SALES_LEADS", "view"), async (req, res) => {
   try {
     const rows = await db.select().from(leadActivitiesTable).where(eq(leadActivitiesTable.leadId, req.params["id"]!)).orderBy(desc(leadActivitiesTable.createdAt));
     res.json({ success: true, data: rows });
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-leadsRouter.post("/:id/activities", authenticate, async (req, res) => {
+leadsRouter.post("/:id/activities", authenticate, authorize("SALES_LEADS", "edit"), async (req, res) => {
   try {
     const { type, note, meta } = req.body;
     const [row] = await db.insert(leadActivitiesTable).values({
@@ -200,7 +209,7 @@ leadsRouter.post("/:id/activities", authenticate, async (req, res) => {
 });
 
 // schedule visit
-leadsRouter.post("/:id/schedule-visit", authenticate, async (req, res) => {
+leadsRouter.post("/:id/schedule-visit", authenticate, authorize("SALES_LEADS", "edit"), async (req, res) => {
   try {
     const id = req.params["id"]!;
     const { visitDate } = req.body;
@@ -208,13 +217,15 @@ leadsRouter.post("/:id/schedule-visit", authenticate, async (req, res) => {
     const [row] = await db.update(leadsTable).set({ visitDate: new Date(visitDate), stage: "VISIT_SCHEDULED", updatedAt: new Date() }).where(eq(leadsTable.id, id)).returning();
     if (!row) { res.status(404).json({ success: false, error: "Not found" }); return; }
     await logActivity(id, "VISIT_SCHEDULED", `Visit scheduled for ${new Date(visitDate).toLocaleString()}`, { visitDate }, req.user?.id);
-    // SMS stub — no Twilio creds wired
-    req.log.info({ leadId: id, phone: row.phone }, "[SMS stub] visit confirmation would be sent");
+    // SMS stub — no Twilio creds wired. Do NOT log the raw phone number (PII):
+    // the pino redaction list does not cover application fields, so a phone here
+    // would land in plaintext in centralized logs. Log only the leadId.
+    req.log.info({ leadId: id }, "[SMS stub] visit confirmation would be sent");
     res.json({ success: true, data: await enrichLead(row) });
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-leadsRouter.post("/:id/visit-outcome", authenticate, async (req, res) => {
+leadsRouter.post("/:id/visit-outcome", authenticate, authorize("SALES_LEADS", "edit"), async (req, res) => {
   try {
     const id = req.params["id"]!;
     const { outcome, feedback, lostReason } = req.body;
@@ -228,7 +239,7 @@ leadsRouter.post("/:id/visit-outcome", authenticate, async (req, res) => {
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-leadsRouter.post("/:id/follow-up", authenticate, async (req, res) => {
+leadsRouter.post("/:id/follow-up", authenticate, authorize("SALES_LEADS", "edit"), async (req, res) => {
   try {
     const id = req.params["id"]!;
     const { followUpAt, followUpNote } = req.body;
@@ -239,7 +250,7 @@ leadsRouter.post("/:id/follow-up", authenticate, async (req, res) => {
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-leadsRouter.post("/:id/mark-lost", authenticate, async (req, res) => {
+leadsRouter.post("/:id/mark-lost", authenticate, authorize("SALES_LEADS", "edit"), async (req, res) => {
   try {
     const id = req.params["id"]!;
     const { lostReason } = req.body;
@@ -251,7 +262,7 @@ leadsRouter.post("/:id/mark-lost", authenticate, async (req, res) => {
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-leadsRouter.post("/:id/convert", authenticate, async (req, res) => {
+leadsRouter.post("/:id/convert", authenticate, authorize("SALES_LEADS", "edit"), async (req, res) => {
   try {
     const id = req.params["id"]!;
     const [lead] = await db.select().from(leadsTable).where(eq(leadsTable.id, id));
@@ -294,7 +305,7 @@ leadsRouter.post("/:id/convert", authenticate, async (req, res) => {
 // =====================================================
 export const propertyLeadsRouter: Router = Router();
 
-propertyLeadsRouter.get("/", authenticate, async (req, res) => {
+propertyLeadsRouter.get("/", authenticate, authorize("PROPERTY_LEADS", "view"), async (req, res) => {
   try {
     const { page, limit, offset } = getPagination(req.query as Record<string, unknown>);
     const search = req.query["search"] as string | undefined;
@@ -309,9 +320,13 @@ propertyLeadsRouter.get("/", authenticate, async (req, res) => {
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-propertyLeadsRouter.post("/", authenticate, async (req, res) => {
+propertyLeadsRouter.post("/", authenticate, authorize("PROPERTY_LEADS", "create"), async (req, res) => {
   try {
-    const body = req.body;
+    const body = pick(req.body, [
+      "name", "address", "city", "lat", "lng", "ownerName", "ownerPhone",
+      "totalArea", "askingRent", "bedCount", "stage", "viabilityData",
+      "documents", "photos", "notes",
+    ]) as Record<string, any>;
     const [row] = await db.insert(propertyLeadsTable).values({
       id: newId(),
       name: body.name,
@@ -335,7 +350,7 @@ propertyLeadsRouter.post("/", authenticate, async (req, res) => {
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-propertyLeadsRouter.get("/:id", authenticate, async (req, res) => {
+propertyLeadsRouter.get("/:id", authenticate, authorize("PROPERTY_LEADS", "view"), async (req, res) => {
   try {
     const [row] = await db.select().from(propertyLeadsTable).where(eq(propertyLeadsTable.id, req.params["id"]!));
     if (!row) { res.status(404).json({ success: false, error: "Not found" }); return; }
@@ -343,9 +358,13 @@ propertyLeadsRouter.get("/:id", authenticate, async (req, res) => {
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-propertyLeadsRouter.put("/:id", authenticate, async (req, res) => {
+propertyLeadsRouter.put("/:id", authenticate, authorize("PROPERTY_LEADS", "edit"), async (req, res) => {
   try {
-    const body = { ...req.body };
+    const body = pick(req.body, [
+      "name", "address", "city", "lat", "lng", "ownerName", "ownerPhone",
+      "totalArea", "askingRent", "bedCount", "stage", "viabilityData",
+      "documents", "photos", "notes",
+    ]) as Record<string, any>;
     if (body.askingRent !== undefined) body.askingRent = body.askingRent?.toString();
     const [row] = await db.update(propertyLeadsTable).set({ ...body, updatedAt: new Date() }).where(eq(propertyLeadsTable.id, req.params["id"]!)).returning();
     if (!row) { res.status(404).json({ success: false, error: "Not found" }); return; }
@@ -353,7 +372,7 @@ propertyLeadsRouter.put("/:id", authenticate, async (req, res) => {
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-propertyLeadsRouter.delete("/:id", authenticate, async (req, res) => {
+propertyLeadsRouter.delete("/:id", authenticate, authorize("PROPERTY_LEADS", "delete"), async (req, res) => {
   try {
     await db.delete(propertyLeadsTable).where(eq(propertyLeadsTable.id, req.params["id"]!));
     res.json({ success: true, message: "Deleted" });

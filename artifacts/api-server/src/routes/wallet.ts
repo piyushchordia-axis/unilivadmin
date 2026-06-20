@@ -17,6 +17,7 @@ import {
 import { eq, desc, and, sql, inArray, asc } from "drizzle-orm";
 import { authenticate } from "../middlewares/auth.js";
 import { authorize } from "../middlewares/authorize.js";
+import { assertPropertyAccess, scopedPropertyId, httpError } from "../lib/authz.js";
 import { newId } from "../lib/id.js";
 import {
   getOrCreateWallet,
@@ -27,6 +28,44 @@ import {
 } from "../lib/wallet-service.js";
 
 export const walletRouter: Router = Router();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Idempotency helper
+// Money-mutating endpoints accept an optional `Idempotency-Key` header or
+// `idempotencyKey` body field. When supplied, the key is persisted on the
+// resulting wallet_transactions row via the existing `referenceId` column
+// (namespaced with referenceType="IDEMPOTENCY") so a replayed request can be
+// detected inside the locked transaction and the original result returned
+// instead of applying the operation twice. No schema/migration is introduced.
+// ─────────────────────────────────────────────────────────────────────────────
+const IDEMPOTENCY_REF_TYPE = "IDEMPOTENCY";
+
+function getIdempotencyKey(req: { headers: Record<string, unknown>; body?: any }): string | null {
+  const header = req.headers["idempotency-key"];
+  const raw =
+    (typeof header === "string" && header) ||
+    (Array.isArray(header) && typeof header[0] === "string" && header[0]) ||
+    (req.body && typeof req.body.idempotencyKey === "string" && req.body.idempotencyKey) ||
+    null;
+  if (!raw) return null;
+  const trimmed = String(raw).trim();
+  return trimmed.length > 0 ? trimmed.slice(0, 200) : null;
+}
+
+/** Serialize a wallet transaction row to the API response shape. */
+function serializeTxn(txn: {
+  amount: unknown;
+  balanceBefore: unknown;
+  balanceAfter: unknown;
+  [k: string]: unknown;
+}) {
+  return {
+    ...txn,
+    amount: Number(txn.amount),
+    balanceBefore: Number(txn.balanceBefore),
+    balanceAfter: Number(txn.balanceAfter),
+  };
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /wallet/residents/:residentId
@@ -43,6 +82,7 @@ walletRouter.get(
         .select({
           name: residentsTable.name,
           walletEnabled: residentsTable.walletEnabled,
+          propertyId: residentsTable.propertyId,
         })
         .from(residentsTable)
         .where(eq(residentsTable.id, residentId));
@@ -50,6 +90,7 @@ walletRouter.get(
         res.status(404).json({ success: false, error: "Resident not found" });
         return;
       }
+      assertPropertyAccess(req, resident.propertyId);
       const wallet = await getOrCreateWallet(residentId);
       const [txCount] = await db
         .select({ count: sql<number>`count(*)::int` })
@@ -65,7 +106,11 @@ walletRouter.get(
           transactionCount: txCount?.count ?? 0,
         },
       });
-    } catch (err) {
+    } catch (err: any) {
+      if (err?.statusCode === 403) {
+        res.status(403).json({ success: false, error: err.message });
+        return;
+      }
       req.log.error(err);
       res.status(500).json({ success: false, error: "Internal server error" });
     }
@@ -85,6 +130,16 @@ walletRouter.get(
       const { residentId } = req.params as { residentId: string };
       const limit = Math.min(Number(req.query["limit"] ?? 50), 200);
       const offset = Number(req.query["offset"] ?? 0);
+
+      const [resident] = await db
+        .select({ propertyId: residentsTable.propertyId })
+        .from(residentsTable)
+        .where(eq(residentsTable.id, residentId));
+      if (!resident) {
+        res.status(404).json({ success: false, error: "Resident not found" });
+        return;
+      }
+      assertPropertyAccess(req, resident.propertyId);
 
       const wallet = await getOrCreateWallet(residentId);
       const rows = await db
@@ -110,7 +165,11 @@ walletRouter.get(
         })),
         meta: { total: total?.count ?? 0, limit, offset },
       });
-    } catch (err) {
+    } catch (err: any) {
+      if (err?.statusCode === 403) {
+        res.status(403).json({ success: false, error: err.message });
+        return;
+      }
       req.log.error(err);
       res.status(500).json({ success: false, error: "Internal server error" });
     }
@@ -149,6 +208,7 @@ walletRouter.post(
         res.status(404).json({ success: false, error: "Resident not found" });
         return;
       }
+      assertPropertyAccess(req, resident.propertyId);
       if (!resident.walletEnabled) {
         res.status(400).json({ success: false, error: "Wallet is disabled for this resident" });
         return;
@@ -160,29 +220,52 @@ walletRouter.post(
         return;
       }
 
+      const idempotencyKey = getIdempotencyKey(req);
+
       const result = await db.transaction(async (tx) => {
-        return creditWallet(wallet.id, amount, "TOPUP", {
+        // Idempotency: re-apply guard inside the locked path. If a prior txn
+        // for this wallet already used this key, return it unchanged.
+        if (idempotencyKey) {
+          const [existing] = await tx
+            .select()
+            .from(walletTransactionsTable)
+            .where(
+              and(
+                eq(walletTransactionsTable.walletId, wallet.id),
+                eq(walletTransactionsTable.referenceType, IDEMPOTENCY_REF_TYPE),
+                eq(walletTransactionsTable.referenceId, idempotencyKey)
+              )
+            );
+          if (existing) return { txn: existing, balanceAfter: Number(existing.balanceAfter), replayed: true };
+        }
+        const r = await creditWallet(wallet.id, amount, "TOPUP", {
           description: `Cash top-up by ${req.user!.email}`,
           recordedBy: req.user!.id,
           propertyId: resident.propertyId,
           notes: body.notes ?? null,
+          referenceId: idempotencyKey ?? null,
+          referenceType: idempotencyKey ? IDEMPOTENCY_REF_TYPE : null,
         }, tx);
+        return { ...r, replayed: false };
       });
 
-      // Audit log (outside transaction — fire and forget)
-      writeAuditLog(req.user!.id, "TOPUP", "wallet", wallet.id, { amount, residentId });
+      // Audit log (outside transaction — fire and forget). Skip on replay.
+      if (!result.replayed) {
+        writeAuditLog(req.user!.id, "TOPUP", "wallet", wallet.id, { amount, residentId });
+      }
 
       res.json({
         success: true,
         data: {
-          ...result.txn,
-          amount: Number(result.txn.amount),
-          balanceBefore: Number(result.txn.balanceBefore),
-          balanceAfter: Number(result.txn.balanceAfter),
+          ...serializeTxn(result.txn),
           newBalance: result.balanceAfter,
         },
       });
-    } catch (err) {
+    } catch (err: any) {
+      if (err?.statusCode === 403) {
+        res.status(403).json({ success: false, error: err.message });
+        return;
+      }
       req.log.error(err);
       res.status(500).json({ success: false, error: "Internal server error" });
     }
@@ -221,36 +304,12 @@ walletRouter.post(
         res.status(404).json({ success: false, error: "Resident not found" });
         return;
       }
+      assertPropertyAccess(req, resident.propertyId);
       if (!resident.walletEnabled) {
         res.status(400).json({ success: false, error: "Wallet is disabled for this resident" });
         return;
       }
 
-      // Verify all ledger entries belong to this resident and are unpaid
-      const entries = await db
-        .select()
-        .from(ledgerEntriesTable)
-        .where(inArray(ledgerEntriesTable.id, ledgerEntryIds));
-
-      if (entries.length !== ledgerEntryIds.length) {
-        res.status(404).json({ success: false, error: "One or more ledger entries not found" });
-        return;
-      }
-      const wrongResident = entries.find((e) => e.residentId !== residentId);
-      if (wrongResident) {
-        res.status(400).json({ success: false, error: "All ledger entries must belong to this resident" });
-        return;
-      }
-      const alreadyPaid = entries.find((e) => e.isPaid);
-      if (alreadyPaid) {
-        res.status(400).json({
-          success: false,
-          error: `Ledger entry ${alreadyPaid.id} is already paid`,
-        });
-        return;
-      }
-
-      const totalAmount = entries.reduce((sum, e) => sum + Number(e.amount), 0);
       const wallet = await getOrCreateWallet(residentId);
       if (!wallet.isActive) {
         res.status(400).json({ success: false, error: "Wallet is inactive" });
@@ -258,8 +317,54 @@ walletRouter.post(
       }
 
       const config = await getWalletConfig(resident.propertyId);
+      const idempotencyKey = getIdempotencyKey(req);
 
       const result = await db.transaction(async (tx) => {
+        // Idempotency: replay returns the original wallet txn + its payment.
+        if (idempotencyKey) {
+          const [existingTxn] = await tx
+            .select()
+            .from(walletTransactionsTable)
+            .where(
+              and(
+                eq(walletTransactionsTable.walletId, wallet.id),
+                eq(walletTransactionsTable.referenceType, IDEMPOTENCY_REF_TYPE),
+                eq(walletTransactionsTable.notes, `idem:${idempotencyKey}`)
+              )
+            );
+          if (existingTxn) {
+            const [existingPayment] = existingTxn.referenceId
+              ? await tx.select().from(paymentsTable).where(eq(paymentsTable.id, existingTxn.referenceId))
+              : [];
+            return {
+              debitResult: { txn: existingTxn, balanceAfter: Number(existingTxn.balanceAfter) },
+              payment: existingPayment ?? null,
+              replayed: true as const,
+            };
+          }
+        }
+
+        // Re-verify ledger entries INSIDE the tx with row locks so concurrent
+        // payments of the same entry can't both pass (finding: double-debit race).
+        const entries = await tx
+          .select()
+          .from(ledgerEntriesTable)
+          .where(inArray(ledgerEntriesTable.id, ledgerEntryIds))
+          .for("update");
+
+        if (entries.length !== ledgerEntryIds.length) {
+          throw httpError(404, "One or more ledger entries not found");
+        }
+        if (entries.some((e) => e.residentId !== residentId)) {
+          throw httpError(400, "All ledger entries must belong to this resident");
+        }
+        const alreadyPaid = entries.find((e) => e.isPaid);
+        if (alreadyPaid) {
+          throw httpError(400, `Ledger entry ${alreadyPaid.id} is already paid`);
+        }
+
+        const totalAmount = entries.reduce((sum, e) => sum + Number(e.amount), 0);
+
         // Debit wallet
         const debitResult = await debitWallet(
           wallet.id,
@@ -269,7 +374,7 @@ walletRouter.post(
             description: `Payment for ${entries.length} ledger entr${entries.length === 1 ? "y" : "ies"}`,
             recordedBy: req.user!.id,
             propertyId: resident.propertyId,
-            notes: body.notes ?? null,
+            notes: idempotencyKey ? `idem:${idempotencyKey}` : (body.notes ?? null),
           },
           config,
           tx
@@ -290,28 +395,44 @@ walletRouter.post(
           })
           .returning();
 
-        // Mark ledger entries paid
-        await tx
+        // Mark ledger entries paid — guarded on isPaid=false so a racing tx that
+        // already paid them yields fewer affected rows and rolls this one back.
+        const marked = await tx
           .update(ledgerEntriesTable)
           .set({ isPaid: true, paidOn: new Date(), updatedAt: new Date() })
-          .where(inArray(ledgerEntriesTable.id, ledgerEntryIds));
+          .where(and(inArray(ledgerEntriesTable.id, ledgerEntryIds), eq(ledgerEntriesTable.isPaid, false)))
+          .returning({ id: ledgerEntriesTable.id });
+        if (marked.length !== ledgerEntryIds.length) {
+          throw httpError(409, "One or more ledger entries were already paid");
+        }
 
-        // Back-link wallet transaction to payment
+        // Back-link wallet transaction to payment (and stamp idempotency marker).
         await tx
           .update(walletTransactionsTable)
-          .set({ referenceId: paymentId, referenceType: "PAYMENT" })
+          .set({
+            referenceId: paymentId,
+            referenceType: idempotencyKey ? IDEMPOTENCY_REF_TYPE : "PAYMENT",
+          })
           .where(eq(walletTransactionsTable.id, debitResult.txn.id));
 
-        return { debitResult, payment: payment! };
+        return { debitResult, payment: payment!, replayed: false as const };
       });
 
-      // Audit log
-      writeAuditLog(req.user!.id, "WALLET_PAY", "wallet", wallet.id, {
-        amount: totalAmount,
-        residentId,
-        ledgerEntryIds,
-        paymentId: result.payment.id,
-      });
+      if (result.payment === null) {
+        // Idempotent replay where the original payment row could not be reloaded.
+        res.status(409).json({ success: false, error: "Duplicate request (idempotency key already used)" });
+        return;
+      }
+
+      // Audit log (skip on idempotent replay)
+      if (!result.replayed) {
+        writeAuditLog(req.user!.id, "WALLET_PAY", "wallet", wallet.id, {
+          amount: Number(result.debitResult.txn.amount),
+          residentId,
+          ledgerEntryIds,
+          paymentId: result.payment.id,
+        });
+      }
 
       res.json({
         success: true,
@@ -320,12 +441,7 @@ walletRouter.post(
             ...result.payment,
             amount: Number(result.payment.amount),
           },
-          walletTransaction: {
-            ...result.debitResult.txn,
-            amount: Number(result.debitResult.txn.amount),
-            balanceBefore: Number(result.debitResult.txn.balanceBefore),
-            balanceAfter: Number(result.debitResult.txn.balanceAfter),
-          },
+          walletTransaction: serializeTxn(result.debitResult.txn),
           newBalance: result.debitResult.balanceAfter,
           entriesPaid: ledgerEntryIds.length,
         },
@@ -333,6 +449,10 @@ walletRouter.post(
     } catch (err: any) {
       if (err?.statusCode === 422) {
         res.status(422).json({ success: false, error: err.message, details: err.details });
+        return;
+      }
+      if (err?.statusCode && err.statusCode >= 400 && err.statusCode < 500) {
+        res.status(err.statusCode).json({ success: false, error: err.message });
         return;
       }
       req.log.error(err);
@@ -389,40 +509,9 @@ walletRouter.post(
         res.status(404).json({ success: false, error: "Resident not found" });
         return;
       }
+      assertPropertyAccess(req, resident.propertyId);
       if (!resident.walletEnabled) {
         res.status(400).json({ success: false, error: "Wallet is disabled for this resident" });
-        return;
-      }
-
-      // Verify entries
-      const entries = await db
-        .select()
-        .from(ledgerEntriesTable)
-        .where(inArray(ledgerEntriesTable.id, ledgerEntryIds));
-
-      if (entries.length !== ledgerEntryIds.length) {
-        res.status(404).json({ success: false, error: "One or more ledger entries not found" });
-        return;
-      }
-      const wrongResident = entries.find((e) => e.residentId !== residentId);
-      if (wrongResident) {
-        res.status(400).json({ success: false, error: "All ledger entries must belong to this resident" });
-        return;
-      }
-      const alreadyPaid = entries.find((e) => e.isPaid);
-      if (alreadyPaid) {
-        res.status(400).json({ success: false, error: `Ledger entry ${alreadyPaid.id} is already paid` });
-        return;
-      }
-
-      const totalEntries = entries.reduce((s, e) => s + Number(e.amount), 0);
-      const combinedAmount = walletAmount + otherAmount;
-      if (Math.abs(combinedAmount - totalEntries) > 0.01) {
-        res.status(422).json({
-          success: false,
-          error: "Amounts do not sum to ledger total",
-          details: { walletAmount, otherAmount, combined: combinedAmount, ledgerTotal: totalEntries },
-        });
         return;
       }
 
@@ -433,8 +522,63 @@ walletRouter.post(
       }
 
       const config = await getWalletConfig(resident.propertyId);
+      const idempotencyKey = getIdempotencyKey(req);
 
       const result = await db.transaction(async (tx) => {
+        // Idempotency: replay returns the original wallet txn + payments.
+        if (idempotencyKey) {
+          const [existingTxn] = await tx
+            .select()
+            .from(walletTransactionsTable)
+            .where(
+              and(
+                eq(walletTransactionsTable.walletId, wallet.id),
+                eq(walletTransactionsTable.referenceType, IDEMPOTENCY_REF_TYPE),
+                eq(walletTransactionsTable.notes, `idem:${idempotencyKey}`)
+              )
+            );
+          if (existingTxn) {
+            const linked = existingTxn.referenceId
+              ? await tx.select().from(paymentsTable).where(eq(paymentsTable.id, existingTxn.referenceId))
+              : [];
+            return {
+              debitResult: { txn: existingTxn, balanceAfter: Number(existingTxn.balanceAfter) },
+              walletPayment: linked[0] ?? null,
+              otherPayment: null,
+              replayed: true as const,
+            };
+          }
+        }
+
+        // Verify entries INSIDE the tx with row locks (double-pay race fix).
+        const entries = await tx
+          .select()
+          .from(ledgerEntriesTable)
+          .where(inArray(ledgerEntriesTable.id, ledgerEntryIds))
+          .for("update");
+
+        if (entries.length !== ledgerEntryIds.length) {
+          throw httpError(404, "One or more ledger entries not found");
+        }
+        if (entries.some((e) => e.residentId !== residentId)) {
+          throw httpError(400, "All ledger entries must belong to this resident");
+        }
+        const alreadyPaid = entries.find((e) => e.isPaid);
+        if (alreadyPaid) {
+          throw httpError(400, `Ledger entry ${alreadyPaid.id} is already paid`);
+        }
+
+        const totalEntries = entries.reduce((s, e) => s + Number(e.amount), 0);
+        const combinedAmount = walletAmount + otherAmount;
+        if (Math.abs(combinedAmount - totalEntries) > 0.01) {
+          throw httpError(422, "Amounts do not sum to ledger total", {
+            walletAmount,
+            otherAmount,
+            combined: combinedAmount,
+            ledgerTotal: totalEntries,
+          });
+        }
+
         // Debit wallet portion
         const debitResult = await debitWallet(
           wallet.id,
@@ -444,7 +588,7 @@ walletRouter.post(
             description: `Partial wallet payment (₹${walletAmount}) for ${entries.length} ledger entr${entries.length === 1 ? "y" : "ies"}`,
             recordedBy: req.user!.id,
             propertyId: resident.propertyId,
-            notes: body.notes ?? null,
+            notes: idempotencyKey ? `idem:${idempotencyKey}` : (body.notes ?? null),
           },
           config,
           tx
@@ -478,28 +622,47 @@ walletRouter.post(
           })
           .returning();
 
-        // Mark ledger entries paid
-        await tx
+        // Mark ledger entries paid — guarded on isPaid=false (concurrent-pay fix).
+        const marked = await tx
           .update(ledgerEntriesTable)
           .set({ isPaid: true, paidOn: new Date(), updatedAt: new Date() })
-          .where(inArray(ledgerEntriesTable.id, ledgerEntryIds));
+          .where(and(inArray(ledgerEntriesTable.id, ledgerEntryIds), eq(ledgerEntriesTable.isPaid, false)))
+          .returning({ id: ledgerEntriesTable.id });
+        if (marked.length !== ledgerEntryIds.length) {
+          throw httpError(409, "One or more ledger entries were already paid");
+        }
 
-        // Back-link wallet transaction to wallet payment
+        // Back-link wallet transaction to wallet payment (stamp idempotency marker).
         await tx
           .update(walletTransactionsTable)
-          .set({ referenceId: walletPayment!.id, referenceType: "PAYMENT" })
+          .set({
+            referenceId: walletPayment!.id,
+            referenceType: idempotencyKey ? IDEMPOTENCY_REF_TYPE : "PAYMENT",
+          })
           .where(eq(walletTransactionsTable.id, debitResult.txn.id));
 
-        return { debitResult, walletPayment: walletPayment!, otherPayment: otherPayment! };
+        return {
+          debitResult,
+          walletPayment: walletPayment!,
+          otherPayment: otherPayment!,
+          replayed: false as const,
+        };
       });
 
-      writeAuditLog(req.user!.id, "WALLET_PARTIAL_PAY", "wallet", wallet.id, {
-        walletAmount,
-        otherAmount,
-        otherMode,
-        residentId,
-        ledgerEntryIds,
-      });
+      if (result.walletPayment === null) {
+        res.status(409).json({ success: false, error: "Duplicate request (idempotency key already used)" });
+        return;
+      }
+
+      if (!result.replayed) {
+        writeAuditLog(req.user!.id, "WALLET_PARTIAL_PAY", "wallet", wallet.id, {
+          walletAmount,
+          otherAmount,
+          otherMode,
+          residentId,
+          ledgerEntryIds,
+        });
+      }
 
       res.json({
         success: true,
@@ -508,22 +671,23 @@ walletRouter.post(
             ...result.walletPayment,
             amount: Number(result.walletPayment.amount),
           },
-          otherPayment: {
-            ...result.otherPayment,
-            amount: Number(result.otherPayment.amount),
-          },
-          walletTransaction: {
-            ...result.debitResult.txn,
-            amount: Number(result.debitResult.txn.amount),
-            balanceBefore: Number(result.debitResult.txn.balanceBefore),
-            balanceAfter: Number(result.debitResult.txn.balanceAfter),
-          },
+          otherPayment: result.otherPayment
+            ? {
+                ...result.otherPayment,
+                amount: Number(result.otherPayment.amount),
+              }
+            : null,
+          walletTransaction: serializeTxn(result.debitResult.txn),
           newBalance: result.debitResult.balanceAfter,
         },
       });
     } catch (err: any) {
       if (err?.statusCode === 422) {
         res.status(422).json({ success: false, error: err.message, details: err.details });
+        return;
+      }
+      if (err?.statusCode && err.statusCode >= 400 && err.statusCode < 500) {
+        res.status(err.statusCode).json({ success: false, error: err.message });
         return;
       }
       req.log.error(err);
@@ -556,6 +720,7 @@ walletRouter.post(
         res.status(404).json({ success: false, error: "Resident not found" });
         return;
       }
+      assertPropertyAccess(req, resident.propertyId);
 
       const wallet = await getOrCreateWallet(residentId);
       const currentBalance = Number(wallet.balance);
@@ -569,23 +734,25 @@ walletRouter.post(
         return;
       }
 
-      // Fetch all unpaid ledger entries for this resident, oldest first
-      const unpaidEntries = await db
-        .select()
-        .from(ledgerEntriesTable)
-        .where(
-          and(
-            eq(ledgerEntriesTable.residentId, residentId),
-            eq(ledgerEntriesTable.isPaid, false)
-          )
-        )
-        .orderBy(asc(ledgerEntriesTable.dueDate));
-
       const result = await db.transaction(async (tx) => {
         const transactions: object[] = [];
         const clearedEntryIds: string[] = [];
         // For checkout we allow draining to exactly 0
         const checkoutConfig = { minimumBalance: 0 };
+
+        // Fetch + lock all unpaid ledger entries INSIDE the tx so a concurrent
+        // payment can't double-settle the same entry (oldest first).
+        const unpaidEntries = await tx
+          .select()
+          .from(ledgerEntriesTable)
+          .where(
+            and(
+              eq(ledgerEntriesTable.residentId, residentId),
+              eq(ledgerEntriesTable.isPaid, false)
+            )
+          )
+          .orderBy(asc(ledgerEntriesTable.dueDate))
+          .for("update");
 
         for (const entry of unpaidEntries) {
           // Re-read running balance from the locked wallet row
@@ -626,11 +793,15 @@ walletRouter.post(
             })
             .returning();
 
-          // Mark ledger entry paid
-          await tx
+          // Mark ledger entry paid — guarded on isPaid=false (concurrent-pay fix).
+          const marked = await tx
             .update(ledgerEntriesTable)
             .set({ isPaid: true, paidOn: new Date(), updatedAt: new Date() })
-            .where(eq(ledgerEntriesTable.id, entry.id));
+            .where(and(eq(ledgerEntriesTable.id, entry.id), eq(ledgerEntriesTable.isPaid, false)))
+            .returning({ id: ledgerEntriesTable.id });
+          if (marked.length !== 1) {
+            throw httpError(409, `Ledger entry ${entry.id} was already paid`);
+          }
 
           // Back-link wallet txn → payment
           await tx
@@ -711,6 +882,10 @@ walletRouter.post(
         res.status(422).json({ success: false, error: err.message, details: err.details });
         return;
       }
+      if (err?.statusCode && err.statusCode >= 400 && err.statusCode < 500) {
+        res.status(err.statusCode).json({ success: false, error: err.message });
+        return;
+      }
       req.log.error(err);
       res.status(500).json({ success: false, error: "Internal server error" });
     }
@@ -754,43 +929,61 @@ walletRouter.post(
         res.status(404).json({ success: false, error: "Resident not found" });
         return;
       }
+      assertPropertyAccess(req, resident.propertyId);
 
       const wallet = await getOrCreateWallet(residentId);
       const config = await getWalletConfig(resident.propertyId);
+      const idempotencyKey = getIdempotencyKey(req);
 
       const meta = {
         description: body.description,
         recordedBy: req.user!.id,
         propertyId: resident.propertyId,
         notes: body.notes ?? null,
+        referenceId: idempotencyKey ?? null,
+        referenceType: idempotencyKey ? IDEMPOTENCY_REF_TYPE : null,
       };
 
-      let result;
-      if (adjustType === "ADJUSTMENT_CREDIT") {
-        result = await db.transaction((tx) =>
-          creditWallet(wallet.id, amount, "ADJUSTMENT_CREDIT", meta, tx)
-        );
-      } else {
-        result = await db.transaction((tx) =>
-          debitWallet(wallet.id, amount, "ADJUSTMENT_DEBIT", meta, config, tx)
-        );
-      }
+      const result = await db.transaction(async (tx) => {
+        // Idempotency: replay returns the original adjustment unchanged.
+        if (idempotencyKey) {
+          const [existing] = await tx
+            .select()
+            .from(walletTransactionsTable)
+            .where(
+              and(
+                eq(walletTransactionsTable.walletId, wallet.id),
+                eq(walletTransactionsTable.referenceType, IDEMPOTENCY_REF_TYPE),
+                eq(walletTransactionsTable.referenceId, idempotencyKey)
+              )
+            );
+          if (existing) return { txn: existing, balanceAfter: Number(existing.balanceAfter), replayed: true as const };
+        }
+        const r =
+          adjustType === "ADJUSTMENT_CREDIT"
+            ? await creditWallet(wallet.id, amount, "ADJUSTMENT_CREDIT", meta, tx)
+            : await debitWallet(wallet.id, amount, "ADJUSTMENT_DEBIT", meta, config, tx);
+        return { ...r, replayed: false as const };
+      });
 
-      writeAuditLog(req.user!.id, adjustType, "wallet", wallet.id, { amount, residentId });
+      if (!result.replayed) {
+        writeAuditLog(req.user!.id, adjustType, "wallet", wallet.id, { amount, residentId });
+      }
 
       res.json({
         success: true,
         data: {
-          ...result.txn,
-          amount: Number(result.txn.amount),
-          balanceBefore: Number(result.txn.balanceBefore),
-          balanceAfter: Number(result.txn.balanceAfter),
+          ...serializeTxn(result.txn),
           newBalance: result.balanceAfter,
         },
       });
     } catch (err: any) {
       if (err?.statusCode === 422) {
         res.status(422).json({ success: false, error: err.message, details: err.details });
+        return;
+      }
+      if (err?.statusCode && err.statusCode >= 400 && err.statusCode < 500) {
+        res.status(err.statusCode).json({ success: false, error: err.message });
         return;
       }
       req.log.error(err);
@@ -813,40 +1006,57 @@ walletRouter.post(
       const { residentId } = req.params as { residentId: string };
       const body = req.body || {};
 
-      if (!body.reversalOf) {
+      const reversalOf: string | undefined = body.reversalOf;
+      if (!reversalOf) {
         res.status(400).json({ success: false, error: "reversalOf (transaction id) is required" });
         return;
       }
 
-      const [original] = await db
-        .select()
-        .from(walletTransactionsTable)
-        .where(eq(walletTransactionsTable.id, body.reversalOf));
-      if (!original) {
-        res.status(404).json({ success: false, error: "Original transaction not found" });
-        return;
-      }
-      if (original.residentId !== residentId) {
-        res.status(400).json({ success: false, error: "Transaction does not belong to this resident" });
-        return;
-      }
-
       const wallet = await getOrCreateWallet(residentId);
-      const originalAmount = Number(original.amount);
-      // Credit types: reversing them → debit; debit types: reversing them → credit
-      const isCreditType = ["TOPUP", "ADJUSTMENT_CREDIT", "REFUND_WITHDRAWAL"].includes(original.type);
-      const meta = {
-        description: body.description || `Reversal of transaction ${body.reversalOf}`,
-        recordedBy: req.user!.id,
-        propertyId: original.propertyId ?? null,
-        notes: body.notes ?? null,
-        reversalOf: body.reversalOf,
-      };
 
-      let result;
-      if (isCreditType) {
-        // Original was a credit → reversal is a debit (allow going negative for reversals)
-        result = await db.transaction(async (tx) => {
+      const result = await db.transaction(async (tx) => {
+        // Lock the original transaction row so concurrent reversals of the same
+        // id serialize here — this is what makes the already-reversed check safe.
+        const [original] = await tx
+          .select()
+          .from(walletTransactionsTable)
+          .where(eq(walletTransactionsTable.id, reversalOf))
+          .for("update");
+        if (!original) throw httpError(404, "Original transaction not found");
+        if (original.residentId !== residentId) {
+          throw httpError(400, "Transaction does not belong to this resident");
+        }
+        // A reversal cannot itself be reversed.
+        if (original.type === "REVERSAL") {
+          throw httpError(400, "A reversal transaction cannot be reversed");
+        }
+
+        // Idempotency / double-reversal guard: refuse if this transaction has
+        // already been reversed (unlimited-money-creation fix).
+        const [priorReversal] = await tx
+          .select({ id: walletTransactionsTable.id })
+          .from(walletTransactionsTable)
+          .where(eq(walletTransactionsTable.reversalOf, original.id));
+        if (priorReversal) {
+          throw httpError(409, "Transaction has already been reversed");
+        }
+
+        const originalAmount = Number(original.amount);
+        // Credit types: reversing them → debit; debit types: reversing them → credit
+        const isCreditType = ["TOPUP", "ADJUSTMENT_CREDIT", "REFUND_WITHDRAWAL"].includes(original.type);
+        const meta = {
+          description: body.description || `Reversal of transaction ${original.id}`,
+          recordedBy: req.user!.id,
+          propertyId: original.propertyId ?? null,
+          notes: body.notes ?? null,
+          reversalOf: original.id,
+        };
+
+        // For property-scoped callers, ensure the reversed txn is in their scope.
+        assertPropertyAccess(req, original.propertyId);
+
+        if (isCreditType) {
+          // Original was a credit → reversal is a debit (allow going negative for reversals)
           const [w] = await tx.select().from(walletsTable).where(eq(walletsTable.id, wallet.id)).for("update");
           const balanceBefore = Number(w!.balance);
           const balanceAfter = balanceBefore - originalAmount;
@@ -857,31 +1067,34 @@ walletRouter.post(
             balanceBefore: String(balanceBefore), balanceAfter: String(balanceAfter),
             ...meta,
           }).returning();
-          return { txn: txn!, balanceAfter };
-        });
-      } else {
+          return { txn: txn!, balanceAfter, originalAmount };
+        }
         // Original was a debit → reversal is a credit
-        result = await db.transaction((tx) =>
-          creditWallet(wallet.id, originalAmount, "REVERSAL", meta, tx)
-        );
-      }
+        const r = await creditWallet(wallet.id, originalAmount, "REVERSAL", meta, tx);
+        return { ...r, originalAmount };
+      });
 
       writeAuditLog(req.user!.id, "REVERSAL", "wallet", wallet.id, {
-        reversalOf: body.reversalOf,
-        amount: originalAmount,
+        reversalOf,
+        amount: result.originalAmount,
       });
 
       res.json({
         success: true,
         data: {
-          ...result.txn,
-          amount: Number(result.txn.amount),
-          balanceBefore: Number(result.txn.balanceBefore),
-          balanceAfter: Number(result.txn.balanceAfter),
+          ...serializeTxn(result.txn),
           newBalance: result.balanceAfter,
         },
       });
-    } catch (err) {
+    } catch (err: any) {
+      if (err?.statusCode === 422) {
+        res.status(422).json({ success: false, error: err.message, details: err.details });
+        return;
+      }
+      if (err?.statusCode && err.statusCode >= 400 && err.statusCode < 500) {
+        res.status(err.statusCode).json({ success: false, error: err.message });
+        return;
+      }
       req.log.error(err);
       res.status(500).json({ success: false, error: "Internal server error" });
     }
@@ -909,6 +1122,7 @@ walletRouter.patch(
         res.status(404).json({ success: false, error: "Resident not found" });
         return;
       }
+      assertPropertyAccess(req, resident.propertyId);
       const walletEnabled =
         typeof body.walletEnabled === "boolean" ? body.walletEnabled : !resident.walletEnabled;
       await db
@@ -916,7 +1130,11 @@ walletRouter.patch(
         .set({ walletEnabled, updatedAt: new Date() })
         .where(eq(residentsTable.id, residentId));
       res.json({ success: true, data: { residentId, walletEnabled } });
-    } catch (err) {
+    } catch (err: any) {
+      if (err?.statusCode === 403) {
+        res.status(403).json({ success: false, error: err.message });
+        return;
+      }
       req.log.error(err);
       res.status(500).json({ success: false, error: "Internal server error" });
     }
@@ -934,6 +1152,7 @@ walletRouter.get(
   async (req, res) => {
     try {
       const { propertyId } = req.params as { propertyId: string };
+      assertPropertyAccess(req, propertyId);
       const [config] = await db
         .select()
         .from(walletConfigTable)
@@ -971,7 +1190,11 @@ walletRouter.get(
           lowBalanceAlert: Number(config.lowBalanceAlert),
         },
       });
-    } catch (err) {
+    } catch (err: any) {
+      if (err?.statusCode === 403) {
+        res.status(403).json({ success: false, error: err.message });
+        return;
+      }
       req.log.error(err);
       res.status(500).json({ success: false, error: "Internal server error" });
     }
@@ -989,6 +1212,7 @@ walletRouter.put(
   async (req, res) => {
     try {
       const { propertyId } = req.params as { propertyId: string };
+      assertPropertyAccess(req, propertyId);
       const body = req.body || {};
 
       const [existing] = await db
@@ -1045,7 +1269,11 @@ walletRouter.put(
           lowBalanceAlert: Number(updated!.lowBalanceAlert),
         },
       });
-    } catch (err) {
+    } catch (err: any) {
+      if (err?.statusCode === 403) {
+        res.status(403).json({ success: false, error: err.message });
+        return;
+      }
       req.log.error(err);
       res.status(500).json({ success: false, error: "Internal server error" });
     }
@@ -1068,8 +1296,13 @@ walletRouter.get(
       const limit = Math.min(Number(req.query["limit"] ?? 50), 200);
       const offset = Number(req.query["offset"] ?? 0);
 
+      // Best-effort row scoping: property-bound callers (WARDEN/UNIT_LEAD) only
+      // ever see their own property; org-wide roles are unaffected (scope=null).
+      const scope = scopedPropertyId(req);
+
       // Build conditions
       const conditions = [];
+      if (scope) conditions.push(eq(residentsTable.propertyId, scope));
       if (propertyId) conditions.push(eq(residentsTable.propertyId, propertyId));
       if (search) {
         const { ilike, or } = await import("drizzle-orm");
@@ -1113,19 +1346,25 @@ walletRouter.get(
         configs.map((c) => [c.propertyId, Number(c.lowBalanceAlert)])
       );
 
-      // Count totals
-      const [countRow] = await db
+      // Count totals (constrained to the caller's scope for property-bound roles)
+      const countQuery = db
         .select({ count: sql<number>`count(*)::int` })
         .from(walletsTable)
         .innerJoin(residentsTable, eq(walletsTable.residentId, residentsTable.id));
+      const [countRow] = await (scope
+        ? countQuery.where(eq(residentsTable.propertyId, scope))
+        : countQuery);
 
-      const [totalsRow] = await db
+      const totalsQuery = db
         .select({
           negativeCount: sql<number>`count(*) filter (where ${walletsTable.balance}::numeric < 0)`,
           totalBalance: sql<number>`coalesce(sum(${walletsTable.balance}::numeric), 0)`,
         })
         .from(walletsTable)
         .innerJoin(residentsTable, eq(walletsTable.residentId, residentsTable.id));
+      const [totalsRow] = await (scope
+        ? totalsQuery.where(eq(residentsTable.propertyId, scope))
+        : totalsQuery);
 
       res.json({
         success: true,

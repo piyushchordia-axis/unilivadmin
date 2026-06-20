@@ -3,7 +3,9 @@ import bcrypt from "bcryptjs";
 import { db } from "@workspace/db";
 import { usersTable, announcementsTable } from "@workspace/db";
 import { eq, sql, ilike, and } from "drizzle-orm";
-import { authenticate, authorize } from "../middlewares/auth.js";
+import { authenticate } from "../middlewares/auth.js";
+import { authorize } from "../middlewares/authorize.js";
+import { pick } from "../lib/authz.js";
 import { getPagination, buildMeta } from "../lib/paginate.js";
 import { newId } from "../lib/id.js";
 
@@ -14,18 +16,12 @@ function sanitizeUser(u: typeof usersTable.$inferSelect) {
 
 /** Only these columns may be set from a request body. Never accept auth-state
  *  fields (currentSessionId, isActive's bypasses, failedLoginAttempts, lockedUntil,
- *  passwordHash, lastLogin, …) — that would be a mass-assignment privilege escalation. */
+ *  passwordHash, lastLogin, …) — that would be a mass-assignment privilege escalation.
+ *  role/isActive are legitimately editable here (USERS module). */
 const WRITABLE_USER_FIELDS = ["name", "email", "username", "designation", "phone", "role", "propertyId", "isActive"] as const;
-function pickUserFields(body: any): any {
-  const out: Record<string, unknown> = {};
-  if (body && typeof body === "object") {
-    for (const k of WRITABLE_USER_FIELDS) if (k in body) out[k] = body[k];
-  }
-  return out;
-}
 
 export const usersRouter = Router();
-usersRouter.get("/", authenticate, async (req, res) => {
+usersRouter.get("/", authenticate, authorize("USERS", "view"), async (req, res) => {
   try {
     const { page, limit, offset } = getPagination(req.query as Record<string, unknown>);
     const search = req.query["search"] as string | undefined;
@@ -39,23 +35,23 @@ usersRouter.get("/", authenticate, async (req, res) => {
     res.json({ success: true, data: rows.map(sanitizeUser), meta: buildMeta(countResult.count, page, limit) });
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
-usersRouter.post("/", authenticate, authorize("SUPER_ADMIN", "HR_MANAGER"), async (req, res) => {
+usersRouter.post("/", authenticate, authorize("USERS", "create"), async (req, res) => {
   try {
-    const fields = pickUserFields(req.body);
+    const fields = pick(req.body, WRITABLE_USER_FIELDS);
     const passwordHash = await bcrypt.hash(req.body?.password || "TempPass@123", 12);
     const [row] = await db.insert(usersTable).values({ id: newId(), ...fields, passwordHash, updatedAt: new Date() }).returning();
     res.status(201).json({ success: true, data: sanitizeUser(row) });
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
-usersRouter.put("/:id", authenticate, authorize("SUPER_ADMIN", "HR_MANAGER"), async (req, res) => {
+usersRouter.put("/:id", authenticate, authorize("USERS", "edit"), async (req, res) => {
   try {
-    const fields = pickUserFields(req.body);
+    const fields = pick(req.body, WRITABLE_USER_FIELDS);
     const [row] = await db.update(usersTable).set({ ...fields, updatedAt: new Date() }).where(eq(usersTable.id, req.params["id"]!)).returning();
     if (!row) { res.status(404).json({ success: false, error: "Not found" }); return; }
     res.json({ success: true, data: sanitizeUser(row) });
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
-usersRouter.delete("/:id", authenticate, authorize("SUPER_ADMIN", "HR_MANAGER"), async (req, res) => {
+usersRouter.delete("/:id", authenticate, authorize("USERS", "delete"), async (req, res) => {
   try {
     await db.delete(usersTable).where(eq(usersTable.id, req.params["id"]!));
     res.json({ success: true, message: "Deleted" });
@@ -63,7 +59,7 @@ usersRouter.delete("/:id", authenticate, authorize("SUPER_ADMIN", "HR_MANAGER"),
 });
 
 export const announcementsRouter = Router();
-announcementsRouter.get("/", authenticate, async (req, res) => {
+announcementsRouter.get("/", authenticate, authorize("COMMUNICATIONS", "view"), async (req, res) => {
   try {
     const { page, limit, offset } = getPagination(req.query as Record<string, unknown>);
     const propertyId = req.query["propertyId"] as string | undefined;
@@ -73,7 +69,7 @@ announcementsRouter.get("/", authenticate, async (req, res) => {
     res.json({ success: true, data: rows, meta: buildMeta(countResult.count, page, limit) });
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
-announcementsRouter.post("/", authenticate, async (req, res) => {
+announcementsRouter.post("/", authenticate, authorize("COMMUNICATIONS", "create"), async (req, res) => {
   try {
     const b = req.body ?? {};
     const [row] = await db.insert(announcementsTable).values({
@@ -87,7 +83,7 @@ announcementsRouter.post("/", authenticate, async (req, res) => {
     res.status(201).json({ success: true, data: row });
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
-announcementsRouter.delete("/:id", authenticate, async (req, res) => {
+announcementsRouter.delete("/:id", authenticate, authorize("COMMUNICATIONS", "delete"), async (req, res) => {
   try {
     await db.delete(announcementsTable).where(eq(announcementsTable.id, req.params["id"]!));
     res.json({ success: true, message: "Deleted" });

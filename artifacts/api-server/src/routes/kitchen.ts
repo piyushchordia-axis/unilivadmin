@@ -11,12 +11,14 @@ import {
 } from "@workspace/db";
 import { eq, sql, ilike, and, gte, lte, desc, inArray } from "drizzle-orm";
 import { authenticate } from "../middlewares/auth.js";
+import { authorize } from "../middlewares/authorize.js";
+import { pick } from "../lib/authz.js";
 import { getPagination, buildMeta } from "../lib/paginate.js";
 import { newId } from "../lib/id.js";
 
 export const recipesRouter: Router = Router();
 
-recipesRouter.get("/", authenticate, async (req, res) => {
+recipesRouter.get("/", authenticate, authorize("RECIPES", "view"), async (req, res) => {
   try {
     const { page, limit, offset } = getPagination(req.query as Record<string, unknown>);
     const search = req.query["search"] as string | undefined;
@@ -33,7 +35,7 @@ recipesRouter.get("/", authenticate, async (req, res) => {
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-recipesRouter.get("/:id", authenticate, async (req, res) => {
+recipesRouter.get("/:id", authenticate, authorize("RECIPES", "view"), async (req, res) => {
   try {
     const [row] = await db.select().from(recipesTable).where(eq(recipesTable.id, req.params["id"]!));
     if (!row) { res.status(404).json({ success: false, error: "Not found" }); return; }
@@ -41,9 +43,9 @@ recipesRouter.get("/:id", authenticate, async (req, res) => {
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-recipesRouter.post("/", authenticate, async (req, res) => {
+recipesRouter.post("/", authenticate, authorize("RECIPES", "create"), async (req, res) => {
   try {
-    const body = req.body;
+    const body = pick(req.body, ["name", "category", "mealType", "ingredients", "method", "photoUrl", "allergens", "isVeg", "isActive"]);
     const [row] = await db.insert(recipesTable).values({
       id: newId(),
       name: body.name,
@@ -61,15 +63,16 @@ recipesRouter.post("/", authenticate, async (req, res) => {
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-recipesRouter.put("/:id", authenticate, async (req, res) => {
+recipesRouter.put("/:id", authenticate, authorize("RECIPES", "edit"), async (req, res) => {
   try {
-    const [row] = await db.update(recipesTable).set({ ...req.body, updatedAt: new Date() }).where(eq(recipesTable.id, req.params["id"]!)).returning();
+    const body = pick(req.body, ["name", "category", "mealType", "ingredients", "method", "photoUrl", "allergens", "isVeg", "isActive"]);
+    const [row] = await db.update(recipesTable).set({ ...body, updatedAt: new Date() }).where(eq(recipesTable.id, req.params["id"]!)).returning();
     if (!row) { res.status(404).json({ success: false, error: "Not found" }); return; }
     res.json({ success: true, data: row });
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-recipesRouter.delete("/:id", authenticate, async (req, res) => {
+recipesRouter.delete("/:id", authenticate, authorize("RECIPES", "delete"), async (req, res) => {
   try {
     await db.delete(recipesTable).where(eq(recipesTable.id, req.params["id"]!));
     res.json({ success: true, message: "Deleted" });
@@ -77,7 +80,7 @@ recipesRouter.delete("/:id", authenticate, async (req, res) => {
 });
 
 // recipe feedback (rolling 4-week trend)
-recipesRouter.get("/:id/feedback", authenticate, async (req, res) => {
+recipesRouter.get("/:id/feedback", authenticate, authorize("RECIPES", "view"), async (req, res) => {
   try {
     const fourWeeksAgo = new Date(Date.now() - 28 * 86400000);
     const rows = await db.select().from(recipeFeedbackTable)
@@ -87,7 +90,7 @@ recipesRouter.get("/:id/feedback", authenticate, async (req, res) => {
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-recipesRouter.post("/:id/feedback", authenticate, async (req, res) => {
+recipesRouter.post("/:id/feedback", authenticate, authorize("RECIPES", "edit"), async (req, res) => {
   try {
     const { propertyId, rating, comment, weekStart } = req.body;
     const [row] = await db.insert(recipeFeedbackTable).values({
@@ -105,7 +108,7 @@ recipesRouter.post("/:id/feedback", authenticate, async (req, res) => {
 // =====================================================
 export const menuPlansRouter: Router = Router();
 
-menuPlansRouter.get("/", authenticate, async (req, res) => {
+menuPlansRouter.get("/", authenticate, authorize("MENU_PLANNING", "view"), async (req, res) => {
   try {
     const { page, limit, offset } = getPagination(req.query as Record<string, unknown>);
     const propertyId = req.query["propertyId"] as string | undefined;
@@ -117,7 +120,7 @@ menuPlansRouter.get("/", authenticate, async (req, res) => {
 });
 
 // fetch by property + weekStart (find or null)
-menuPlansRouter.get("/by-week", authenticate, async (req, res) => {
+menuPlansRouter.get("/by-week", authenticate, authorize("MENU_PLANNING", "view"), async (req, res) => {
   try {
     const propertyId = req.query["propertyId"] as string;
     const weekStart = req.query["weekStart"] as string;
@@ -133,13 +136,13 @@ menuPlansRouter.get("/by-week", authenticate, async (req, res) => {
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-menuPlansRouter.post("/", authenticate, async (req, res) => {
+menuPlansRouter.post("/", authenticate, authorize("MENU_PLANNING", "create"), async (req, res) => {
   try {
-    const body = req.body;
+    const body = pick(req.body, ["propertyId", "weekStart", "slots", "status"]);
     const [row] = await db.insert(menuPlansTable).values({
       id: newId(),
       propertyId: body.propertyId,
-      weekStart: new Date(body.weekStart),
+      weekStart: new Date(body.weekStart as string),
       slots: body.slots || {},
       status: body.status || "DRAFT",
       updatedAt: new Date(),
@@ -148,17 +151,17 @@ menuPlansRouter.post("/", authenticate, async (req, res) => {
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-menuPlansRouter.put("/:id", authenticate, async (req, res) => {
+menuPlansRouter.put("/:id", authenticate, authorize("MENU_PLANNING", "edit"), async (req, res) => {
   try {
-    const body = { ...req.body };
-    if (body.weekStart) body.weekStart = new Date(body.weekStart);
+    const body = pick(req.body, ["propertyId", "weekStart", "slots", "status"]) as Record<string, unknown>;
+    if (body["weekStart"]) body["weekStart"] = new Date(body["weekStart"] as string);
     const [row] = await db.update(menuPlansTable).set({ ...body, updatedAt: new Date() }).where(eq(menuPlansTable.id, req.params["id"]!)).returning();
     if (!row) { res.status(404).json({ success: false, error: "Not found" }); return; }
     res.json({ success: true, data: row });
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-menuPlansRouter.post("/:id/publish", authenticate, async (req, res) => {
+menuPlansRouter.post("/:id/publish", authenticate, authorize("MENU_PLANNING", "edit"), async (req, res) => {
   try {
     const [row] = await db.update(menuPlansTable).set({ status: "PUBLISHED", publishedAt: new Date(), updatedAt: new Date() }).where(eq(menuPlansTable.id, req.params["id"]!)).returning();
     if (!row) { res.status(404).json({ success: false, error: "Not found" }); return; }
@@ -167,7 +170,7 @@ menuPlansRouter.post("/:id/publish", authenticate, async (req, res) => {
 });
 
 // copy a previous week's plan into a new draft for given (propertyId, newWeekStart)
-menuPlansRouter.post("/copy", authenticate, async (req, res) => {
+menuPlansRouter.post("/copy", authenticate, authorize("MENU_PLANNING", "create"), async (req, res) => {
   try {
     const { sourcePlanId, propertyId, weekStart } = req.body;
     const [src] = await db.select().from(menuPlansTable).where(eq(menuPlansTable.id, sourcePlanId));
@@ -185,7 +188,7 @@ menuPlansRouter.post("/copy", authenticate, async (req, res) => {
 });
 
 // generate a procurement indent from menu × headcount
-menuPlansRouter.post("/:id/generate-indent", authenticate, async (req, res) => {
+menuPlansRouter.post("/:id/generate-indent", authenticate, authorize("MENU_PLANNING", "edit"), async (req, res) => {
   try {
     const [plan] = await db.select().from(menuPlansTable).where(eq(menuPlansTable.id, req.params["id"]!));
     if (!plan) { res.status(404).json({ success: false, error: "Menu plan not found" }); return; }
@@ -249,7 +252,7 @@ menuPlansRouter.post("/:id/generate-indent", authenticate, async (req, res) => {
 // Daily production
 export const productionRouter: Router = Router();
 
-productionRouter.get("/", authenticate, async (req, res) => {
+productionRouter.get("/", authenticate, authorize("MENU_PLANNING", "view"), async (req, res) => {
   try {
     const propertyId = req.query["propertyId"] as string | undefined;
     const date = req.query["date"] as string | undefined;
@@ -269,7 +272,7 @@ productionRouter.get("/", authenticate, async (req, res) => {
 });
 
 // upsert today's record for a property
-productionRouter.post("/", authenticate, async (req, res) => {
+productionRouter.post("/", authenticate, authorize("MENU_PLANNING", "edit"), async (req, res) => {
   try {
     const { propertyId, date, dispatches, wastage, receivings } = req.body;
     const d = new Date(date || Date.now());
@@ -307,7 +310,7 @@ productionRouter.post("/", authenticate, async (req, res) => {
 // Kitchen analytics
 export const kitchenAnalyticsRouter: Router = Router();
 
-kitchenAnalyticsRouter.get("/feedback-trends", authenticate, async (req, res) => {
+kitchenAnalyticsRouter.get("/feedback-trends", authenticate, authorize("RECIPES", "view"), async (req, res) => {
   try {
     const propertyId = req.query["propertyId"] as string | undefined;
     const fourWeeksAgo = new Date(Date.now() - 28 * 86400000);
@@ -326,7 +329,7 @@ kitchenAnalyticsRouter.get("/feedback-trends", authenticate, async (req, res) =>
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-kitchenAnalyticsRouter.get("/wastage-trends", authenticate, async (req, res) => {
+kitchenAnalyticsRouter.get("/wastage-trends", authenticate, authorize("RECIPES", "view"), async (req, res) => {
   try {
     const propertyId = req.query["propertyId"] as string | undefined;
     const sixWeeksAgo = new Date(Date.now() - 42 * 86400000);
@@ -350,7 +353,7 @@ kitchenAnalyticsRouter.get("/wastage-trends", authenticate, async (req, res) => 
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-kitchenAnalyticsRouter.get("/menu-diversity", authenticate, async (req, res) => {
+kitchenAnalyticsRouter.get("/menu-diversity", authenticate, authorize("RECIPES", "view"), async (req, res) => {
   try {
     const propertyId = req.query["propertyId"] as string | undefined;
     const conds = [];

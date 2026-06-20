@@ -74,12 +74,14 @@ const announcementSchema = z.object({
 
 function AnnouncementsTab() {
   const qc = useQueryClient();
+  const { toast } = useToast();
   const { data: res, isLoading } = useGetAnnouncements({} as any, { query: { queryKey: getGetAnnouncementsQueryKey({} as any) } });
   const { data: propsRes } = useGetProperties();
   const createMut = useCreateAnnouncement();
   const delMut = useDeleteAnnouncement();
-  
+
   const [isCreateOpen, setIsCreateOpen] = React.useState(false);
+  const [isSubmitting, setIsSubmitting] = React.useState(false);
   const [deleteId, setDeleteId] = React.useState<string | null>(null);
 
   const announcements = res?.data || [];
@@ -105,17 +107,58 @@ function AnnouncementsTab() {
     }
   }, [isCreateOpen, editor, form]);
 
-  const onSubmit = (values: z.infer<typeof announcementSchema>) => {
-    const payload: any = { title: values.title, content: values.content, type: values.type };
-    if (values.target === "SPECIFIC" && values.propertyIds.length > 0) {
-      payload.propertyId = values.propertyIds[0]; // Simplifying for the mock API
-    }
-    createMut.mutate({ data: payload }, {
-      onSuccess: () => {
+  const onSubmit = async (values: z.infer<typeof announcementSchema>) => {
+    const base = { title: values.title, content: values.content, type: values.type };
+
+    // The announcement endpoint scopes a row to a single `propertyId`. When the
+    // admin targets several specific properties we fan out one announcement per
+    // property so every selected property actually receives it — instead of
+    // silently keeping only the first selection.
+    const targets: (string | null)[] =
+      values.target === "SPECIFIC" && values.propertyIds.length > 0
+        ? values.propertyIds
+        : [null]; // ALL Properties → single un-scoped row
+
+    setIsSubmitting(true);
+    try {
+      const results = await Promise.allSettled(
+        targets.map((propertyId) =>
+          createMut.mutateAsync({
+            data: { ...base, ...(propertyId ? { propertyId } : {}) } as any,
+          }),
+        ),
+      );
+
+      const failed = results.filter((r) => r.status === "rejected").length;
+      const succeeded = results.length - failed;
+
+      qc.invalidateQueries({ queryKey: getGetAnnouncementsQueryKey({} as any) });
+
+      if (failed === 0) {
         setIsCreateOpen(false);
-        qc.invalidateQueries({ queryKey: getGetAnnouncementsQueryKey({} as any) });
+        toast({
+          title:
+            targets.length > 1
+              ? `Announcement posted to ${succeeded} properties`
+              : "Announcement posted",
+        });
+      } else if (succeeded > 0) {
+        // Partial failure — keep the modal open so the admin can retry the rest.
+        toast({
+          variant: "destructive",
+          title: `Posted to ${succeeded} of ${targets.length} properties`,
+          description: `${failed} ${failed === 1 ? "property" : "properties"} failed. Please retry.`,
+        });
+      } else {
+        toast({
+          variant: "destructive",
+          title: "Failed to post announcement",
+          description: "No properties were updated. Please try again.",
+        });
       }
-    });
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const columns = [
@@ -143,7 +186,7 @@ function AnnouncementsTab() {
       </div>
       <DataTable columns={columns} data={announcements} isLoading={isLoading} searchKey="title" searchPlaceholder="Search announcements..." />
       
-      <FormModal open={isCreateOpen} onOpenChange={setIsCreateOpen} title="Create Announcement" onSave={form.handleSubmit(onSubmit)} isSaving={createMut.isPending}>
+      <FormModal open={isCreateOpen} onOpenChange={setIsCreateOpen} title="Create Announcement" onSave={form.handleSubmit(onSubmit)} isSaving={isSubmitting}>
         <Form {...form}>
           <form className="space-y-4">
             <FormField control={form.control} name="title" render={({field}) => (
@@ -176,7 +219,12 @@ function AnnouncementsTab() {
             </div>
             {form.watch("target") === "SPECIFIC" && (
               <div className="border rounded p-3 bg-surface max-h-40 overflow-y-auto space-y-2">
-                <Label className="mb-2 block">Select Properties</Label>
+                <Label className="mb-2 flex items-center justify-between">
+                  <span>Select Properties</span>
+                  <span className="text-xs text-muted-foreground font-normal">
+                    {form.watch("propertyIds").length} selected
+                  </span>
+                </Label>
                 {properties.map(p => (
                   <div key={p.id} className="flex items-center space-x-2">
                     <Checkbox id={`p-${p.id}`} checked={form.watch("propertyIds").includes(p.id)} onCheckedChange={(c) => {
@@ -205,6 +253,7 @@ function AnnouncementsTab() {
 
 function BulkMessagesTab({ prefill, onPrefillConsumed }: { prefill: BulkPrefill | null; onPrefillConsumed: () => void }) {
   const { toast } = useToast();
+  const qc = useQueryClient();
   const { data: propsRes } = useGetProperties();
   const properties = propsRes?.data || [];
   
@@ -229,10 +278,52 @@ function BulkMessagesTab({ prefill, onPrefillConsumed }: { prefill: BulkPrefill 
   const mutSend = useMutation({
     mutationFn: (data: any) => apiFetch("/communications/bulk-send", { method: "POST", body: JSON.stringify(data) }),
     onSuccess: (res: any) => {
-      toast({ title: `Sent to ${res.data?.totalRecipients ?? res.data?.total ?? 0} recipients`, description: "Bulk message logged successfully." });
-      setForm({...form, subject: "", body: ""});
+      // Surface the new send in the Audit Log immediately.
+      qc.invalidateQueries({ queryKey: ["communications-logs"] });
+      const d = res?.data ?? {};
+      // Read the real dispatch outcome from the backend. The notification
+      // service either delivers inline or enqueues for the worker, so a recipient
+      // is counted as "queued" when handed off and "failed" when the provider
+      // (or address resolution) rejected it. Fall back to the recipient count for
+      // older response shapes so the toast never under-reports.
+      const total: number = d.totalRecipients ?? d.total ?? 0;
+      const failures: { to?: string; name?: string; error?: string }[] = Array.isArray(d.failures)
+        ? d.failures
+        : [];
+      const failed: number = d.failed ?? failures.length;
+      const sent: number = d.sent ?? d.delivered ?? 0;
+      const queued: number = d.queued ?? 0;
+      // Prefer explicit accepted/handed-off counts; otherwise infer from total − failed.
+      const accepted: number = d.accepted ?? (sent + queued > 0 ? sent + queued : Math.max(total - failed, 0));
+
+      if (failed > 0) {
+        const names = failures
+          .slice(0, 3)
+          .map((f) => f.name || f.to)
+          .filter(Boolean)
+          .join(", ");
+        toast({
+          variant: "destructive",
+          title: `${accepted} of ${total} ${form.channel} messages dispatched`,
+          description:
+            `${failed} failed` +
+            (names ? `: ${names}${failures.length > 3 ? ` +${failures.length - 3} more` : ""}` : ". See Audit Log for details."),
+        });
+      } else {
+        // Distinguish "delivered now" from "handed to the queue" so we never imply
+        // guaranteed delivery for messages that are still in flight.
+        const verb = queued > 0 && sent === 0 ? "queued for delivery" : "dispatched";
+        toast({
+          title: `${accepted || total} ${form.channel} message${(accepted || total) === 1 ? "" : "s"} ${verb}`,
+          description: "Recorded in the Audit Log.",
+        });
+      }
+
+      // Only clear the composer when the whole batch was accepted, so the admin
+      // can retry after a partial/total failure without re-typing.
+      if (failed === 0) setForm({ ...form, subject: "", body: "" });
     },
-    onError: (e: any) => toast({ title: e.message || "Failed", variant: "destructive" })
+    onError: (e: any) => toast({ title: e.message || "Failed to send", variant: "destructive" })
   });
 
   // Debounced preview
