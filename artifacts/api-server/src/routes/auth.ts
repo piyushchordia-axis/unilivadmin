@@ -39,7 +39,7 @@ function publicUser(user: DbUser) {
   };
 }
 
-async function issueSession(res: Response, user: DbUser) {
+export async function issueSession(res: Response, user: DbUser) {
   // Single active session: a new login rotates the session id and revokes every
   // other refresh token, so any other device's access/refresh tokens stop working.
   const sessionId = newId();
@@ -62,6 +62,7 @@ async function issueSession(res: Response, user: DbUser) {
     secure: process.env["NODE_ENV"] === "production",
     sameSite: "lax",
     maxAge: 7 * 24 * 60 * 60 * 1000,
+    path: "/", // explicit: sent to /api/auth/refresh regardless of which route set it
   });
   return accessToken;
 }

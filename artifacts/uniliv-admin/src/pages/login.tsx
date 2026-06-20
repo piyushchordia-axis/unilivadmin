@@ -3,7 +3,7 @@ import { useLocation } from "wouter";
 import { useQueryClient } from "@tanstack/react-query";
 import { FcGoogle } from "react-icons/fc";
 import { useAuthStore } from "@/lib/store";
-import { apiFetch } from "@/lib/api-fetch";
+import { apiFetch, refreshSession } from "@/lib/api-fetch";
 import { useToast } from "@/hooks/use-toast";
 import { InputOTP, InputOTPGroup, InputOTPSlot } from "@/components/ui/input-otp";
 import { homeForRole, type UserRole } from "@/lib/permissions";
@@ -73,9 +73,14 @@ export default function Login() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const reason = useQueryParam("reason"); // "replaced" | "expired" — why we were bounced here
+  const googleStatus = useQueryParam("google"); // "ok" after a successful Google round-trip
+  const googleErrorCode = useQueryParam("error"); // google_no_account | google_inactive | google_domain | google_failed
+  const rememberParam = useQueryParam("remember"); // remember choice carried through the redirect
 
   const [view, setView] = useState<View>("login");
   const [busy, setBusy] = useState(false);
+  const [googleReady, setGoogleReady] = useState(false); // is Google sign-in configured on the server?
+  const googleHandled = useRef(false);
 
   // login
   const [identifier, setIdentifier] = useState("");
@@ -185,10 +190,59 @@ export default function Login() {
     } finally { setBusy(false); }
   };
 
-  const onGoogle = () => toast({
-    title: "Google sign-in is coming soon",
-    description: "Please continue with your email and password below.",
-  });
+  // Is Google sign-in configured on the server? Controls whether we show the button.
+  useEffect(() => {
+    let alive = true;
+    fetch("/api/auth/config")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => { if (alive && j?.data?.google) setGoogleReady(true); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, []);
+
+  // Returned from a successful Google round-trip: the refresh cookie is set, so
+  // mint an access token, load the profile, and land on the right home — exactly
+  // like the OTP path does.
+  useEffect(() => {
+    if (googleStatus !== "ok" || googleHandled.current) return;
+    googleHandled.current = true;
+    (async () => {
+      setBusy(true);
+      try {
+        const remember = rememberParam !== "0";
+        localStorage.setItem("uniliv_remember", remember ? "1" : "0");
+        const token = await refreshSession();
+        if (!token) {
+          toast({ title: "Google sign-in didn't complete", description: "Please try again.", variant: "destructive" });
+          return;
+        }
+        queryClient.clear(); // never inherit a previous user's cached data
+        setToken(token, remember);
+        const me = await apiFetch<{ data: { name?: string; role?: string } }>("/auth/me");
+        toast({ title: `Welcome back, ${me.data?.name?.split(" ")[0] ?? ""}`.trim() });
+        setLocation(homeForRole(me.data?.role as UserRole | undefined));
+      } catch (err: any) {
+        toast({ title: err?.message || "Google sign-in failed", variant: "destructive" });
+      } finally {
+        setBusy(false);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [googleStatus]);
+
+  const onGoogle = () => {
+    // Persist the remember choice so it survives the full-page redirect to Google.
+    localStorage.setItem("uniliv_remember", remember ? "1" : "0");
+    window.location.assign(`/api/auth/google?remember=${remember ? "1" : "0"}`);
+  };
+
+  const googleError = googleErrorCode
+    ? (({
+        google_denied: "This Google account isn't authorized to sign in. Please contact your administrator.",
+        google_domain: "Please sign in with your UNILIV Google Workspace account.",
+        google_failed: "Google sign-in didn't complete. Please try again.",
+      } as Record<string, string>)[googleErrorCode] ?? "Google sign-in didn't complete. Please try again.")
+    : null;
 
   const backToLogin = () => { setView("login"); setCode(""); setChallenge(null); };
 
@@ -247,6 +301,13 @@ export default function Login() {
             </div>
           )}
 
+          {googleError && (
+            <div className="mb-5 flex items-start gap-2.5 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-100/90">
+              <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0 text-red-400" />
+              <span>{googleError}</span>
+            </div>
+          )}
+
           {view === "login" && (
             <>
               <div className="space-y-1.5 mb-6">
@@ -255,15 +316,19 @@ export default function Login() {
                 <p className="text-sm text-white/55">Sign in to manage properties, residents, complaints and food operations.</p>
               </div>
 
-              <button type="button" onClick={onGoogle} className="w-full h-12 rounded-xl border border-white/10 bg-white/[0.05] hover:bg-white/[0.09] text-white text-sm font-medium inline-flex items-center justify-center gap-2.5 transition-colors">
-                <FcGoogle className="h-5 w-5" /> Continue with Google
-              </button>
+              {googleReady && (
+                <>
+                  <button type="button" onClick={onGoogle} disabled={busy} className="w-full h-12 rounded-xl border border-white/10 bg-white/[0.05] hover:bg-white/[0.09] text-white text-sm font-medium inline-flex items-center justify-center gap-2.5 transition-colors disabled:opacity-60 disabled:pointer-events-none">
+                    <FcGoogle className="h-5 w-5" /> Continue with Google
+                  </button>
 
-              <div className="my-5 flex items-center gap-3">
-                <div className="h-px flex-1 bg-white/10" />
-                <span className="text-[11px] font-semibold uppercase tracking-wider text-white/35">or continue with email</span>
-                <div className="h-px flex-1 bg-white/10" />
-              </div>
+                  <div className="my-5 flex items-center gap-3">
+                    <div className="h-px flex-1 bg-white/10" />
+                    <span className="text-[11px] font-semibold uppercase tracking-wider text-white/35">or continue with email</span>
+                    <div className="h-px flex-1 bg-white/10" />
+                  </div>
+                </>
+              )}
 
               <form onSubmit={onLogin} className="space-y-4">
                 <div>

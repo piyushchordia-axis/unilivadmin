@@ -1,6 +1,7 @@
 import { Router, type IRouter } from "express";
 import healthRouter from "./health.js";
 import authRouter from "./auth.js";
+import googleAuthRouter from "./auth-google.js";
 import dashboardRouter from "./dashboard.js";
 import propertiesRouter from "./properties.js";
 import roomsRouter from "./rooms.js";
@@ -29,6 +30,7 @@ const router: IRouter = Router();
 
 router.use(healthRouter);
 router.use("/auth", authRouter);
+router.use("/auth", googleAuthRouter);
 router.use("/dashboard", dashboardRouter);
 router.use("/properties", propertiesRouter);
 router.use("/rooms", roomsRouter);
