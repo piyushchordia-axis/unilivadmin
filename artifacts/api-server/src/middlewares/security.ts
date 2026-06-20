@@ -5,7 +5,7 @@
  * and instead implement the small slice we need.
  */
 import type { Request, Response, NextFunction } from "express";
-import { IS_PRODUCTION } from "../config/env.js";
+import { IS_PRODUCTION, COOKIE_SECURE } from "../config/env.js";
 
 /**
  * Conservative security headers (a helmet-equivalent subset). Applied globally.
@@ -22,7 +22,9 @@ export function securityHeaders(_req: Request, res: Response, next: NextFunction
   res.setHeader("Permissions-Policy", "geolocation=(), microphone=(), camera=(), payment=()");
   // API responses are never a document; forbid caching of potentially sensitive JSON.
   res.setHeader("Cache-Control", "no-store");
-  if (IS_PRODUCTION) {
+  // Emit HSTS on any HTTPS deployment (production OR an HTTPS dev-mode box where
+  // COOKIE_SECURE is set), not just NODE_ENV=production.
+  if (IS_PRODUCTION || COOKIE_SECURE) {
     res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
   }
   next();

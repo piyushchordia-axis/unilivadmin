@@ -44,7 +44,10 @@ const corsOrigin: CorsOptions["origin"] = (origin, cb) => {
   if (!origin) return cb(null, true);
   const normalized = origin.replace(/\/+$/, "");
   if (CORS_ORIGINS.includes(normalized)) return cb(null, true);
-  if (IS_DEVELOPMENT) return cb(null, true);
+  // Reflect an arbitrary origin ONLY in development AND only when no allowlist is
+  // configured at all. With CORS_ORIGINS/APP_BASE_URL set, the allowlist is
+  // enforced regardless of NODE_ENV (so a dev-mode HTTPS deploy is not wide open).
+  if (IS_DEVELOPMENT && CORS_ORIGINS.length === 0) return cb(null, true);
   return cb(null, false);
 };
 app.use(cors({ origin: corsOrigin, credentials: true }));
