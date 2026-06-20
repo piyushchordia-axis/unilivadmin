@@ -10,7 +10,7 @@ import { homeForRole, type UserRole } from "@/lib/permissions";
 import { useQueryParam } from "@/lib/nav-helpers";
 import { AlertTriangle, ArrowLeft, ArrowRight, Eye, EyeOff, Loader2, Lock, Mail, ShieldCheck, Smartphone, User } from "lucide-react";
 
-type View = "login" | "otp" | "forgot-username" | "forgot-password" | "reset" | "username-result";
+type View = "login" | "otp" | "forgot-username" | "forgot-password" | "email-sent";
 type OtpFlow = "LOGIN" | "FORGOT_USERNAME" | "FORGOT_PASSWORD";
 
 interface ChallengeData {
@@ -35,13 +35,11 @@ const auth = {
   forgotUsername: (phone: string) =>
     apiFetch<{ data: ChallengeData }>("/auth/forgot-username", { method: "POST", body: JSON.stringify({ phone }) }),
   forgotUsernameVerify: (challengeId: string, code: string) =>
-    apiFetch<{ data: { username: string } }>("/auth/forgot-username/verify", { method: "POST", body: JSON.stringify({ challengeId, code }) }),
+    apiFetch<{ data: { emailSent: boolean; maskedEmail: string | null } }>("/auth/forgot-username/verify", { method: "POST", body: JSON.stringify({ challengeId, code }) }),
   forgotPassword: (identifier: string) =>
     apiFetch<{ data: ChallengeData }>("/auth/forgot-password", { method: "POST", body: JSON.stringify({ identifier }) }),
   forgotPasswordVerify: (challengeId: string, code: string) =>
-    apiFetch<{ data: { verificationToken: string } }>("/auth/forgot-password/verify", { method: "POST", body: JSON.stringify({ challengeId, code }) }),
-  resetPassword: (verificationToken: string, newPassword: string) =>
-    apiFetch<{ success: boolean }>("/auth/reset-password", { method: "POST", body: JSON.stringify({ verificationToken, newPassword }) }),
+    apiFetch<{ data: { emailSent: boolean; maskedEmail: string | null } }>("/auth/forgot-password/verify", { method: "POST", body: JSON.stringify({ challengeId, code }) }),
 };
 
 function useCountdown() {
@@ -97,9 +95,7 @@ export default function Login() {
   // recovery
   const [recoverPhone, setRecoverPhone] = useState("");
   const [recoverId, setRecoverId] = useState("");
-  const [resultUsername, setResultUsername] = useState("");
-  const [resetToken, setResetToken] = useState("");
-  const [newPassword, setNewPassword] = useState("");
+  const [sentTo, setSentTo] = useState<string | null>(null); // masked email the link was sent to
 
   const startOtp = (data: ChallengeData, f: OtpFlow) => {
     setChallenge(data); setFlow(f); setCode(""); setView("otp"); resend.start(30);
@@ -130,12 +126,12 @@ export default function Login() {
         setLocation(homeForRole(res.user?.role as UserRole | undefined));
       } else if (flow === "FORGOT_USERNAME") {
         const res = await auth.forgotUsernameVerify(challenge.challengeId, c);
-        setResultUsername(res.data.username);
-        setView("username-result");
+        setSentTo(res.data.maskedEmail);
+        setView("email-sent");
       } else {
         const res = await auth.forgotPasswordVerify(challenge.challengeId, c);
-        setResetToken(res.data.verificationToken);
-        setView("reset");
+        setSentTo(res.data.maskedEmail);
+        setView("email-sent");
       }
     } catch (err: any) {
       toast({ title: err?.message || "Verification failed", variant: "destructive" });
@@ -174,19 +170,6 @@ export default function Login() {
       startOtp(res.data, "FORGOT_PASSWORD");
     } catch (err: any) {
       toast({ title: err?.message || "No account found", variant: "destructive" });
-    } finally { setBusy(false); }
-  };
-
-  const onReset = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (newPassword.length < 8) { toast({ title: "Password must be at least 8 characters", variant: "destructive" }); return; }
-    setBusy(true);
-    try {
-      await auth.resetPassword(resetToken, newPassword);
-      toast({ title: "Password updated — please sign in" });
-      setView("login"); setPassword(""); setNewPassword("");
-    } catch (err: any) {
-      toast({ title: err?.message || "Reset failed", variant: "destructive" });
     } finally { setBusy(false); }
   };
 
@@ -417,14 +400,15 @@ export default function Login() {
             </div>
           )}
 
-          {view === "username-result" && (
+          {view === "email-sent" && (
             <div className="text-center">
-              <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-success/15"><ShieldCheck className="h-6 w-6 text-success" /></div>
+              <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-accent/15"><Mail className="h-6 w-6 text-accent" /></div>
               <Eyebrow />
-              <h2 className="mt-1 font-display text-2xl font-bold text-white">Your username</h2>
-              <p className="mt-1.5 text-sm text-white/55">Use this to sign in.</p>
-              <div className="my-5 rounded-xl border border-white/10 bg-white/[0.05] py-4 text-xl font-mono font-semibold text-white">{resultUsername}</div>
-              <button className={PRIMARY} onClick={() => { setIdentifier(resultUsername); backToLogin(); }}>Continue to sign in</button>
+              <h2 className="mt-1 font-display text-2xl font-bold text-white">Check your email</h2>
+              <p className="mt-1.5 text-sm text-white/55">
+                We've sent a secure link{sentTo ? <> to <span className="font-medium text-white">{sentTo}</span></> : ""}. Open it to continue — it works once and expires shortly.
+              </p>
+              <button className={`${PRIMARY} mt-6`} onClick={backToLogin}>Back to sign in</button>
             </div>
           )}
 
@@ -449,28 +433,6 @@ export default function Login() {
             </div>
           )}
 
-          {view === "reset" && (
-            <div>
-              <div className="space-y-1.5 mb-6">
-                <Eyebrow />
-                <h2 className="font-display text-2xl font-bold text-white flex items-center gap-2"><ShieldCheck className="w-5 h-5 text-accent" /> Set a new password</h2>
-                <p className="text-sm text-white/55">Choose a strong password of at least 8 characters.</p>
-              </div>
-              <form onSubmit={onReset} className="space-y-4">
-                <div>
-                  <label htmlFor="new-password" className={LABEL}>New password</label>
-                  <div className="relative">
-                    <Lock className={ICON} />
-                    <input id="new-password" autoFocus type={showPassword ? "text" : "password"} placeholder="Enter a new password" className={`${INPUT} pr-10`} value={newPassword} onChange={(e) => setNewPassword(e.target.value)} />
-                    <button type="button" onClick={() => setShowPassword((v) => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-white/40 hover:text-white/80 transition-colors">
-                      {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                    </button>
-                  </div>
-                </div>
-                <button type="submit" disabled={busy || newPassword.length < 8} className={PRIMARY}>{busy ? <Loader2 className="w-5 h-5 animate-spin" /> : "Update password"}</button>
-              </form>
-            </div>
-          )}
         </div>
       </div>
     </div>

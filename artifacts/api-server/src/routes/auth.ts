@@ -18,10 +18,22 @@ import {
   getUserPhone,
   lockoutConfig,
 } from "../lib/otp-service.js";
+import { notify } from "../lib/notification-service.js";
 
 const router = Router();
 
 type DbUser = typeof usersTable.$inferSelect;
+
+/** Browser-facing origin used to build the emailed recovery links. */
+const APP_BASE_URL = (process.env["APP_BASE_URL"] || "").replace(/\/+$/, "");
+
+/** a••••@example.com — never echo a full address back to an unauthenticated caller. */
+function maskEmail(email: string): string {
+  const [u, d] = email.split("@");
+  if (!d || !u) return "your email";
+  const head = u.length <= 2 ? u.slice(0, 1) : u.slice(0, 2);
+  return `${head}${"•".repeat(Math.max(2, u.length - head.length))}@${d}`;
+}
 
 function publicUser(user: DbUser) {
   return {
@@ -223,8 +235,41 @@ router.post("/forgot-username/verify", async (req, res) => {
       res.status(401).json({ success: false, error: result.error, attemptsLeft: result.attemptsLeft });
       return;
     }
+    // OTP confirms the phone; we then email a single-use link to a dedicated page
+    // that reveals the username — the reveal never happens inline in the login UI.
     const [user] = await db.select().from(usersTable).where(eq(usersTable.id, result.userId!));
-    res.json({ success: true, data: { username: user?.username ?? user?.email } });
+    if (user?.email && result.verificationToken) {
+      const link = `${APP_BASE_URL}/recover-username/${result.verificationToken}`;
+      await notify({
+        userId: user.id,
+        title: "Recover your username",
+        type: "AUTH_USERNAME_RECOVERY",
+        skipInApp: true,
+        email: {
+          subject: "Recover your UNILIV username",
+          text: `We received a request to recover your UNILIV username.\n\nOpen this secure link to view it:\n${link}\n\nThe link works once and expires shortly. If you didn't request this, you can ignore this email.`,
+        },
+      });
+    }
+    res.json({ success: true, data: { emailSent: true, maskedEmail: user?.email ? maskEmail(user.email) : null } });
+  } catch (err) {
+    req.log.error(err);
+    res.status(500).json({ success: false, error: "Internal server error" });
+  }
+});
+
+/** Redeems the emailed single-use link and returns the username (dedicated page). */
+router.post("/recover-username", async (req, res) => {
+  try {
+    const { token } = req.body || {};
+    if (!token) { res.status(400).json({ success: false, error: "token required" }); return; }
+    const result = await consumeVerificationToken(String(token), "FORGOT_USERNAME");
+    if (!result.ok || !result.userId) {
+      res.status(401).json({ success: false, error: result.error || "This link is invalid or has expired." });
+      return;
+    }
+    const [user] = await db.select().from(usersTable).where(eq(usersTable.id, result.userId));
+    res.json({ success: true, data: { username: user?.username ?? user?.email ?? null } });
   } catch (err) {
     req.log.error(err);
     res.status(500).json({ success: false, error: "Internal server error" });
@@ -268,7 +313,23 @@ router.post("/forgot-password/verify", async (req, res) => {
       res.status(401).json({ success: false, error: result.error, attemptsLeft: result.attemptsLeft });
       return;
     }
-    res.json({ success: true, data: { verificationToken: result.verificationToken } });
+    // OTP confirms the phone; we then email a single-use link to a dedicated
+    // reset page. The new-password form never appears inline in the login UI.
+    const [user] = await db.select().from(usersTable).where(eq(usersTable.id, result.userId!));
+    if (user?.email && result.verificationToken) {
+      const link = `${APP_BASE_URL}/reset-password/${result.verificationToken}`;
+      await notify({
+        userId: user.id,
+        title: "Reset your password",
+        type: "AUTH_PASSWORD_RESET",
+        skipInApp: true,
+        email: {
+          subject: "Reset your UNILIV password",
+          text: `We received a request to reset your UNILIV password.\n\nOpen this secure link to choose a new password:\n${link}\n\nThe link works once and expires shortly. If you didn't request this, you can safely ignore this email — your password won't change.`,
+        },
+      });
+    }
+    res.json({ success: true, data: { emailSent: true, maskedEmail: user?.email ? maskEmail(user.email) : null } });
   } catch (err) {
     req.log.error(err);
     res.status(500).json({ success: false, error: "Internal server error" });

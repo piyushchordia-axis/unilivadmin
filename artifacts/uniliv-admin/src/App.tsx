@@ -11,6 +11,8 @@ import { useAuthStore } from "@/lib/store";
 
 // Pages
 import Login from "@/pages/login";
+import ResetPasswordPage from "@/pages/reset-password";
+import RecoverUsernamePage from "@/pages/recover-username";
 import EsignSignPage from "@/pages/esign-sign";
 import SharedMenuPage from "@/pages/shared-menu";
 import Dashboard from "@/pages/dashboard";
@@ -114,6 +116,8 @@ function Router() {
   return (
     <Switch>
       <Route path="/login" component={Login} />
+      <Route path="/reset-password/:token" component={ResetPasswordPage} />
+      <Route path="/recover-username/:token" component={RecoverUsernamePage} />
       <Route path="/esign/sign/:token" component={EsignSignPage} />
       <Route path="/m/:token" component={SharedMenuPage} />
       <Route path="/">{() => <ProtectedRoute component={Dashboard} />}</Route>
