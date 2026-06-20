@@ -1,12 +1,13 @@
 import pino from "pino";
 
-// Pretty logging is OPT-IN for explicit local development only. Everywhere else
-// — production AND any unset/unexpected NODE_ENV — we log plain JSON to stdout.
+// Pretty logging is gated on its OWN flag (LOG_PRETTY=true), NOT on NODE_ENV.
 // pino-pretty runs in a worker thread (thread-stream-worker.mjs) that the slim
-// production bundle doesn't ship; defaulting to it whenever NODE_ENV !== production
-// meant a missing/misconfigured NODE_ENV crashed the container on boot. Opting in
-// (rather than opting out) makes a bad NODE_ENV degrade to JSON, never crash.
-const usePrettyLogs = process.env.NODE_ENV === "development";
+// production bundle doesn't ship — so tying it to NODE_ENV meant running the
+// server in "development" (or with NODE_ENV unset) crashed the container on boot.
+// Decoupling it lets NODE_ENV=development run anywhere (plain JSON, no worker)
+// while local dev still gets pretty logs by setting LOG_PRETTY=true (its build
+// includes the worker). Default everywhere: plain JSON to stdout.
+const usePrettyLogs = process.env.LOG_PRETTY === "true";
 
 export const logger = pino({
   level: process.env.LOG_LEVEL ?? "info",
