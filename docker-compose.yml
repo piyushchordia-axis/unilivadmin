@@ -17,7 +17,8 @@ services:
     env_file:
       - .env.docker
     environment:
-      NODE_ENV: production
+      # NODE_ENV lives once in .env.docker (inherited by every service via
+      # env_file). Only the container-specific PORT is set here.
       PORT: "8090"
     expose:
       - "8090"
@@ -60,8 +61,6 @@ services:
     image: unilivadmin-tools:latest
     env_file:
       - .env.docker
-    environment:
-      NODE_ENV: production
     working_dir: /repo
     volumes:
       - "/var/run/postgresql:/var/run/postgresql"
