@@ -1,7 +1,8 @@
 name: unilivadmin
 
 # Production stack. Postgres is NOT containerised — it runs on the host and is
-# reached from the api container via host.docker.internal (host-gateway).
+# reached over its Unix socket (bind-mounted below); nothing is exposed on TCP,
+# so host Postgres can keep listen_addresses = 'localhost'.
 # Copy .env.docker.example → .env.docker and fill it in before `up`.
 
 services:
@@ -20,9 +21,10 @@ services:
       PORT: "8090"
     expose:
       - "8090"
-    extra_hosts:
-      # Lets the container reach Postgres running on the Docker host (Linux).
-      - "host.docker.internal:host-gateway"
+    volumes:
+      # Host Postgres Unix socket (apt default dir). DATABASE_URL connects via
+      # ?host=/var/run/postgresql — no TCP exposure. Add ":z" on SELinux hosts.
+      - "/var/run/postgresql:/var/run/postgresql"
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8090/api/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s
@@ -61,7 +63,7 @@ services:
     environment:
       NODE_ENV: production
     working_dir: /repo
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    volumes:
+      - "/var/run/postgresql:/var/run/postgresql"
     entrypoint: ["sh", "-lc"]
     command: ["echo 'Run a command, e.g.: docker compose run --rm tools \"pnpm --filter @workspace/db run push-force\"'"]

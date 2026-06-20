@@ -2,8 +2,8 @@
 
 Production stack: a tiny **API** container (Node + a single bundled file, no
 `node_modules`) and an **nginx** container that serves the static SPA and
-reverse-proxies `/api`. **PostgreSQL stays on the host** and is reached from the
-API container over the Docker host gateway.
+reverse-proxies `/api`. **PostgreSQL stays on the host** and is reached over its
+**Unix socket** (bind-mounted into the container) — nothing is exposed on TCP.
 
 ```
 browser ──HTTPS──▶ [edge TLS] ──▶ nginx (web :80) ──/──▶ static SPA
@@ -24,53 +24,57 @@ browser ──HTTPS──▶ [edge TLS] ──▶ nginx (web :80) ──/──�
 
 ## 1. Prepare host PostgreSQL (installed via apt, NOT in Docker)
 
-The `api` container reaches the host Postgres at `host.docker.internal` (compose
-maps it to `host-gateway`). A default apt install only listens on `localhost`
-and only trusts loopback, so you must (a) create the DB/user, (b) let it listen
-on the Docker bridge, and (c) allow the Docker subnet in `pg_hba.conf`.
+We connect over the host's **Unix socket** — Postgres keeps
+`listen_addresses = 'localhost'` and is **never exposed on the network**. The
+compose file bind-mounts the host socket dir (`/var/run/postgresql`) into the
+`api` and `tools` containers, so the only DB setup is a password role + one
+`pg_hba` line.
 
-**a) Create the database + a password user** (the container can't use `peer`
-auth, so set a real password):
+**a) Create the database + a password role.** Socket connections from the
+container can't use `peer` auth (the container's uid won't map to the role), so
+set a real password:
 
 ```bash
 sudo -u postgres psql -c "CREATE USER uniliv WITH PASSWORD 'a-strong-password';"
 sudo -u postgres psql -c "CREATE DATABASE uniliv OWNER uniliv;"
 ```
 
-**b) Listen on all interfaces.** Find your config dir (e.g. `16` = major version):
+**b) Allow that role over the local socket with a password.** Insert a `local`
+rule *above* the default `peer` catch-all (pg_hba is first-match), so existing
+local logins like `sudo -u postgres psql` keep working:
 
 ```bash
-PGCONF=$(sudo -u postgres psql -tAc 'SHOW config_file')   # e.g. /etc/postgresql/16/main/postgresql.conf
-sudo sed -i "s/^#\?listen_addresses.*/listen_addresses = '*'/" "$PGCONF"
+PGHBA=$(dirname "$(sudo -u postgres psql -tAc 'SHOW config_file')")/pg_hba.conf
+sudo sed -i "0,/^local/s//local   uniliv   uniliv   scram-sha-256\nlocal/" "$PGHBA"
+sudo systemctl reload postgresql
 ```
 
-**c) Allow the Docker bridge subnets** in `pg_hba.conf` (same dir):
+That's it — **no `listen_addresses` change, nothing opened on TCP, no firewall
+rule.** (Verify the rule landed above the `local all all … peer` line:
+`grep -n '^local' "$PGHBA"`.)
 
-```bash
-PGHBA=$(dirname "$PGCONF")/pg_hba.conf
-echo "host  all  all  172.16.0.0/12  scram-sha-256" | sudo tee -a "$PGHBA"
-sudo systemctl restart postgresql
-```
+> **Socket permissions:** Debian/Ubuntu ship a world-reachable socket
+> (`/var/run/postgresql` dir mode `2775`, socket `0777`), so the container's
+> non-root `node` user can connect out of the box. If you hardened
+> `unix_socket_permissions`, make sure the socket is reachable by the container
+> user. On **SELinux** hosts, add `:z` to the volume mount in `docker-compose.yml`.
 
-> If you run **ufw**, allow Postgres from the Docker bridge:
-> `sudo ufw allow from 172.16.0.0/12 to any port 5432 proto tcp`.
+`DATABASE_URL` (step 2) uses the socket:
+`postgresql://uniliv:a-strong-password@/uniliv?host=/var/run/postgresql`
 
-`DATABASE_URL` (step 2) then points at the gateway:
-`postgresql://uniliv:a-strong-password@host.docker.internal:5432/uniliv`
-
-> **Prefer not to expose Postgres over TCP?** Alternative: mount the host's
-> Unix socket into the container instead. Add to the `api` (and `tools`) service
-> `volumes: ["/var/run/postgresql:/var/run/postgresql"]`, keep a `scram-sha-256`
-> password user, and set
-> `DATABASE_URL=postgresql://uniliv:pw@/uniliv?host=/var/run/postgresql`.
-> No `listen_addresses`/`pg_hba` TCP changes needed.
+> **Alternative — TCP over the host gateway** (only if you can't share the
+> socket): set `listen_addresses = '*'` (or `'localhost,172.17.0.1'`), add
+> `host all all 172.16.0.0/12 scram-sha-256` to `pg_hba.conf`, restart Postgres,
+> re-add `extra_hosts: ["host.docker.internal:host-gateway"]` to the `api`/`tools`
+> services, and use
+> `DATABASE_URL=postgresql://uniliv:pw@host.docker.internal:5432/uniliv`.
 
 ## 2. Configure env
 
 ```bash
 cp .env.docker.example .env.docker
 # edit .env.docker:
-#   DATABASE_URL=postgresql://uniliv:a-strong-password@host.docker.internal:5432/uniliv
+#   DATABASE_URL=postgresql://uniliv:a-strong-password@/uniliv?host=/var/run/postgresql
 #   SESSION_SECRET=$(openssl rand -hex 48)
 ```
 
@@ -163,7 +167,8 @@ docker compose down
 
 | Symptom | Fix |
 |---|---|
-| API can't reach DB | Check `DATABASE_URL` uses `host.docker.internal`; verify `listen_addresses` + `pg_hba.conf` allow the docker subnet; `docker compose logs api`. |
+| API can't reach DB | Confirm the socket exists (`ls /var/run/postgresql/.s.PGSQL.5432`), `DATABASE_URL` ends with `?host=/var/run/postgresql`, the `local uniliv uniliv scram-sha-256` pg_hba rule is **above** the `peer` catch-all, and the role's password matches. `docker compose logs api`. |
+| `peer authentication failed` for uniliv | Your pg_hba `local … peer` rule is matching first — move the `scram-sha-256` line above it and `sudo systemctl reload postgresql`. |
 | Build fails on a native binary (rollup/oxide/lightningcss) | Build for your server's arch, e.g. `DOCKER_DEFAULT_PLATFORM=linux/amd64 docker compose build`. |
 | Login works but session drops after 15 min | Serve over **HTTPS** (Secure cookies); see §6. |
 | 502 from nginx | API unhealthy — `docker compose logs api`, check DB connectivity. |
