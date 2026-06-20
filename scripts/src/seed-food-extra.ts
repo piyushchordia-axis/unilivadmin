@@ -59,39 +59,53 @@ async function seedMealConfig() {
   const meals: Array<{ mealType: string; displayLabel: string; brand: string | null; sortOrder: number }> = [
     { mealType: "BREAKFAST", displayLabel: "Breakfast", brand: null, sortOrder: 1 },
     { mealType: "LUNCH", displayLabel: "Lunch", brand: null, sortOrder: 2 },
-    { mealType: "SNACKS", displayLabel: "High Tea / Evening Snacks", brand: null, sortOrder: 3 },
+    { mealType: "SNACKS", displayLabel: "Evening Snacks", brand: null, sortOrder: 3 },
     { mealType: "DINNER", displayLabel: "Dinner", brand: null, sortOrder: 4 },
-    { mealType: "NIGHT_MILK", displayLabel: "Night Milk", brand: "UNILIV", sortOrder: 5 },
   ];
   for (const m of meals) {
     await db.insert(foodMealConfigTable)
       .values({ id: id(), mealType: m.mealType as never, displayLabel: m.displayLabel, brand: m.brand as never, sortOrder: m.sortOrder, isEnabled: true, updatedAt: new Date() })
-      .onConflictDoNothing({ target: foodMealConfigTable.mealType });
+      .onConflictDoUpdate({ target: foodMealConfigTable.mealType, set: { displayLabel: m.displayLabel, sortOrder: m.sortOrder, updatedAt: new Date() } });
   }
   console.log(`  ✓ ${meals.length} meal configs`);
 }
 
 async function seedMealWindows() {
-  console.log("  meal windows (cut-offs)...");
+  console.log("  meal windows (per-meal service times)...");
   // Reset global defaults to stay idempotent.
   await pool.query(`DELETE FROM "food_meal_windows" WHERE property_id IS NULL`);
+  // Cut-off is now a single brand value (seedCutoffs); windows carry per-meal service/lead only.
   const windows = [
-    { brand: "UNILIV", mealType: "BREAKFAST", cutoffTime: "21:00", serviceTime: "08:00", leadTimeMinutes: 30 },
-    { brand: "UNILIV", mealType: "LUNCH", cutoffTime: "09:00", serviceTime: "12:30", leadTimeMinutes: 30 },
-    { brand: "UNILIV", mealType: "SNACKS", cutoffTime: "14:00", serviceTime: "17:00", leadTimeMinutes: 20 },
-    { brand: "UNILIV", mealType: "DINNER", cutoffTime: "15:00", serviceTime: "20:00", leadTimeMinutes: 30 },
-    { brand: "UNILIV", mealType: "NIGHT_MILK", cutoffTime: "19:00", serviceTime: "21:30", leadTimeMinutes: 15 },
-    { brand: "HUDDLE", mealType: "BREAKFAST", cutoffTime: "21:00", serviceTime: "08:00", leadTimeMinutes: 30 },
-    { brand: "HUDDLE", mealType: "LUNCH", cutoffTime: "09:00", serviceTime: "12:30", leadTimeMinutes: 30 },
-    { brand: "HUDDLE", mealType: "SNACKS", cutoffTime: "14:00", serviceTime: "17:00", leadTimeMinutes: 20 },
-    { brand: "HUDDLE", mealType: "DINNER", cutoffTime: "15:00", serviceTime: "20:00", leadTimeMinutes: 30 },
+    { brand: "UNILIV", mealType: "BREAKFAST", serviceTime: "08:00", leadTimeMinutes: 30 },
+    { brand: "UNILIV", mealType: "LUNCH", serviceTime: "12:30", leadTimeMinutes: 30 },
+    { brand: "UNILIV", mealType: "SNACKS", serviceTime: "17:00", leadTimeMinutes: 20 },
+    { brand: "UNILIV", mealType: "DINNER", serviceTime: "20:00", leadTimeMinutes: 30 },
+    { brand: "HUDDLE", mealType: "BREAKFAST", serviceTime: "08:00", leadTimeMinutes: 30 },
+    { brand: "HUDDLE", mealType: "LUNCH", serviceTime: "12:30", leadTimeMinutes: 30 },
+    { brand: "HUDDLE", mealType: "SNACKS", serviceTime: "17:00", leadTimeMinutes: 20 },
+    { brand: "HUDDLE", mealType: "DINNER", serviceTime: "20:00", leadTimeMinutes: 30 },
   ];
   await db.insert(foodMealWindowsTable).values(windows.map((w) => ({
     id: id(), brand: w.brand as never, propertyId: null, mealType: w.mealType as never,
-    cutoffTime: w.cutoffTime, serviceTime: w.serviceTime, leadTimeMinutes: w.leadTimeMinutes,
+    cutoffTime: null, serviceTime: w.serviceTime, leadTimeMinutes: w.leadTimeMinutes,
     isActive: true, updatedAt: new Date(),
   })));
   console.log(`  ✓ ${windows.length} meal windows`);
+}
+
+async function seedCutoffs() {
+  console.log("  single cut-off per brand...");
+  // One global cut-off per brand (applies to all meals). Idempotent reset.
+  await pool.query(`DELETE FROM "food_cutoffs" WHERE property_id IS NULL`);
+  const brands = ["UNILIV", "HUDDLE"];
+  for (const brand of brands) {
+    await pool.query(
+      `INSERT INTO food_cutoffs (id, brand, property_id, cutoff_time, is_active, created_at, updated_at)
+       VALUES ($1,$2,NULL,'21:00',true,now(),now())`,
+      [id(), brand],
+    );
+  }
+  console.log(`  ✓ ${brands.length} brand cut-offs (21:00)`);
 }
 
 async function seedKitchens() {
@@ -101,6 +115,8 @@ async function seedKitchens() {
     { code: "KIT-BLR-WF", name: "Bengaluru Whitefield Kitchen", brand: "UNILIV", address: "456 ITPL Main Rd, Whitefield", city: "Bengaluru", state: "Karnataka", pincode: "560066", contactName: "Meera Patel", contactPhone: "9980012341", clusterId: "cluster_blr_whitefield" },
     { code: "KIT-PUN-HINJ", name: "Pune Hinjewadi Kitchen", brand: "HUDDLE", address: "789 Rajiv Gandhi Infotech Park", city: "Pune", state: "Maharashtra", pincode: "411057", contactName: "Vikram Sharma", contactPhone: "9980012342", clusterId: "cluster_pune_hinjewadi" },
     { code: "KIT-DEL-CEN", name: "Delhi Central Kitchen", brand: null, address: "5 Connaught Place", city: "New Delhi", state: "Delhi", pincode: "110001", contactName: "Anil Kapoor", contactPhone: "9980012343", clusterId: "cluster_delhi_central" },
+    { code: "KIT-GGN-CH", name: "Gurugram Cyber Hub Kitchen", brand: null, address: "DLF Cyber Hub, Phase 2", city: "Gurugram", state: "Haryana", pincode: "122002", contactName: "Pooja Nair", contactPhone: "9980012344", clusterId: "cluster_ggn_cyberhub" },
+    { code: "KIT-MUM-AND", name: "Mumbai Andheri Kitchen", brand: null, address: "Andheri East, MIDC", city: "Mumbai", state: "Maharashtra", pincode: "400093", contactName: "Sameer Joshi", contactPhone: "9980012345", clusterId: "cluster_mumbai_andheri" },
   ];
   for (const k of kitchens) {
     await db.insert(kitchensTable)
@@ -119,18 +135,28 @@ async function assignResidentialProperties() {
       GROUP BY p.id ORDER BY active DESC, p.id`,
   )).rows as Array<{ id: string }>;
   if (rows.length < 2) { console.log("  ✓ not enough residential properties"); return; }
-  // Top residential property → unit2, next → unit1 (both have guests + beds + revenue).
-  const leads = [
-    { u: "user_food_unit2", p: rows[0]!.id },
-    { u: "user_food_unit1", p: rows[1]!.id },
+  // unit2 → top property; unit1 → next property + (if available) a 2nd property to
+  // demo a unit lead managing MULTIPLE properties. Scope rows are rebuilt from
+  // scratch each run so re-seeding stays idempotent (no duplicate/clobbered rows).
+  const leads: Array<{ u: string; primary: string; props: string[] }> = [
+    { u: "user_food_unit2", primary: rows[0]!.id, props: [rows[0]!.id] },
+    { u: "user_food_unit1", primary: rows[1]!.id, props: rows[2] ? [rows[1]!.id, rows[2]!.id] : [rows[1]!.id] },
   ];
   for (const l of leads) {
-    await db.update(usersTable).set({ propertyId: l.p, updatedAt: new Date() }).where(eq(usersTable.id, l.u));
-    await pool.query(`UPDATE user_scopes SET property_id=$1 WHERE user_id=$2 AND scope_level='PROPERTY'`, [l.p, l.u]);
-    await pool.query(`UPDATE food_orders SET property_id=$1 WHERE unit_lead_id=$2`, [l.p, l.u]);
-    await pool.query(`UPDATE food_order_batches SET property_id=$1 WHERE unit_lead_id=$2`, [l.p, l.u]);
+    await db.update(usersTable).set({ propertyId: l.primary, updatedAt: new Date() }).where(eq(usersTable.id, l.u));
+    await pool.query(`DELETE FROM user_scopes WHERE user_id=$1 AND scope_level='PROPERTY'`, [l.u]);
+    for (const p of l.props) {
+      await pool.query(
+        `INSERT INTO user_scopes (id, user_id, scope_level, property_id, created_at) VALUES ($1,$2,'PROPERTY',$3,now())`,
+        [id(), l.u, p],
+      );
+    }
+    // Existing orders/batches for this lead point at the PRIMARY property.
+    await pool.query(`UPDATE food_orders SET property_id=$1 WHERE unit_lead_id=$2`, [l.primary, l.u]);
+    await pool.query(`UPDATE food_order_batches SET property_id=$1 WHERE unit_lead_id=$2`, [l.primary, l.u]);
   }
-  console.log(`  ✓ assigned ${leads.length} unit leads to residential properties`);
+  const total = leads.reduce((n, l) => n + l.props.length, 0);
+  console.log(`  ✓ tagged ${leads.length} unit leads to ${total} properties (unit1 multi-property)`);
 }
 
 async function groupDispatchTrip() {
@@ -155,14 +181,202 @@ async function groupDispatchTrip() {
   console.log(`  ✓ grouped ${orders.length} order(s) into a trip`);
 }
 
+/* ── New-model backfill (brands, City→Kitchen→Property, per-item ordering) ───── */
+
+async function seedBrands() {
+  console.log("  food brands (master)...");
+  const brands = [
+    { code: "UNILIV", name: "Uniliv" },
+    { code: "HUDDLE", name: "Huddle" },
+  ];
+  for (const b of brands) {
+    await pool.query(
+      `INSERT INTO food_brands (id, code, name, is_active, created_at, updated_at)
+       VALUES ($1,$2,$3,true,now(),now()) ON CONFLICT (code) DO NOTHING`,
+      [id(), b.code, b.name],
+    );
+  }
+  console.log(`  ✓ ${brands.length} brands`);
+}
+
+async function assignKitchenCities() {
+  console.log("  kitchens → cities...");
+  const r = await pool.query(
+    `UPDATE kitchens k SET city_id = c.city_id, updated_at = now()
+       FROM clusters c
+      WHERE k.cluster_id = c.id AND k.city_id IS DISTINCT FROM c.city_id`,
+  );
+  console.log(`  ✓ ${r.rowCount} kitchens linked to cities`);
+}
+
+async function assignPropertyKitchensAndBrands() {
+  console.log("  properties → kitchen (by city) + brand...");
+  // Each property → a kitchen in its city (lowest id when several). Property's city
+  // comes via its cluster (cluster.city_id), since properties have no direct city FK.
+  const k = await pool.query(
+    `UPDATE properties p SET kitchen_id = sub.kid, updated_at = now()
+       FROM (
+         SELECT c.id AS cluster_id,
+                (SELECT k2.id FROM kitchens k2 WHERE k2.city_id = c.city_id AND k2.is_active ORDER BY k2.id LIMIT 1) AS kid
+           FROM clusters c
+       ) sub
+      WHERE p.cluster_id = sub.cluster_id AND sub.kid IS NOT NULL
+        AND p.kitchen_id IS DISTINCT FROM sub.kid`,
+  );
+  const br = await pool.query(
+    `UPDATE properties
+        SET brand = CASE WHEN upper(name) LIKE '%HUDDLE%' THEN 'HUDDLE' ELSE 'UNILIV' END,
+            updated_at = now()
+      WHERE brand IS NULL`,
+  );
+  console.log(`  ✓ ${k.rowCount} properties → kitchen, ${br.rowCount} → brand`);
+}
+
+async function setDishBrands() {
+  console.log("  dishes → brand tags...");
+  const r = await pool.query(
+    `UPDATE dishes SET brands = ARRAY['UNILIV','HUDDLE']::text[], updated_at = now()
+      WHERE brands IS NULL OR cardinality(brands) = 0`,
+  );
+  console.log(`  ✓ ${r.rowCount} dishes tagged (UNILIV + HUDDLE)`);
+}
+
+async function seedKitchenMenus() {
+  console.log("  per-kitchen menu rotation (copy brand templates → each kitchen)...");
+  // seed-food.ts builds brand-level rotation rows with kitchen_id NULL (templates).
+  // Copy each template into every active kitchen so menus resolve per (kitchen, brand).
+  await pool.query(`DELETE FROM food_menu_rotation WHERE kitchen_id IS NOT NULL`);
+  const r = await pool.query(
+    `INSERT INTO food_menu_rotation
+       (id, kitchen_id, brand, rotation_week, day_of_week, meal_type, dish_id, slot_label, sort_order, effective_from, effective_to, is_active, created_at, updated_at)
+     SELECT gen_random_uuid()::text, k.id, t.brand, t.rotation_week, t.day_of_week, t.meal_type, t.dish_id, t.slot_label, t.sort_order, t.effective_from, t.effective_to, t.is_active, now(), now()
+       FROM food_menu_rotation t CROSS JOIN kitchens k
+      WHERE t.kitchen_id IS NULL AND k.is_active = true`,
+  );
+  console.log(`  ✓ ${r.rowCount} per-kitchen rotation rows`);
+}
+
+async function backfillOrdersAndItems() {
+  console.log("  orders → kitchen, order items → persons_count...");
+  const ok = await pool.query(
+    `UPDATE food_orders o SET kitchen_id = p.kitchen_id, updated_at = now()
+       FROM properties p
+      WHERE o.property_id = p.id AND p.kitchen_id IS NOT NULL
+        AND o.kitchen_id IS DISTINCT FROM p.kitchen_id`,
+  );
+  const oi = await pool.query(
+    `UPDATE food_order_items i SET persons_count = o.residents_count
+       FROM food_orders o
+      WHERE i.order_id = o.id AND i.persons_count IS NULL`,
+  );
+  console.log(`  ✓ ${ok.rowCount} orders → kitchen, ${oi.rowCount} items → persons_count`);
+}
+
+async function migrateGeoScopes() {
+  console.log("  migrate ZONE/CLUSTER scopes → CITY/KITCHEN...");
+  // ZONE (retired) → CITY; CLUSTER (retired) → KITCHEN. Demos the new scope levels.
+  const moves: Array<[string, string]> = [
+    [`UPDATE user_scopes SET scope_level='CITY', city_id='city_bengaluru', zone_id=NULL WHERE user_id='user_food_fnbzonal' AND scope_level='ZONE'`, "fnbzonal → CITY Bengaluru"],
+    [`UPDATE user_scopes SET scope_level='CITY', city_id='city_pune', zone_id=NULL WHERE user_id='user_food_zonal' AND scope_level='ZONE'`, "zonal → CITY Pune"],
+    [`UPDATE user_scopes SET scope_level='KITCHEN', kitchen_id='kitchen_kit_blr_kmg', cluster_id=NULL WHERE user_id='user_food_cluster' AND scope_level='CLUSTER'`, "cluster → KITCHEN BLR-KMG"],
+    [`UPDATE user_scopes SET scope_level='KITCHEN', kitchen_id='kitchen_kit_del_cen', cluster_id=NULL WHERE user_id='user_food_fnbsup' AND scope_level='CLUSTER'`, "fnbsup → KITCHEN DEL-CEN"],
+  ];
+  for (const [sql] of moves) await pool.query(sql);
+  console.log(`  ✓ migrated ${moves.length} geo scopes`);
+}
+
+async function seedRawMaterials() {
+  console.log("  raw materials + dish ingredients...");
+  const mats: Array<[string, string]> = [
+    ["rm_aloo", "Aloo"], ["rm_pyaaz", "Pyaaz"], ["rm_tomato", "Tomato"], ["rm_paneer", "Paneer"],
+    ["rm_gobi", "Gobi"], ["rm_matar", "Matar"], ["rm_bhindi", "Bhindi"], ["rm_chana", "Chana"],
+    ["rm_rice", "Rice"], ["rm_atta", "Atta"],
+  ];
+  for (const [rid, name] of mats) {
+    await pool.query(
+      `INSERT INTO raw_materials (id, name, unit, is_active, created_at, updated_at)
+       VALUES ($1,$2,'KG',true,now(),now()) ON CONFLICT (id) DO NOTHING`,
+      [rid, name],
+    );
+  }
+  // Link dishes → ingredients. Several sabzis share Aloo → drives the shared-ingredient warning.
+  const links: Array<{ dish: string; mats: Array<[string, string]> }> = [
+    { dish: "dish_aloo_gobi", mats: [["rm_aloo", "0.1"], ["rm_gobi", "0.1"], ["rm_pyaaz", "0.05"], ["rm_tomato", "0.05"]] },
+    { dish: "dish_jeera_aloo", mats: [["rm_aloo", "0.15"], ["rm_pyaaz", "0.03"]] },
+    { dish: "dish_dum_aloo", mats: [["rm_aloo", "0.15"], ["rm_tomato", "0.05"]] },
+    { dish: "dish_aloo_methi", mats: [["rm_aloo", "0.12"]] },
+    { dish: "dish_matar_paneer", mats: [["rm_paneer", "0.1"], ["rm_matar", "0.08"], ["rm_tomato", "0.05"]] },
+    { dish: "dish_paneer_butter", mats: [["rm_paneer", "0.12"], ["rm_tomato", "0.08"], ["rm_pyaaz", "0.05"]] },
+    { dish: "dish_bhindi_masala", mats: [["rm_bhindi", "0.15"], ["rm_pyaaz", "0.03"]] },
+    { dish: "dish_chana_masala", mats: [["rm_chana", "0.12"], ["rm_tomato", "0.05"]] },
+  ];
+  let linked = 0;
+  for (const l of links) {
+    await pool.query(`DELETE FROM dish_ingredients WHERE dish_id=$1`, [l.dish]);
+    for (const [rm, qty] of l.mats) {
+      await pool.query(
+        `INSERT INTO dish_ingredients (id, dish_id, raw_material_id, quantity, unit, created_at, updated_at)
+         SELECT $1,$2,$3,$4,'KG',now(),now() WHERE EXISTS (SELECT 1 FROM dishes WHERE id=$2)`,
+        [id(), l.dish, rm, qty],
+      );
+    }
+    linked++;
+  }
+  console.log(`  ✓ ${mats.length} raw materials, ${linked} dishes linked`);
+}
+
+async function seedCompositionRules() {
+  console.log("  menu composition rules...");
+  // Idempotent: clear brand-default rules for the seeded meals, then re-insert.
+  await pool.query(`DELETE FROM menu_composition_rules WHERE kitchen_id IS NULL AND meal_type IN ('LUNCH','DINNER')`);
+  const brands = ["UNILIV", "HUDDLE"];
+  const meals = ["LUNCH", "DINNER"];
+  const slots: Array<{ label: string; component: string; min: number; max: number | null }> = [
+    { label: "Dal", component: "DAL", min: 1, max: 1 },
+    { label: "Sabzi", component: "SABZI", min: 1, max: 2 },
+    { label: "Rice", component: "RICE", min: 1, max: 1 },
+    { label: "Bread", component: "BREAD", min: 1, max: 1 },
+    { label: "Salad", component: "SALAD", min: 1, max: 1 },
+  ];
+  let n = 0;
+  for (const brand of brands) for (const meal of meals) {
+    const rid = id();
+    await pool.query(
+      `INSERT INTO menu_composition_rules (id, brand, meal_type, kitchen_id, name, is_active, created_at, updated_at)
+       VALUES ($1,$2,$3,NULL,$4,true,now(),now())`,
+      [rid, brand, meal, `Standard ${meal[0]}${meal.slice(1).toLowerCase()}`],
+    );
+    let i = 0;
+    for (const s of slots) {
+      await pool.query(
+        `INSERT INTO menu_composition_slots (id, rule_id, slot_label, component, preparation, min_count, max_count, sort_order, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,NULL,$5,$6,$7,now(),now())`,
+        [id(), rid, s.label, s.component, s.min, s.max, i++],
+      );
+    }
+    n++;
+  }
+  console.log(`  ✓ ${n} composition rules`);
+}
+
 async function main() {
   console.log("Seeding Phase 1–3 supplemental data...");
   await seedConfig();
   await backfillUsers();
   await seedMealConfig();
   await seedMealWindows();
+  await seedCutoffs();
   await seedKitchens();
+  await seedBrands();
+  await assignKitchenCities();
   await assignResidentialProperties();
+  await assignPropertyKitchensAndBrands();
+  await setDishBrands();
+  await seedRawMaterials();
+  await seedCompositionRules();
+  await seedKitchenMenus();
+  await backfillOrdersAndItems();
+  await migrateGeoScopes();
   await groupDispatchTrip();
   console.log("✅ Supplemental food data seeded");
   await pool.end();

@@ -4,6 +4,7 @@ import { PageHeader } from "@/components/page-header";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { DatePicker } from "@/components/ui/date-picker";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
@@ -395,7 +396,7 @@ function ElectricityTariffsTab({ canEdit }: { canEdit: boolean }) {
             <div><label className="text-xs">Name</label><Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Standard" data-testid="input-tariff-name-settings" /></div>
             <div><label className="text-xs">Rate / unit</label><Input type="number" step="0.01" value={form.ratePerUnit} onChange={(e) => setForm({ ...form, ratePerUnit: e.target.value })} data-testid="input-tariff-rate-settings" /></div>
             <div><label className="text-xs">Fixed charge</label><Input type="number" step="0.01" value={form.fixedCharge} onChange={(e) => setForm({ ...form, fixedCharge: e.target.value })} /></div>
-            <div><label className="text-xs">Effective from</label><Input type="date" value={form.effectiveFrom} onChange={(e) => setForm({ ...form, effectiveFrom: e.target.value })} /></div>
+            <div><label className="text-xs">Effective from</label><DatePicker value={form.effectiveFrom} onChange={(v) => setForm({ ...form, effectiveFrom: v })} /></div>
             <Button onClick={() => create.mutate()} disabled={!form.name || !form.ratePerUnit || create.isPending} data-testid="button-add-tariff-settings">Add Tariff</Button>
           </div>
         )}

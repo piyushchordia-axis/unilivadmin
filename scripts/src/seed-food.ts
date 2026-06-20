@@ -24,6 +24,8 @@ import {
   foodMenuRotationTable,
   perResidentRuleTable,
   deliveryPartnersTable,
+  agenciesTable,
+  agencyVehiclesTable,
   zonesTable,
   citiesTable,
   clustersTable,
@@ -43,9 +45,9 @@ const daysAgo = (n: number) => new Date(Date.now() - n * 86_400_000);
 const daysFromNow = (n: number) => new Date(Date.now() + n * 86_400_000);
 
 type Brand = "UNILIV" | "HUDDLE";
-type Meal = "BREAKFAST" | "LUNCH" | "SNACKS" | "DINNER" | "NIGHT_MILK";
+type Meal = "BREAKFAST" | "LUNCH" | "SNACKS" | "DINNER";
 type Component =
-  | "HOT_FOOD" | "VEG" | "DAL" | "RICE" | "BREAD" | "SALAD" | "CURD_RAITA"
+  | "HOT_FOOD" | "SABZI" | "DAL" | "RICE" | "BREAD" | "SALAD" | "CURD_RAITA"
   | "DESSERT" | "PAPAD_PICKLE" | "CHUTNEY" | "PICKLE" | "FRUITS" | "BAKERY"
   | "BEVERAGE" | "SNACK" | "MILK";
 type Unit = "G" | "KG" | "ML" | "LITRE" | "PCS" | "PLATE" | "SERVING";
@@ -53,7 +55,7 @@ type Unit = "G" | "KG" | "ML" | "LITRE" | "PCS" | "PLATE" | "SERVING";
 /** Canonical unit + qty-per-resident for each component (PRD §7.9 rules). */
 const COMPONENT_RULE: Record<Component, { unit: Unit; qty: number }> = {
   HOT_FOOD:     { unit: "KG", qty: 0.18 },
-  VEG:          { unit: "KG", qty: 0.15 },
+  SABZI:        { unit: "KG", qty: 0.15 },
   DAL:          { unit: "LITRE", qty: 0.2 },
   RICE:         { unit: "KG", qty: 0.15 },
   BREAD:        { unit: "PCS", qty: 2 },
@@ -90,21 +92,21 @@ const DISHES: { key: string; name: string; component: Component }[] = [
   { key: "hash_brown", name: "Veg Hash Browns", component: "HOT_FOOD" },
   { key: "sabudana", name: "Sabudana Khichdi", component: "HOT_FOOD" },
   // Veg mains (primary, 7-day)
-  { key: "aloo_gobi", name: "Aloo Gobi", component: "VEG" },
-  { key: "paneer_butter", name: "Paneer Butter Masala", component: "VEG" },
-  { key: "bhindi_masala", name: "Bhindi Masala", component: "VEG" },
-  { key: "chana_masala", name: "Chana Masala", component: "VEG" },
-  { key: "mix_veg", name: "Mix Vegetable", component: "VEG" },
-  { key: "rajma", name: "Rajma Masala", component: "VEG" },
-  { key: "matar_paneer", name: "Matar Paneer", component: "VEG" },
+  { key: "aloo_gobi", name: "Aloo Gobi", component: "SABZI" },
+  { key: "paneer_butter", name: "Paneer Butter Masala", component: "SABZI" },
+  { key: "bhindi_masala", name: "Bhindi Masala", component: "SABZI" },
+  { key: "chana_masala", name: "Chana Masala", component: "SABZI" },
+  { key: "mix_veg", name: "Mix Vegetable", component: "SABZI" },
+  { key: "rajma", name: "Rajma Masala", component: "SABZI" },
+  { key: "matar_paneer", name: "Matar Paneer", component: "SABZI" },
   // Veg 2 (Uniliv premium second veg, 7-day)
-  { key: "jeera_aloo", name: "Jeera Aloo", component: "VEG" },
-  { key: "dum_aloo", name: "Dum Aloo", component: "VEG" },
-  { key: "lauki_kofta", name: "Lauki Kofta", component: "VEG" },
-  { key: "baingan_bharta", name: "Baingan Bharta", component: "VEG" },
-  { key: "aloo_methi", name: "Aloo Methi", component: "VEG" },
-  { key: "kadhi_pakora", name: "Kadhi Pakora", component: "VEG" },
-  { key: "veg_kolhapuri", name: "Veg Kolhapuri", component: "VEG" },
+  { key: "jeera_aloo", name: "Jeera Aloo", component: "SABZI" },
+  { key: "dum_aloo", name: "Dum Aloo", component: "SABZI" },
+  { key: "lauki_kofta", name: "Lauki Kofta", component: "SABZI" },
+  { key: "baingan_bharta", name: "Baingan Bharta", component: "SABZI" },
+  { key: "aloo_methi", name: "Aloo Methi", component: "SABZI" },
+  { key: "kadhi_pakora", name: "Kadhi Pakora", component: "SABZI" },
+  { key: "veg_kolhapuri", name: "Veg Kolhapuri", component: "SABZI" },
   // Daily accompaniments (repeat every day)
   { key: "dal_tadka", name: "Dal Tadka", component: "DAL" },
   { key: "steamed_rice", name: "Steamed Rice", component: "RICE" },
@@ -212,9 +214,6 @@ function buildRotation(brand: Brand): RotationRow[] {
     add("DINNER", DESSERTS[(i + 3) % 7]!, "Dessert", 7);
     add("DINNER", "papad", "Papad", 8);
     add("DINNER", "pickle", "Pickle", 9);
-
-    // Night milk — Uniliv only (§10.1)
-    if (isUniliv) add("NIGHT_MILK", "hot_milk", "Hot Milk", 1);
   }
   return rows;
 }
@@ -265,16 +264,16 @@ interface SeedUser {
 }
 
 const FOOD_USERS: SeedUser[] = [
-  { id: "user_food_ops",       name: "Ops Excellence",     email: "opsexcellence@uniliv.com",role: "OPS_EXCELLENCE",        propertyIndex: null },
-  { id: "user_food_svp",       name: "Senior VP",          email: "svp@uniliv.com",          role: "SENIOR_VICE_PRESIDENT", propertyIndex: null },
-  { id: "user_food_zonal",     name: "Zonal Head North",   email: "zonalhead@uniliv.com",    role: "ZONAL_HEAD",            propertyIndex: null },
-  { id: "user_food_cityhead",  name: "City Head Delhi",    email: "cityhead@uniliv.com",     role: "CITY_HEAD",             propertyIndex: null },
-  { id: "user_food_cluster",   name: "Cluster Manager",    email: "clustermgr@uniliv.com",   role: "CLUSTER_MANAGER",       propertyIndex: null },
-  { id: "user_food_unit1",     name: "Unit Lead One",      email: "unitlead1@uniliv.com",    role: "UNIT_LEAD",             propertyIndex: 0 },
-  { id: "user_food_unit2",     name: "Unit Lead Two",      email: "unitlead2@uniliv.com",    role: "UNIT_LEAD",             propertyIndex: 1 },
-  { id: "user_food_fnbsup",    name: "F&B Supervisor",     email: "fnbsupervisor@uniliv.com",role: "FNB_SUPERVISOR",        propertyIndex: null },
-  { id: "user_food_fnbmgr",    name: "F&B Manager",        email: "fnbmanager@uniliv.com",   role: "FNB_MANAGER",           propertyIndex: null },
-  { id: "user_food_fnbzonal",  name: "F&B Zonal Head",     email: "fnbzonal@uniliv.com",     role: "FNB_ZONAL_HEAD",        propertyIndex: null },
+  { id: "user_food_ops",       name: "Arjun Mehta",        email: "opsexcellence@uniliv.com",role: "OPS_EXCELLENCE",        propertyIndex: null },
+  { id: "user_food_svp",       name: "Vikram Malhotra",    email: "svp@uniliv.com",          role: "SENIOR_VICE_PRESIDENT", propertyIndex: null },
+  { id: "user_food_zonal",     name: "Rohan Desai",        email: "zonalhead@uniliv.com",    role: "ZONAL_HEAD",            propertyIndex: null },
+  { id: "user_food_cityhead",  name: "Priya Sharma",       email: "cityhead@uniliv.com",     role: "CITY_HEAD",             propertyIndex: null },
+  { id: "user_food_cluster",   name: "Sandeep Rao",        email: "clustermgr@uniliv.com",   role: "CLUSTER_MANAGER",       propertyIndex: null },
+  { id: "user_food_unit1",     name: "Neha Kapoor",        email: "unitlead1@uniliv.com",    role: "UNIT_LEAD",             propertyIndex: 0 },
+  { id: "user_food_unit2",     name: "Karan Verma",        email: "unitlead2@uniliv.com",    role: "UNIT_LEAD",             propertyIndex: 1 },
+  { id: "user_food_fnbsup",    name: "Anjali Nair",        email: "fnbsupervisor@uniliv.com",role: "FNB_SUPERVISOR",        propertyIndex: null },
+  { id: "user_food_fnbmgr",    name: "Rahul Iyer",         email: "fnbmanager@uniliv.com",   role: "FNB_MANAGER",           propertyIndex: null },
+  { id: "user_food_fnbzonal",  name: "Deepak Joshi",       email: "fnbzonal@uniliv.com",     role: "FNB_ZONAL_HEAD",        propertyIndex: null },
 ];
 
 /* ────────────────────────────────────────────────────────────────────────────
@@ -443,7 +442,7 @@ async function main() {
         name: d.name,
         component: d.component,
         unit: COMPONENT_RULE[d.component].unit,
-        isVeg: true,
+        preparations: ["VEG"],
         isActive: true,
       })),
     )
@@ -480,16 +479,23 @@ async function main() {
   await db.insert(perResidentRuleTable).values(rules);
   console.log(`  ✓ ${rules.length} per-resident rules`);
 
-  // 8. Delivery partners (upsert by stable id) ──────────────────────────────
-  await db
-    .insert(deliveryPartnersTable)
-    .values([
-      { id: "dp_swift", name: "Swift Logistics", phone: "9000000001", vehicleNumber: "DL01AB1234", isActive: true },
-      { id: "dp_fresh", name: "FreshMove Couriers", phone: "9000000002", vehicleNumber: "DL02CD5678", isActive: true },
-      { id: "dp_inhouse", name: "In-house Fleet", phone: "9000000003", vehicleNumber: "DL03EF9012", isActive: true },
-    ])
+  // 8. Delivery partners + agencies (same ids; orders FK now → agencies) ──────
+  const PARTNERS = [
+    { id: "dp_swift", name: "Swift Logistics", phone: "9000000001", vehicleNumber: "DL01AB1234" },
+    { id: "dp_fresh", name: "FreshMove Couriers", phone: "9000000002", vehicleNumber: "DL02CD5678" },
+    { id: "dp_inhouse", name: "In-house Fleet", phone: "9000000003", vehicleNumber: "DL03EF9012" },
+  ];
+  await db.insert(deliveryPartnersTable)
+    .values(PARTNERS.map((p) => ({ ...p, isActive: true })))
     .onConflictDoNothing({ target: deliveryPartnersTable.id });
-  console.log("  ✓ 3 delivery partners");
+  // Agencies mirror partners (same id) so order/dispatch FKs stay valid + one vehicle each.
+  await db.insert(agenciesTable)
+    .values(PARTNERS.map((p) => ({ id: p.id, name: p.name, phone: p.phone, isActive: true })))
+    .onConflictDoNothing({ target: agenciesTable.id });
+  await db.insert(agencyVehiclesTable)
+    .values(PARTNERS.map((p) => ({ id: `veh_${p.id}`, agencyId: p.id, vehicleNumber: p.vehicleNumber, vehicleType: "VAN" as const, isActive: true })))
+    .onConflictDoNothing({ target: agencyVehiclesTable.id });
+  console.log("  ✓ 3 agencies (+ vehicles)");
 
   // 9. Sample orders spanning every lifecycle state ─────────────────────────
   // Truncate ONLY the three food-order tables (CASCADE-safe) so re-runs stay

@@ -20,7 +20,7 @@ export type Module =
   // Food Ordering & Kitchen Operations modules (PRD §5 matrix)
   | "FOOD_DASHBOARD" | "FOOD_ALL_ORDERS" | "FOOD_PLACE_ORDER" | "FOOD_KITCHEN_SUMMARY"
   | "FOOD_DISPATCH" | "FOOD_CONFIRM_DELIVERY" | "FOOD_WASTE_TRACKING" | "FOOD_REPORTS"
-  | "FOOD_SETTINGS" | "FOOD_RECEIVE_UPDATE" | "FOOD_DELIVERY_TRACKING";
+  | "FOOD_SETTINGS" | "FOOD_RECEIVE_UPDATE" | "FOOD_DELIVERY_TRACKING" | "FOOD_ORG";
 
 export type Permission = "view" | "create" | "edit" | "delete";
 
@@ -30,7 +30,7 @@ const VIEW = { view: true, create: false, edit: false, delete: false };
 const FOOD_MODULES: Module[] = [
   "FOOD_DASHBOARD","FOOD_ALL_ORDERS","FOOD_PLACE_ORDER","FOOD_KITCHEN_SUMMARY",
   "FOOD_DISPATCH","FOOD_CONFIRM_DELIVERY","FOOD_WASTE_TRACKING","FOOD_REPORTS",
-  "FOOD_SETTINGS","FOOD_RECEIVE_UPDATE","FOOD_DELIVERY_TRACKING",
+  "FOOD_SETTINGS","FOOD_RECEIVE_UPDATE","FOOD_DELIVERY_TRACKING","FOOD_ORG",
 ];
 
 const ALL_MODULES: Module[] = [
@@ -128,6 +128,8 @@ export const PATH_TO_MODULE: Array<[RegExp, Module]> = [
   [/^\/kitchen/, "RECIPES"],
   [/^\/menu-planning/, "MENU_PLANNING"],
   // Food Ordering & Kitchen Operations (specific paths before the /food dashboard)
+  [/^\/food\/organization/, "FOOD_ORG"],
+  [/^\/food\/my-properties/, "FOOD_DASHBOARD"],
   [/^\/food\/orders/, "FOOD_ALL_ORDERS"],
   [/^\/food\/place-order/, "FOOD_PLACE_ORDER"],
   [/^\/food\/kitchen-summary/, "FOOD_KITCHEN_SUMMARY"],

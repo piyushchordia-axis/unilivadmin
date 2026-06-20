@@ -13,6 +13,7 @@ import { PageHeader } from "@/components/page-header";
 import { StatCard } from "@/components/stat-card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { DatePicker, DateTimePicker } from "@/components/ui/date-picker";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
@@ -247,7 +248,7 @@ export default function FacilityPage() {
             <div><Label>Manufacturer</Label><Input value={assetForm.manufacturer || ""} onChange={(e) => setAssetForm({ ...assetForm, manufacturer: e.target.value })} /></div>
             <div><Label>Model No.</Label><Input value={assetForm.modelNo || ""} onChange={(e) => setAssetForm({ ...assetForm, modelNo: e.target.value })} /></div>
           </div>
-          <div><Label>Warranty Expiry</Label><Input type="date" value={assetForm.warrantyExpiry?.slice?.(0,10) || ""} onChange={(e) => setAssetForm({ ...assetForm, warrantyExpiry: e.target.value })} /></div>
+          <div><Label>Warranty Expiry</Label><DatePicker value={assetForm.warrantyExpiry?.slice?.(0,10) || ""} onChange={(v) => setAssetForm({ ...assetForm, warrantyExpiry: v })} /></div>
           <div><Label>Notes</Label><Textarea value={assetForm.notes || ""} onChange={(e) => setAssetForm({ ...assetForm, notes: e.target.value })} /></div>
         </div>
       </FormModal>
@@ -264,7 +265,7 @@ export default function FacilityPage() {
           <div><Label>Task name *</Label><Input value={schedForm.taskName || ""} onChange={(e) => setSchedForm({ ...schedForm, taskName: e.target.value })} data-testid="input-task-name" /></div>
           <div className="grid grid-cols-2 gap-3">
             <div><Label>Frequency (days) *</Label><Input type="number" min={1} value={schedForm.frequencyDays || ""} onChange={(e) => setSchedForm({ ...schedForm, frequencyDays: Number(e.target.value) })} data-testid="input-frequency" /></div>
-            <div><Label>Next due *</Label><Input type="date" value={schedForm.nextDueDate || ""} onChange={(e) => setSchedForm({ ...schedForm, nextDueDate: e.target.value })} data-testid="input-next-due" /></div>
+            <div><Label>Next due *</Label><DatePicker value={schedForm.nextDueDate || ""} onChange={(v) => setSchedForm({ ...schedForm, nextDueDate: v })} data-testid="input-next-due" /></div>
           </div>
           <div><Label>Assigned To</Label><Input value={schedForm.assignedTo || ""} onChange={(e) => setSchedForm({ ...schedForm, assignedTo: e.target.value })} placeholder="Vendor or employee name" /></div>
           <div><Label>Notes</Label><Textarea value={schedForm.notes || ""} onChange={(e) => setSchedForm({ ...schedForm, notes: e.target.value })} /></div>
@@ -274,7 +275,7 @@ export default function FacilityPage() {
       {/* Log modal */}
       <FormModal open={logOpen} onOpenChange={setLogOpen} title="Log Maintenance" onSave={() => saveLog.mutate(logForm)} isSaving={saveLog.isPending}>
         <div className="space-y-4">
-          <div><Label>Performed at *</Label><Input type="datetime-local" value={logForm.performedAt || ""} onChange={(e) => setLogForm({ ...logForm, performedAt: e.target.value })} data-testid="input-performed-at" /></div>
+          <div><Label>Performed at *</Label><DateTimePicker value={logForm.performedAt || ""} onChange={(v) => setLogForm({ ...logForm, performedAt: v })} data-testid="input-performed-at" /></div>
           <div><Label>Outcome</Label>
             <Select value={logForm.outcome} onValueChange={(v) => setLogForm({ ...logForm, outcome: v })}>
               <SelectTrigger data-testid="select-outcome"><SelectValue /></SelectTrigger>

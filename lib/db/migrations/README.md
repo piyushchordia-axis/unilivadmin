@@ -1,13 +1,19 @@
 ## DB migrations
 
-Day-to-day development uses `drizzle-kit push` (see `package.json`'s `push` /
-`push-force` scripts) to sync `src/schema/*` to the database. For environments
-where push isn't appropriate (e.g. production), the SQL files in this directory
-capture each schema change in order so they can be applied manually with `psql`
-or any standard runner.
-
-Apply in lexicographic order:
+**`drizzle-kit push` is the canonical schema-apply path for ALL environments,
+including production** (see `package.json`'s `push` / `push-force` scripts and
+`DEPLOYMENT.md`). It syncs `src/schema/*` directly to the target database, so the
+schema in code is always the single source of truth.
 
 ```bash
-psql "$DATABASE_URL" -f lib/db/migrations/0001_portfolio_types.sql
+# applies lib/db/src/schema/* to $DATABASE_URL
+pnpm --filter @workspace/db exec drizzle-kit push --force
 ```
+
+### ⚠️ The hand-written `*.sql` files below are DEPRECATED / not maintained
+
+They were an early secondary convenience for a manual `psql` runner and were
+**not kept in sync** with later schema work (the org/brand overhaul, the menu
+module, agencies, composition rules, etc.). Do **not** provision a database from
+them — they will not match `src/schema/*`. They are retained only for historical
+reference. Use `drizzle-kit push --force` instead.

@@ -40,6 +40,10 @@ interface DataTableProps<TData, TValue> {
   isLoading?: boolean
   onRowClick?: (row: TData) => void
   toolbarActions?: React.ReactNode
+  /** Filename (without extension) for the built-in CSV export. */
+  exportFilename?: string
+  /** Hide the built-in Export button. */
+  hideExport?: boolean
 }
 
 export function DataTable<TData, TValue>({
@@ -49,7 +53,9 @@ export function DataTable<TData, TValue>({
   searchPlaceholder = "Search...",
   isLoading = false,
   onRowClick,
-  toolbarActions
+  toolbarActions,
+  exportFilename = "export",
+  hideExport = false,
 }: DataTableProps<TData, TValue>) {
   const [sorting, setSorting] = React.useState<SortingState>([])
   const [columnFilters, setColumnFilters] = React.useState<ColumnFiltersState>([])
@@ -75,6 +81,40 @@ export function DataTable<TData, TValue>({
     },
   })
 
+  // Client-side CSV export of the currently filtered rows + visible data columns.
+  const exportCsv = React.useCallback(() => {
+    // Only accessor columns (skip display/action columns, which have no value).
+    const cols = table.getVisibleLeafColumns().filter((c) => {
+      const def = c.columnDef as { accessorKey?: unknown; accessorFn?: unknown }
+      return (def.accessorKey != null || def.accessorFn != null) && c.id !== "select"
+    })
+    const headerText = (c: typeof cols[number]): string => {
+      const h = c.columnDef.header
+      return typeof h === "string" ? h : c.id
+    }
+    const cellText = (v: unknown): string => {
+      if (v === null || v === undefined) return ""
+      if (Array.isArray(v)) return v.join("; ")
+      if (typeof v === "object") return JSON.stringify(v)
+      return String(v)
+    }
+    const escape = (s: string) => (/[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s)
+    const rows = table.getFilteredRowModel().rows
+    const lines = [
+      cols.map((c) => escape(headerText(c))).join(","),
+      ...rows.map((r) => cols.map((c) => escape(cellText(r.getValue(c.id)))).join(",")),
+    ]
+    const blob = new Blob(["﻿" + lines.join("\n")], { type: "text/csv;charset=utf-8" })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement("a")
+    a.href = url
+    a.download = `${exportFilename}.csv`
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+  }, [table, exportFilename])
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
@@ -95,10 +135,12 @@ export function DataTable<TData, TValue>({
           {toolbarActions}
         </div>
         <div className="flex items-center space-x-2">
-          <Button variant="outline" size="sm" className="hidden lg:flex">
-            <Download className="mr-2 h-4 w-4" />
-            Export
-          </Button>
+          {!hideExport && (
+            <Button variant="outline" size="sm" className="hidden lg:flex" onClick={exportCsv} disabled={isLoading || data.length === 0}>
+              <Download className="mr-2 h-4 w-4" />
+              Export
+            </Button>
+          )}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="outline" size="sm">

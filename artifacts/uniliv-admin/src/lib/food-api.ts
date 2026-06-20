@@ -8,12 +8,18 @@
 import { apiFetch } from "@/lib/api-fetch";
 
 // ─── Domain types ────────────────────────────────────────────────────────────
-export type FoodBrand = "UNILIV" | "HUDDLE";
-export type MealType = "BREAKFAST" | "LUNCH" | "SNACKS" | "DINNER" | "NIGHT_MILK";
+// Brands are now an admin-managed master list (food_brands), so a brand is just
+// its code string. Use foodApi.listBrands() for the live set; BRANDS below is a
+// dev fallback only.
+export type FoodBrand = string;
+export type MealType = "BREAKFAST" | "LUNCH" | "SNACKS" | "DINNER";
 export type OrderStatus = "PLACED" | "ACCEPTED" | "REJECTED" | "PREPARING" | "DISPATCHED" | "DELIVERED" | "CANCELLED";
 export type DispatchStatus = "LOADING" | "IN_TRANSIT" | "DELIVERED" | "PARTIAL";
 
-export const MEAL_TYPES: MealType[] = ["BREAKFAST", "LUNCH", "SNACKS", "DINNER", "NIGHT_MILK"];
+export const MEAL_TYPES: MealType[] = ["BREAKFAST", "LUNCH", "SNACKS", "DINNER"];
+export const PREPARATIONS = ["VEG", "NON_VEG", "JAIN"] as const;
+export type Preparation = (typeof PREPARATIONS)[number];
+export const PREPARATION_LABEL: Record<string, string> = { VEG: "Veg", NON_VEG: "Non-veg", JAIN: "Jain" };
 export const BRANDS: FoodBrand[] = ["UNILIV", "HUDDLE"];
 export const ORDER_STATUSES: OrderStatus[] = ["PLACED", "ACCEPTED", "REJECTED", "PREPARING", "DISPATCHED", "DELIVERED", "CANCELLED"];
 
@@ -107,29 +113,41 @@ export interface ReportsData {
   statusBreakdown: { status: string; count: number }[];
 }
 
+export interface DishIngredientRow { id?: string; rawMaterialId: string; rawMaterialName?: string | null; quantity: string | number | null; unit: string | null }
 export interface Dish {
   id: string; name: string; component: string; unit: string;
-  isVeg: boolean; photoUrl: string | null; isActive: boolean;
+  brands: string[];
+  preparations: string[];
+  photoUrl: string | null; isActive: boolean;
+  ingredients?: DishIngredientRow[];
 }
+export interface RawMaterial { id: string; name: string; unit: string; isActive: boolean }
 export interface MenuRotationRow {
-  id: string; brand: FoodBrand; rotationWeek: number; dayOfWeek: number;
+  id: string; brand: FoodBrand; kitchenId: string | null; kitchenName?: string | null;
+  rotationWeek: number; dayOfWeek: number;
   mealType: MealType; dishId: string; dishName?: string; slotLabel: string | null;
   sortOrder: number; isActive: boolean;
 }
 export interface PerResidentRule {
   id: string; brand: FoodBrand; mealType: MealType; dishId: string; dishName?: string;
-  propertyId: string | null; qtyPerResident: string; unit: string; isActive: boolean;
+  qtyPerResident: number; unit: string; isActive: boolean;
 }
 export interface DeliveryPartner { id: string; name: string; phone: string | null; vehicleNumber: string | null; isActive: boolean }
+export type VehicleType = "VAN" | "BIKE" | "TRUCK" | "CAR" | "TEMPO" | "OTHER";
+export interface AgencyVehicle { id: string; agencyId: string; locationId: string | null; vehicleNumber: string; vehicleType: VehicleType; isActive: boolean }
+export interface AgencyLocation { id: string; agencyId: string; name: string; address: string | null; city: string | null; state: string | null; pincode: string | null; contactName: string | null; contactPhone: string | null; isActive: boolean }
+export interface Agency { id: string; name: string; phone: string | null; contactName: string | null; email: string | null; isActive: boolean; vehicles?: AgencyVehicle[]; locations?: AgencyLocation[] }
 export interface Zone { id: string; name: string; code: string | null; isActive: boolean }
-export interface City { id: string; name: string; zoneId: string; isActive: boolean }
+export interface City { id: string; name: string; zoneId: string | null; isActive: boolean }
 export interface Cluster { id: string; name: string; cityId: string; managerId: string | null; isActive: boolean }
-export interface UserScope { id: string; userId: string; scopeLevel: string; zoneId: string | null; cityId: string | null; clusterId: string | null; propertyId: string | null }
+export interface UserScope { id: string; userId: string; scopeLevel: string; zoneId: string | null; cityId: string | null; clusterId: string | null; kitchenId: string | null; propertyId: string | null }
 export interface FoodUser { id: string; name: string; email: string; role: string; propertyId: string | null }
+export interface FoodBrandRow { id: string; code: string; name: string; isActive: boolean }
 export interface FoodLookups {
-  properties: { id: string; name: string; clusterId: string | null }[];
+  properties: { id: string; name: string; brand: string | null; kitchenId: string | null; clusterId: string | null }[];
   deliveryPartners: { id: string; name: string }[];
-  brands: FoodBrand[];
+  agencies: { id: string; name: string; vehicles: { id: string; vehicleNumber: string; vehicleType: VehicleType; locationId: string | null }[] }[];
+  brands: { code: string; name: string }[];
   mealTypes: MealType[];
 }
 
@@ -137,11 +155,12 @@ export interface FoodLookups {
 export interface Kitchen {
   id: string; name: string; code: string; brand: FoodBrand | null;
   address: string | null; city: string | null; state: string | null; pincode: string | null;
-  contactName: string | null; contactPhone: string | null; clusterId: string | null; isActive: boolean;
+  contactName: string | null; contactPhone: string | null; contactEmail: string | null;
+  cityId: string | null; clusterId: string | null; isActive: boolean;
 }
 export interface Dispatch {
   id: string; dispatchNumber: string; kitchenId: string | null; kitchenName?: string | null; kitchenCode?: string | null;
-  deliveryPartnerId: string | null; partnerName?: string | null; vehicleNumber: string | null;
+  deliveryPartnerId: string | null; partnerName?: string | null; vehicleId?: string | null; vehicleNumber: string | null;
   driverName: string | null; driverPhone: string | null; dispatchedAt: string | null;
   estimatedArrivalAt: string | null; status: DispatchStatus; notes: string | null; orderCount?: number;
 }
@@ -150,8 +169,9 @@ export interface DispatchDetail extends Dispatch {
   orders: (FoodOrder & { propertyName?: string | null })[];
 }
 export interface MealConfig { id: string; mealType: MealType; displayLabel: string; brand: FoodBrand | null; sortOrder: number; isEnabled: boolean }
-export interface MealWindow { id: string; brand: FoodBrand; propertyId: string | null; mealType: MealType; cutoffTime: string; serviceTime: string | null; leadTimeMinutes: number; isActive: boolean }
-export interface Cutoff { mealType: MealType; cutoffTime: string; serviceTime: string | null; cutoffAt: string | null; isPastCutoff: boolean }
+export interface MealWindow { id: string; brand: FoodBrand; propertyId: string | null; mealType: MealType; cutoffTime: string | null; serviceTime: string | null; leadTimeMinutes: number; isActive: boolean }
+export interface FoodCutoffConfig { id: string; brand: string; propertyId: string | null; cutoffTime: string; isActive: boolean }
+export interface Cutoff { mealType: MealType; cutoffTime: string | null; serviceTime: string | null; cutoffAt: string | null; isPastCutoff: boolean }
 export interface AnalyticsData {
   period: string; range: { from: string; to: string };
   wastageTrend: { date: string; wasted: number }[];
@@ -161,9 +181,47 @@ export interface AnalyticsData {
 }
 export interface GuestRow { id: string; name: string; phone: string; email: string; gender: string | null; roomNumber: string | null; propertyId: string; propertyName: string | null; checkInDate: string | null; status: string }
 export interface PropertyOverview { id: string; name: string; address: string; city: string; state: string; pincode: string; totalBeds: number; occupied: number; activeGuests: number; occupancyPct: number; monthlyRevenue: number }
+export interface MyPropertyCard {
+  id: string; name: string; city: string | null; brand: string | null;
+  kitchenId: string | null; kitchenName: string | null;
+  totalBeds: number; activeGuests: number; occupancyPct: number; monthlyRevenue: number;
+  activeOrders: number; awaitingDelivery: number; configured: boolean;
+}
 export interface RevenueData { months: { month: string; total: number }[] }
 export interface FullMenuMeal { mealType: MealType; label: string; dishes: { dishId: string; dishName: string; component: string; unit: string; slotLabel: string | null; sortOrder: number }[] }
 export interface FullMenu { brand: FoodBrand; date: string; meals: FullMenuMeal[] }
+
+// ─── Org hierarchy (India → City → Kitchen → Property → Brand) ────────────────
+export interface HierarchyProperty {
+  id: string; name: string; brand: string | null; kitchenId: string | null;
+  city: string | null; totalBeds: number; active: number;
+}
+export interface HierarchyKitchen extends Kitchen { properties: HierarchyProperty[] }
+export interface HierarchyCity extends City { kitchens: HierarchyKitchen[] }
+export interface HierarchyTree {
+  cities: HierarchyCity[];
+  kitchensNoCity: HierarchyKitchen[];
+  propertiesNoKitchen: HierarchyProperty[];
+}
+
+// ─── Per-item order preview (editable persons + auto/overridable qty) ─────────
+export interface OrderPreviewItem {
+  dishId: string; dishName: string; component: string; unit: string;
+  slotLabel: string | null; sortOrder: number;
+  qtyPerResident: number; defaultPersons: number; defaultOrderedQty: number;
+}
+export interface OrderPreviewMeal { mealType: MealType; label: string; items: OrderPreviewItem[] }
+
+// ─── Menu-composition rule engine ─────────────────────────────────────────────
+export interface CompositionSlot { id?: string; slotLabel: string | null; component: string | null; preparation: string | null; minCount: number; maxCount: number | null; sortOrder: number }
+export interface CompositionRule { id: string; brand: string; mealType: MealType; kitchenId: string | null; name: string | null; isActive: boolean; slots: CompositionSlot[] }
+export interface SlotValidation { slotId: string; slotLabel: string | null; component: string | null; preparation: string | null; minCount: number; maxCount: number | null; count: number; matchedDishIds: string[]; status: "OK" | "MISSING" | "UNDER" | "OVER" }
+export interface SharedIngredient { rawMaterialId: string; name: string; dishIds: string[] }
+export interface RotationValidation { ruleId: string | null; ruleName: string | null; slots: SlotValidation[]; unmatchedDishIds: string[]; isComplete: boolean; sharedIngredients: SharedIngredient[] }
+export interface AutoFillItem { dishId: string; slotLabel: string | null; sortOrder: number }
+export interface OrderPreview {
+  brand: string | null; kitchenId: string | null; configured: boolean; meals: OrderPreviewMeal[];
+}
 
 type Envelope<T> = { success: boolean; data: T; meta?: PageMeta };
 export interface PageMeta { total: number; page: number; limit: number; totalPages: number }
@@ -185,24 +243,34 @@ export const foodKeys = {
   kitchenSummary: (p: Record<string, unknown>) => ["food", "kitchen-summary", p] as const,
   reports: (p: Record<string, unknown>) => ["food", "reports", p] as const,
   dishes: (p: Record<string, unknown>) => ["food", "dishes", p] as const,
+  dish: (id: string) => ["food", "dish", id] as const,
+  rawMaterials: (p: Record<string, unknown> = {}) => ["food", "raw-materials", p] as const,
+  compositionRules: (p: Record<string, unknown> = {}) => ["food", "composition-rules", p] as const,
+  rotationValidate: (p: Record<string, unknown>) => ["food", "rotation-validate", p] as const,
   rotation: (p: Record<string, unknown>) => ["food", "menu-rotation", p] as const,
   rules: (p: Record<string, unknown>) => ["food", "rules", p] as const,
   partners: (p: Record<string, unknown>) => ["food", "delivery-partners", p] as const,
+  agencies: (p: Record<string, unknown> = {}) => ["food", "agencies", p] as const,
   zones: () => ["food", "zones"] as const,
   cities: (zoneId?: string) => ["food", "cities", zoneId ?? "all"] as const,
   clusters: (cityId?: string) => ["food", "clusters", cityId ?? "all"] as const,
   scopes: (userId?: string) => ["food", "scopes", userId ?? "all"] as const,
   users: () => ["food", "users"] as const,
   lookups: () => ["food", "lookups"] as const,
+  brands: (p: Record<string, unknown> = {}) => ["food", "brands", p] as const,
+  hierarchy: () => ["food", "hierarchy"] as const,
+  orderPreview: (p: Record<string, unknown>) => ["food", "order-preview", p] as const,
   dispatches: () => ["food", "dispatches"] as const,
   dispatch: (id: string) => ["food", "dispatch", id] as const,
   kitchens: (p: Record<string, unknown> = {}) => ["food", "kitchens", p] as const,
   mealConfig: () => ["food", "meal-config"] as const,
   mealWindows: (p: Record<string, unknown> = {}) => ["food", "meal-windows", p] as const,
+  cutoffConfig: (p: Record<string, unknown> = {}) => ["food", "cutoff-config", p] as const,
   cutoffs: (p: Record<string, unknown>) => ["food", "cutoffs", p] as const,
   analytics: (p: Record<string, unknown>) => ["food", "analytics", p] as const,
   guests: (p: Record<string, unknown>) => ["food", "guests", p] as const,
   propertyOverview: (p: Record<string, unknown>) => ["food", "property-overview", p] as const,
+  myProperties: () => ["food", "my-properties"] as const,
   revenue: (p: Record<string, unknown>) => ["food", "revenue", p] as const,
   fullMenu: (p: Record<string, unknown>) => ["food", "full-menu", p] as const,
 };
@@ -244,16 +312,43 @@ export const foodApi = {
   lookups: () => apiFetch<Envelope<FoodLookups>>(`/food/lookups`).then((r) => r.data),
   foodUsers: () => apiFetch<Envelope<FoodUser[]>>(`/food/food-users`).then((r) => r.data),
 
+  // Brands master (admin-managed list)
+  listBrands: (p: Record<string, unknown> = {}) => apiFetch<Envelope<FoodBrandRow[]>>(`/food/brands${qs(p)}`).then((r) => r.data),
+  createBrand: (b: Record<string, unknown>) => apiFetch<Envelope<FoodBrandRow>>(`/food/brands`, { method: "POST", body: JSON.stringify(b) }).then((r) => r.data),
+  updateBrand: (id: string, b: Record<string, unknown>) => apiFetch<Envelope<FoodBrandRow>>(`/food/brands/${id}`, { method: "PUT", body: JSON.stringify(b) }).then((r) => r.data),
+  deleteBrand: (id: string) => apiFetch<Envelope<unknown>>(`/food/brands/${id}`, { method: "DELETE" }),
+
+  // Org hierarchy tree (India → City → Kitchen → Property)
+  hierarchy: () => apiFetch<Envelope<HierarchyTree>>(`/food/hierarchy`).then((r) => r.data),
+  assignBrand: (propertyId: string, brand: string | null) => apiFetch<Envelope<unknown>>(`/food/properties/${propertyId}/assign-brand`, { method: "POST", body: JSON.stringify({ brand }) }),
+  assignKitchen: (propertyId: string, kitchenId: string | null) => apiFetch<Envelope<unknown>>(`/food/properties/${propertyId}/assign-kitchen`, { method: "POST", body: JSON.stringify({ kitchenId }) }),
+
   listDishes: (p: Record<string, unknown> = {}) => apiFetch<Envelope<Dish[]>>(`/food/dishes${qs(p)}`).then((r) => r.data),
+  getDish: (id: string) => apiFetch<Envelope<Dish>>(`/food/dishes/${id}`).then((r) => r.data),
   createDish: (b: Record<string, unknown>) => apiFetch<Envelope<Dish>>(`/food/dishes`, { method: "POST", body: JSON.stringify(b) }).then((r) => r.data),
   updateDish: (id: string, b: Record<string, unknown>) => apiFetch<Envelope<Dish>>(`/food/dishes/${id}`, { method: "PUT", body: JSON.stringify(b) }).then((r) => r.data),
   deleteDish: (id: string) => apiFetch<Envelope<unknown>>(`/food/dishes/${id}`, { method: "DELETE" }),
 
+  // Raw materials (ingredients master)
+  listRawMaterials: (p: Record<string, unknown> = {}) => apiFetch<Envelope<RawMaterial[]>>(`/food/raw-materials${qs(p)}`).then((r) => r.data),
+  createRawMaterial: (b: Record<string, unknown>) => apiFetch<Envelope<RawMaterial>>(`/food/raw-materials`, { method: "POST", body: JSON.stringify(b) }).then((r) => r.data),
+  updateRawMaterial: (id: string, b: Record<string, unknown>) => apiFetch<Envelope<RawMaterial>>(`/food/raw-materials/${id}`, { method: "PUT", body: JSON.stringify(b) }).then((r) => r.data),
+  deleteRawMaterial: (id: string) => apiFetch<Envelope<unknown>>(`/food/raw-materials/${id}`, { method: "DELETE" }),
+
   listRotation: (p: Record<string, unknown> = {}) => apiFetch<Envelope<MenuRotationRow[]>>(`/food/menu-rotation${qs(p)}`).then((r) => r.data),
   createRotation: (b: Record<string, unknown>) => apiFetch<Envelope<MenuRotationRow>>(`/food/menu-rotation`, { method: "POST", body: JSON.stringify(b) }).then((r) => r.data),
+  createRotationBulk: (b: Record<string, unknown>) => apiFetch<Envelope<MenuRotationRow[]>>(`/food/menu-rotation/bulk`, { method: "POST", body: JSON.stringify(b) }).then((r) => r.data),
+  replaceRotationSlot: (b: Record<string, unknown>) => apiFetch<Envelope<MenuRotationRow[]>>(`/food/menu-rotation/slot`, { method: "PUT", body: JSON.stringify(b) }).then((r) => r.data),
+  validateRotation: (p: Record<string, unknown> = {}) => apiFetch<Envelope<RotationValidation>>(`/food/menu-rotation/validate${qs(p)}`).then((r) => r.data),
+  autoFillRotation: (p: Record<string, unknown> = {}) => apiFetch<Envelope<AutoFillItem[]>>(`/food/menu-rotation/auto-fill${qs(p)}`).then((r) => r.data),
+  // Menu-composition rules
+  listCompositionRules: (p: Record<string, unknown> = {}) => apiFetch<Envelope<CompositionRule[]>>(`/food/composition-rules${qs(p)}`).then((r) => r.data),
+  createCompositionRule: (b: Record<string, unknown>) => apiFetch<Envelope<CompositionRule>>(`/food/composition-rules`, { method: "POST", body: JSON.stringify(b) }).then((r) => r.data),
+  updateCompositionRule: (id: string, b: Record<string, unknown>) => apiFetch<Envelope<CompositionRule>>(`/food/composition-rules/${id}`, { method: "PUT", body: JSON.stringify(b) }).then((r) => r.data),
+  deleteCompositionRule: (id: string) => apiFetch<Envelope<unknown>>(`/food/composition-rules/${id}`, { method: "DELETE" }),
   updateRotation: (id: string, b: Record<string, unknown>) => apiFetch<Envelope<MenuRotationRow>>(`/food/menu-rotation/${id}`, { method: "PUT", body: JSON.stringify(b) }).then((r) => r.data),
   deleteRotation: (id: string) => apiFetch<Envelope<unknown>>(`/food/menu-rotation/${id}`, { method: "DELETE" }),
-  resolveMenu: (p: { brand: string; mealType: string; date: string }) => apiFetch<Envelope<unknown[]>>(`/food/menu-rotation/resolve${qs(p)}`).then((r) => r.data),
+  resolveMenu: (p: { brand?: string; kitchenId?: string; propertyId?: string; mealType: string; date: string }) => apiFetch<Envelope<unknown[]>>(`/food/menu-rotation/resolve${qs(p)}`).then((r) => r.data),
 
   listRules: (p: Record<string, unknown> = {}) => apiFetch<Envelope<PerResidentRule[]>>(`/food/rules${qs(p)}`).then((r) => r.data),
   createRule: (b: Record<string, unknown>) => apiFetch<Envelope<PerResidentRule>>(`/food/rules`, { method: "POST", body: JSON.stringify(b) }).then((r) => r.data),
@@ -264,6 +359,18 @@ export const foodApi = {
   createPartner: (b: Record<string, unknown>) => apiFetch<Envelope<DeliveryPartner>>(`/food/delivery-partners`, { method: "POST", body: JSON.stringify(b) }).then((r) => r.data),
   updatePartner: (id: string, b: Record<string, unknown>) => apiFetch<Envelope<DeliveryPartner>>(`/food/delivery-partners/${id}`, { method: "PUT", body: JSON.stringify(b) }).then((r) => r.data),
   deletePartner: (id: string) => apiFetch<Envelope<unknown>>(`/food/delivery-partners/${id}`, { method: "DELETE" }),
+
+  // Delivery agencies (→ locations + vehicles)
+  listAgencies: (p: Record<string, unknown> = {}) => apiFetch<Envelope<Agency[]>>(`/food/agencies${qs(p)}`).then((r) => r.data),
+  createAgency: (b: Record<string, unknown>) => apiFetch<Envelope<Agency>>(`/food/agencies`, { method: "POST", body: JSON.stringify(b) }).then((r) => r.data),
+  updateAgency: (id: string, b: Record<string, unknown>) => apiFetch<Envelope<Agency>>(`/food/agencies/${id}`, { method: "PUT", body: JSON.stringify(b) }).then((r) => r.data),
+  deleteAgency: (id: string) => apiFetch<Envelope<unknown>>(`/food/agencies/${id}`, { method: "DELETE" }),
+  createAgencyLocation: (agencyId: string, b: Record<string, unknown>) => apiFetch<Envelope<AgencyLocation>>(`/food/agencies/${agencyId}/locations`, { method: "POST", body: JSON.stringify(b) }).then((r) => r.data),
+  updateAgencyLocation: (id: string, b: Record<string, unknown>) => apiFetch<Envelope<AgencyLocation>>(`/food/agency-locations/${id}`, { method: "PUT", body: JSON.stringify(b) }).then((r) => r.data),
+  deleteAgencyLocation: (id: string) => apiFetch<Envelope<unknown>>(`/food/agency-locations/${id}`, { method: "DELETE" }),
+  createAgencyVehicle: (agencyId: string, b: Record<string, unknown>) => apiFetch<Envelope<AgencyVehicle>>(`/food/agencies/${agencyId}/vehicles`, { method: "POST", body: JSON.stringify(b) }).then((r) => r.data),
+  updateAgencyVehicle: (id: string, b: Record<string, unknown>) => apiFetch<Envelope<AgencyVehicle>>(`/food/agency-vehicles/${id}`, { method: "PUT", body: JSON.stringify(b) }).then((r) => r.data),
+  deleteAgencyVehicle: (id: string) => apiFetch<Envelope<unknown>>(`/food/agency-vehicles/${id}`, { method: "DELETE" }),
 
   listZones: () => apiFetch<Envelope<Zone[]>>(`/food/zones`).then((r) => r.data),
   createZone: (b: Record<string, unknown>) => apiFetch<Envelope<Zone>>(`/food/zones`, { method: "POST", body: JSON.stringify(b) }).then((r) => r.data),
@@ -294,7 +401,8 @@ export const foodApi = {
   acceptOrder: (id: string) => apiFetch<Envelope<FoodOrder>>(`/food/orders/${id}/accept`, { method: "POST", body: "{}" }).then((r) => r.data),
   rejectOrder: (id: string, reason?: string) => apiFetch<Envelope<FoodOrder>>(`/food/orders/${id}/reject`, { method: "POST", body: JSON.stringify({ reason }) }).then((r) => r.data),
 
-  // Multi-meal batch
+  // Per-item order preview (editable persons + auto/overridable qty) + multi-meal batch
+  orderPreview: (p: Record<string, unknown> = {}) => apiFetch<Envelope<OrderPreview>>(`/food/order-preview${qs(p)}`).then((r) => r.data),
   placeOrderBatch: (b: Record<string, unknown>) => apiFetch<Envelope<{ batch: any; orders: FoodOrder[] }>>(`/food/order-batches`, { method: "POST", body: JSON.stringify(b) }).then((r) => r.data),
 
   // Meal config + cut-off windows
@@ -304,6 +412,11 @@ export const foodApi = {
   createMealWindow: (b: Record<string, unknown>) => apiFetch<Envelope<MealWindow>>(`/food/meal-windows`, { method: "POST", body: JSON.stringify(b) }).then((r) => r.data),
   updateMealWindow: (id: string, b: Record<string, unknown>) => apiFetch<Envelope<MealWindow>>(`/food/meal-windows/${id}`, { method: "PUT", body: JSON.stringify(b) }).then((r) => r.data),
   deleteMealWindow: (id: string) => apiFetch<Envelope<unknown>>(`/food/meal-windows/${id}`, { method: "DELETE" }),
+  // Single cut-off per brand (applies to all meals; property-overridable)
+  listCutoffConfig: (p: Record<string, unknown> = {}) => apiFetch<Envelope<FoodCutoffConfig[]>>(`/food/cutoff-config${qs(p)}`).then((r) => r.data),
+  createCutoffConfig: (b: Record<string, unknown>) => apiFetch<Envelope<FoodCutoffConfig>>(`/food/cutoff-config`, { method: "POST", body: JSON.stringify(b) }).then((r) => r.data),
+  updateCutoffConfig: (id: string, b: Record<string, unknown>) => apiFetch<Envelope<FoodCutoffConfig>>(`/food/cutoff-config/${id}`, { method: "PUT", body: JSON.stringify(b) }).then((r) => r.data),
+  deleteCutoffConfig: (id: string) => apiFetch<Envelope<unknown>>(`/food/cutoff-config/${id}`, { method: "DELETE" }),
   cutoffs: (p: Record<string, unknown> = {}) => apiFetch<Envelope<Cutoff[]>>(`/food/cutoffs${qs(p)}`).then((r) => r.data),
 
   // Menu (full day + share)
@@ -314,11 +427,13 @@ export const foodApi = {
   analytics: (p: Record<string, unknown> = {}) => apiFetch<Envelope<AnalyticsData>>(`/food/analytics${qs(p)}`).then((r) => r.data),
 
   // Unit-Lead home insights
+  myProperties: () => apiFetch<Envelope<MyPropertyCard[]>>(`/food/my-properties`).then((r) => r.data),
   propertyOverview: (p: Record<string, unknown> = {}) => apiFetch<Envelope<PropertyOverview | null>>(`/food/property-overview${qs(p)}`).then((r) => r.data),
   revenue: (p: Record<string, unknown> = {}) => apiFetch<Envelope<RevenueData>>(`/food/revenue${qs(p)}`).then((r) => r.data),
   guests: (p: Record<string, unknown> = {}) => apiFetch<Envelope<GuestRow[]>>(`/food/guests${qs(p)}`),
 
   // Export URLs (open in a new tab / anchor download)
+  rotationExportXlsxUrl: (p: Record<string, unknown> = {}) => `/api/food/menu-rotation/export.xlsx${qs(p)}`,
   reportsExportXlsxUrl: (p: Record<string, unknown> = {}) => `/api/food/reports/export.xlsx${qs(p)}`,
   reportsExportPdfUrl: (p: Record<string, unknown> = {}) => `/api/food/reports/export.pdf${qs(p)}`,
   guestsExportXlsxUrl: (p: Record<string, unknown> = {}) => `/api/food/guests/export.xlsx${qs(p)}`,
@@ -327,7 +442,7 @@ export const foodApi = {
 
 // ─── Display helpers ─────────────────────────────────────────────────────────
 export const MEAL_LABEL: Record<MealType, string> = {
-  BREAKFAST: "Breakfast", LUNCH: "Lunch", SNACKS: "Snacks", DINNER: "Dinner", NIGHT_MILK: "Night Milk",
+  BREAKFAST: "Breakfast", LUNCH: "Lunch", SNACKS: "Evening Snacks", DINNER: "Dinner",
 };
 export const DAY_LABEL = ["", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 export function fmtQty(qty: number | string | null | undefined, unit?: string): string {

@@ -5,7 +5,7 @@ import { apiFetch } from "@/lib/api-fetch";
 import { PageHeader } from "@/components/page-header";
 import { StatCard } from "@/components/stat-card";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { DatePicker } from "@/components/ui/date-picker";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -157,7 +157,7 @@ export default function Attendance() {
       <div className="flex flex-wrap items-end gap-3">
         <div>
           <Label className="text-xs text-muted-foreground">Date</Label>
-          <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="w-44" data-testid="input-date" />
+          <DatePicker value={date} onChange={setDate} className="w-44" data-testid="input-date" />
         </div>
         <div>
           <Label className="text-xs text-muted-foreground">Department</Label>

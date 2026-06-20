@@ -11,6 +11,7 @@ import {
 import { FormModal } from "@/components/ui/form-modal";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
+import { DatePicker } from "@/components/ui/date-picker";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { Card, CardContent } from "@/components/ui/card";
@@ -171,7 +172,7 @@ export function CheckoutModal({ open, onOpenChange, resident, ledger }: Checkout
 
         <div>
           <Label>Checkout Date *</Label>
-          <Input type="date" value={checkoutDate} onChange={(e) => setCheckoutDate(e.target.value)} data-testid="input-checkout-date" />
+          <DatePicker value={checkoutDate} onChange={setCheckoutDate} data-testid="input-checkout-date" />
         </div>
         <div>
           <Label>Reason</Label>

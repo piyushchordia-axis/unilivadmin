@@ -9,6 +9,7 @@ import { PageHeader } from "@/components/page-header";
 import { FormModal } from "@/components/ui/form-modal";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { ControlledDatePicker } from "@/components/ui/date-picker";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
@@ -190,7 +191,7 @@ export default function Courses() {
             <div><Label>Duration (minutes)</Label><Input type="number" {...form.register("durationMinutes")} /></div>
             <div><Label>Pass score</Label><Input type="number" {...form.register("passScore")} /></div>
           </div>
-          <div><Label>Expiry date</Label><Input type="date" {...form.register("expiryDate")} /></div>
+          <div><Label>Expiry date</Label><ControlledDatePicker control={form.control} name="expiryDate" /></div>
           <div><Label>Content URL</Label><Input {...form.register("contentUrl")} placeholder="https://... (video / PDF URL)" /></div>
           <div><Label>Thumbnail URL</Label><Input {...form.register("thumbnailUrl")} placeholder="https://..." /></div>
         </form>

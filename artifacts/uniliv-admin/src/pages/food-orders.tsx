@@ -11,6 +11,7 @@ import { StatCard } from "@/components/stat-card";
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { DatePicker } from "@/components/ui/date-picker";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
@@ -197,9 +198,9 @@ export default function FoodOrders() {
         </Select>
         <div className="flex items-center gap-2">
           <Label className="text-xs text-muted-foreground whitespace-nowrap">From</Label>
-          <Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="w-[150px]" />
+          <DatePicker value={from} max={to} onChange={setFrom} className="w-[150px]" />
           <Label className="text-xs text-muted-foreground whitespace-nowrap">To</Label>
-          <Input type="date" value={to} onChange={(e) => setTo(e.target.value)} className="w-[150px]" />
+          <DatePicker value={to} min={from} onChange={setTo} className="w-[150px]" />
         </div>
         {hasFilters && (
           <Button variant="ghost" size="sm" onClick={resetFilters}>Clear</Button>

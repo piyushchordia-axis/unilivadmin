@@ -26,6 +26,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { DatePicker, ControlledDatePicker } from "@/components/ui/date-picker";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
@@ -459,8 +460,8 @@ function AttendanceTab({ employeeId }: { employeeId: string }) {
       >
         <div className="space-y-4">
           <div className="grid grid-cols-2 gap-3">
-            <div><Label>From *</Label><Input type="date" value={bulkFrom} onChange={(e) => setBulkFrom(e.target.value)} /></div>
-            <div><Label>To *</Label><Input type="date" value={bulkTo} onChange={(e) => setBulkTo(e.target.value)} /></div>
+            <div><Label>From *</Label><DatePicker value={bulkFrom} onChange={setBulkFrom} /></div>
+            <div><Label>To *</Label><DatePicker value={bulkTo} onChange={setBulkTo} /></div>
           </div>
           <div>
             <Label>Status</Label>
@@ -631,12 +632,12 @@ function LeaveTab({ employeeId }: { employeeId: string }) {
           <div className="grid grid-cols-2 gap-3">
             <div>
               <Label>From *</Label>
-              <Input type="date" {...aForm.register("fromDate")} />
+              <ControlledDatePicker control={aForm.control} name="fromDate" />
               {aForm.formState.errors.fromDate && <p className="text-xs text-destructive mt-1">{aForm.formState.errors.fromDate.message as string}</p>}
             </div>
             <div>
               <Label>To *</Label>
-              <Input type="date" {...aForm.register("toDate")} />
+              <ControlledDatePicker control={aForm.control} name="toDate" />
               {aForm.formState.errors.toDate && <p className="text-xs text-destructive mt-1">{aForm.formState.errors.toDate.message as string}</p>}
             </div>
           </div>
@@ -755,7 +756,7 @@ function PerformanceTab({ employeeId }: { employeeId: string }) {
           </div>
           <div>
             <Label>Date</Label>
-            <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+            <DatePicker value={date} onChange={setDate} />
           </div>
           <div>
             <Label>Text *</Label>
@@ -951,7 +952,7 @@ function ExitInitiateModal({
         </div>
         <div>
           <Label>Exit Date *</Label>
-          <Input type="date" value={exitDate} onChange={(e) => setExitDate(e.target.value)} />
+          <DatePicker value={exitDate} onChange={setExitDate} />
         </div>
         <div>
           <Label>Reason</Label>

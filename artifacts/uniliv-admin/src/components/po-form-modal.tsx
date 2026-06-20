@@ -2,6 +2,7 @@ import * as React from "react";
 import { useQueryClient, useQuery } from "@tanstack/react-query";
 import { FormModal } from "@/components/ui/form-modal";
 import { Input } from "@/components/ui/input";
+import { DatePicker } from "@/components/ui/date-picker";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
@@ -177,7 +178,7 @@ export function POFormModal({ open, onOpenChange, prefill, onCreated }: Props) {
           </div>
           <div>
             <Label>Delivery Date</Label>
-            <Input type="date" value={deliveryDate} onChange={(e) => setDeliveryDate(e.target.value)} />
+            <DatePicker value={deliveryDate} onChange={setDeliveryDate} />
           </div>
           <div className="col-span-2">
             <Label>Payment Terms</Label>

@@ -30,7 +30,7 @@ export default function GRN() {
     { accessorKey: "poNumber", header: "PO #", cell: ({ row }: any) => <span className="font-mono text-xs bg-muted/30 px-2 py-1 rounded">{row.original.poNumber || "—"}</span> },
     { accessorKey: "vendorName", header: "Vendor", cell: ({ row }: any) => <span className="font-medium text-primary">{row.original.vendorName || "—"}</span> },
     { accessorKey: "propertyId", header: "Property", cell: ({ row }: any) => propName(row.original.propertyId) },
-    { accessorKey: "items", header: "Items", cell: ({ row }: any) => `${row.original.items?.length || 0} items` },
+    { id: "items", header: "Items", accessorFn: (r: any) => `${r.items?.length || 0} items`, cell: ({ row }: any) => `${row.original.items?.length || 0} items` },
     {
       accessorKey: "qcPass", header: "QC",
       cell: ({ row }: any) => row.original.qcPass !== false

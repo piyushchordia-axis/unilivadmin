@@ -2,13 +2,14 @@ import * as React from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { format, formatDistanceToNowStrict, isAfter } from "date-fns";
 import {
-  Trash2, Clock, Lock, Unlock, Package, AlertTriangle, CalendarDays, Save,
+  Trash2, Clock, Lock, Unlock, Package, AlertTriangle, Save,
 } from "lucide-react";
 import { DataTable } from "@/components/data-table";
 import { PageHeader } from "@/components/page-header";
 import { StatCard } from "@/components/stat-card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { DatePicker } from "@/components/ui/date-picker";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -178,15 +179,7 @@ export default function FoodWaste() {
             {MEAL_TYPES.map((m) => (<SelectItem key={m} value={m}>{MEAL_LABEL[m]}</SelectItem>))}
           </SelectContent>
         </Select>
-        <div className="relative">
-          <CalendarDays className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground pointer-events-none" />
-          <Input
-            type="date"
-            value={date}
-            onChange={(e) => setDate(e.target.value)}
-            className="w-44 pl-9"
-          />
-        </div>
+        <DatePicker value={date} onChange={setDate} className="w-44" />
         {(propertyId !== "ALL" || brand !== "ALL" || meal !== "ALL" || date) && (
           <Button
             variant="ghost"

@@ -8,17 +8,20 @@
 import { db } from "@workspace/db";
 import {
   propertiesTable,
-  zonesTable,
   citiesTable,
-  clustersTable,
+  kitchensTable,
   userScopesTable,
   dishesTable,
   foodMenuRotationTable,
   perResidentRuleTable,
   foodOrdersTable,
   foodMealWindowsTable,
+  menuCompositionRuleTable,
+  menuCompositionSlotTable,
+  dishIngredientsTable,
+  rawMaterialsTable,
 } from "@workspace/db";
-import { and, eq, or, isNull, lte, gte, sql, inArray } from "drizzle-orm";
+import { and, eq, or, isNull, lte, gte, sql, inArray, desc } from "drizzle-orm";
 import type { AuthUser } from "../middlewares/auth.js";
 
 /** Roles that always see every property regardless of scope rows. */
@@ -62,36 +65,27 @@ export async function resolveAccessiblePropertyIds(
   const ids = new Set<string>();
   if (user.propertyId) ids.add(user.propertyId);
 
-  // Collect scope target ids by level
-  const zoneIds = scopes.filter((s) => s.scopeLevel === "ZONE" && s.zoneId).map((s) => s.zoneId!);
+  // Collect scope target ids by level. Hierarchy: City → Kitchen → Property.
   const cityIds = scopes.filter((s) => s.scopeLevel === "CITY" && s.cityId).map((s) => s.cityId!);
-  const clusterIds = scopes.filter((s) => s.scopeLevel === "CLUSTER" && s.clusterId).map((s) => s.clusterId!);
+  const kitchenIds = scopes.filter((s) => s.scopeLevel === "KITCHEN" && s.kitchenId).map((s) => s.kitchenId!);
   scopes
     .filter((s) => s.scopeLevel === "PROPERTY" && s.propertyId)
     .forEach((s) => ids.add(s.propertyId!));
 
-  // Expand zone → cities → clusters
-  let allClusterIds = [...clusterIds];
-  let allCityIds = [...cityIds];
-  if (zoneIds.length) {
-    const cities = await db
-      .select({ id: citiesTable.id })
-      .from(citiesTable)
-      .where(inArray(citiesTable.zoneId, zoneIds));
-    allCityIds.push(...cities.map((c) => c.id));
+  // City → its kitchens → their properties.
+  const allKitchenIds = [...kitchenIds];
+  if (cityIds.length) {
+    const kitchens = await db
+      .select({ id: kitchensTable.id })
+      .from(kitchensTable)
+      .where(inArray(kitchensTable.cityId, cityIds));
+    allKitchenIds.push(...kitchens.map((k) => k.id));
   }
-  if (allCityIds.length) {
-    const clusters = await db
-      .select({ id: clustersTable.id })
-      .from(clustersTable)
-      .where(inArray(clustersTable.cityId, allCityIds));
-    allClusterIds.push(...clusters.map((c) => c.id));
-  }
-  if (allClusterIds.length) {
+  if (allKitchenIds.length) {
     const props = await db
       .select({ id: propertiesTable.id })
       .from(propertiesTable)
-      .where(inArray(propertiesTable.clusterId, allClusterIds));
+      .where(inArray(propertiesTable.kitchenId, allKitchenIds));
     props.forEach((p) => ids.add(p.id));
   }
 
@@ -131,27 +125,46 @@ export interface ResolvedDish {
   dishId: string;
   dishName: string;
   component: string;
+  preparations: string[];
   unit: string;
   slotLabel: string | null;
   sortOrder: number;
 }
 
+/** Resolves a property's food config (brand code + serving kitchen). */
+export async function getPropertyFoodConfig(
+  propertyId: string,
+): Promise<{ brand: string | null; kitchenId: string | null }> {
+  const [p] = await db
+    .select({ brand: propertiesTable.brand, kitchenId: propertiesTable.kitchenId })
+    .from(propertiesTable)
+    .where(eq(propertiesTable.id, propertyId));
+  return { brand: p?.brand ?? null, kitchenId: p?.kitchenId ?? null };
+}
+
 /**
- * Resolves the menu (list of dishes) for a brand + meal on a given service
- * date, honoring the multi-week rotation and seasonal effective windows.
+ * Resolves the menu (list of dishes) for a kitchen + brand + meal on a given
+ * service date, honoring the multi-week rotation and seasonal windows. Menus are
+ * defined per kitchen; returns [] when no kitchen is given.
  */
 export async function resolveMenu(
+  kitchenId: string | null,
   brand: string,
   mealType: string,
   serviceDate: Date,
 ): Promise<ResolvedDish[]> {
+  if (!kitchenId) return [];
   const dow = isoDayOfWeek(serviceDate);
 
-  // Determine how many rotation weeks exist for this brand, then cycle.
+  // Determine how many rotation weeks exist for this kitchen+brand, then cycle.
   const weeksRows = await db
     .selectDistinct({ w: foodMenuRotationTable.rotationWeek })
     .from(foodMenuRotationTable)
-    .where(and(eq(foodMenuRotationTable.brand, brand as any), eq(foodMenuRotationTable.isActive, true)));
+    .where(and(
+      eq(foodMenuRotationTable.kitchenId, kitchenId),
+      eq(foodMenuRotationTable.brand, brand as any),
+      eq(foodMenuRotationTable.isActive, true),
+    ));
   const weeks = weeksRows.map((r) => r.w).sort((a, b) => a - b);
   const numWeeks = weeks.length || 1;
   const rotationWeek = weeks.length
@@ -165,12 +178,14 @@ export async function resolveMenu(
       sortOrder: foodMenuRotationTable.sortOrder,
       dishName: dishesTable.name,
       component: dishesTable.component,
+      preparations: dishesTable.preparations,
       unit: dishesTable.unit,
     })
     .from(foodMenuRotationTable)
     .innerJoin(dishesTable, eq(foodMenuRotationTable.dishId, dishesTable.id))
     .where(
       and(
+        eq(foodMenuRotationTable.kitchenId, kitchenId),
         eq(foodMenuRotationTable.brand, brand as any),
         eq(foodMenuRotationTable.mealType, mealType as any),
         eq(foodMenuRotationTable.rotationWeek, rotationWeek),
@@ -186,6 +201,7 @@ export async function resolveMenu(
     dishId: r.dishId,
     dishName: r.dishName,
     component: r.component,
+    preparations: r.preparations ?? [],
     unit: r.unit,
     slotLabel: r.slotLabel,
     sortOrder: r.sortOrder,
@@ -198,48 +214,46 @@ export interface ComputedItem {
   orderedQty: number;
 }
 
+/** Resolves each dish's effective per-resident rule (global per brand + meal + dish). */
+export async function resolveRulesByDish(
+  brand: string,
+  mealType: string,
+  dishIds: string[],
+): Promise<Map<string, { qty: number; unit: string }>> {
+  const out = new Map<string, { qty: number; unit: string }>();
+  if (dishIds.length === 0) return out;
+  const rules = await db
+    .select()
+    .from(perResidentRuleTable)
+    .where(and(
+      eq(perResidentRuleTable.brand, brand as any),
+      eq(perResidentRuleTable.mealType, mealType as any),
+      eq(perResidentRuleTable.isActive, true),
+      inArray(perResidentRuleTable.dishId, dishIds),
+    ));
+  for (const r of rules) {
+    if (!out.has(r.dishId)) out.set(r.dishId, { qty: Number(r.qtyPerResident), unit: r.unit });
+  }
+  return out;
+}
+
 /**
- * Computes per-dish ordered quantities for an order:
- *   orderedQty = mealCount × qtyPerResident (property-specific rule preferred,
- *   else the global default rule). Dishes without a rule are skipped.
+ * Default per-dish ordered quantities (quantity-only path / back-compat):
+ *   orderedQty = mealCount × qtyPerResident. Dishes without a rule are skipped.
  */
 export async function computeOrderItems(
+  kitchenId: string | null,
   brand: string,
   mealType: string,
   serviceDate: Date,
   mealCount: number,
-  propertyId: string,
 ): Promise<ComputedItem[]> {
-  const menu = await resolveMenu(brand, mealType, serviceDate);
+  const menu = await resolveMenu(kitchenId, brand, mealType, serviceDate);
   if (menu.length === 0) return [];
-
-  const dishIds = menu.map((m) => m.dishId);
-  const rules = await db
-    .select()
-    .from(perResidentRuleTable)
-    .where(
-      and(
-        eq(perResidentRuleTable.brand, brand as any),
-        eq(perResidentRuleTable.mealType, mealType as any),
-        eq(perResidentRuleTable.isActive, true),
-        inArray(perResidentRuleTable.dishId, dishIds),
-        or(isNull(perResidentRuleTable.propertyId), eq(perResidentRuleTable.propertyId, propertyId)),
-      ),
-    );
-
-  // Prefer property-specific rule over the global default per dish.
-  const ruleByDish = new Map<string, { qty: number; unit: string; specific: boolean }>();
-  for (const r of rules) {
-    const prev = ruleByDish.get(r.dishId);
-    const specific = r.propertyId === propertyId;
-    if (!prev || (specific && !prev.specific)) {
-      ruleByDish.set(r.dishId, { qty: Number(r.qtyPerResident), unit: r.unit, specific });
-    }
-  }
-
+  const rules = await resolveRulesByDish(brand, mealType, menu.map((m) => m.dishId));
   const items: ComputedItem[] = [];
   for (const m of menu) {
-    const rule = ruleByDish.get(m.dishId);
+    const rule = rules.get(m.dishId);
     if (!rule) continue;
     items.push({
       dishId: m.dishId,
@@ -248,6 +262,191 @@ export async function computeOrderItems(
     });
   }
   return items;
+}
+
+export interface OrderPreviewItem {
+  dishId: string;
+  dishName: string;
+  component: string;
+  preparations: string[];
+  unit: string;
+  slotLabel: string | null;
+  sortOrder: number;
+  qtyPerResident: number | null;
+  defaultPersons: number;
+  defaultOrderedQty: number;
+}
+
+/**
+ * The resolved menu for a meal with each dish's effective per-resident rule and
+ * a default ordered qty = defaultPersons × ruleQty. Drives the editable
+ * per-item ordering grid (persons + quantity per item).
+ */
+export async function resolveOrderPreview(
+  kitchenId: string | null,
+  brand: string,
+  mealType: string,
+  serviceDate: Date,
+  defaultPersons: number,
+): Promise<OrderPreviewItem[]> {
+  const menu = await resolveMenu(kitchenId, brand, mealType, serviceDate);
+  if (menu.length === 0) return [];
+  const rules = await resolveRulesByDish(brand, mealType, menu.map((m) => m.dishId));
+  return menu.map((m) => {
+    const rule = rules.get(m.dishId);
+    const qpr = rule ? rule.qty : null;
+    return {
+      dishId: m.dishId,
+      dishName: m.dishName,
+      component: m.component,
+      preparations: m.preparations,
+      unit: rule?.unit || m.unit,
+      slotLabel: m.slotLabel,
+      sortOrder: m.sortOrder,
+      qtyPerResident: qpr,
+      defaultPersons,
+      defaultOrderedQty: qpr != null ? Math.round(defaultPersons * qpr * 1000) / 1000 : 0,
+    };
+  });
+}
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * Menu-composition rule engine
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+export interface CompositionSlot {
+  id: string; slotLabel: string | null; component: string | null; preparation: string | null;
+  minCount: number; maxCount: number | null; sortOrder: number;
+}
+export interface CompositionRule {
+  id: string; brand: string; mealType: string; kitchenId: string | null; name: string | null;
+  slots: CompositionSlot[];
+}
+
+/** Resolves the composition rule for a (brand, meal) — kitchen-specific overrides brand default. */
+export async function resolveCompositionRule(
+  brand: string, mealType: string, kitchenId: string | null,
+): Promise<CompositionRule | null> {
+  const rules = await db.select().from(menuCompositionRuleTable).where(and(
+    eq(menuCompositionRuleTable.brand, brand as any),
+    eq(menuCompositionRuleTable.mealType, mealType as any),
+    eq(menuCompositionRuleTable.isActive, true),
+    kitchenId ? or(isNull(menuCompositionRuleTable.kitchenId), eq(menuCompositionRuleTable.kitchenId, kitchenId)) : isNull(menuCompositionRuleTable.kitchenId),
+  ));
+  if (!rules.length) return null;
+  const rule = rules.sort((a, b) => (a.kitchenId === kitchenId ? -1 : 1))[0]!;
+  const slots = await db.select().from(menuCompositionSlotTable)
+    .where(eq(menuCompositionSlotTable.ruleId, rule.id)).orderBy(menuCompositionSlotTable.sortOrder);
+  return {
+    id: rule.id, brand: rule.brand, mealType: rule.mealType, kitchenId: rule.kitchenId, name: rule.name,
+    slots: slots.map((s) => ({ id: s.id, slotLabel: s.slotLabel, component: s.component, preparation: s.preparation, minCount: s.minCount, maxCount: s.maxCount, sortOrder: s.sortOrder })),
+  };
+}
+
+export interface SlotValidation {
+  slotId: string; slotLabel: string | null; component: string | null; preparation: string | null;
+  minCount: number; maxCount: number | null; count: number; matchedDishIds: string[];
+  status: "OK" | "MISSING" | "UNDER" | "OVER";
+}
+export interface CompositionValidation {
+  ruleId: string | null; ruleName: string | null;
+  slots: SlotValidation[]; unmatchedDishIds: string[]; isComplete: boolean;
+}
+
+const dishMatchesSlot = (d: { component: string; preparations: string[] }, slot: CompositionSlot): boolean => {
+  const compOk = !slot.component || d.component === slot.component;
+  const prepOk = !slot.preparation || (d.preparations ?? []).includes(slot.preparation);
+  return compOk && prepOk;
+};
+
+/** Validates a set of chosen dishes against a composition rule (greedy match, each dish used once). */
+export function validateMenuAgainstRule(
+  rule: CompositionRule | null,
+  dishes: { dishId: string; component: string; preparations: string[] }[],
+): CompositionValidation {
+  if (!rule) return { ruleId: null, ruleName: null, slots: [], unmatchedDishIds: dishes.map((d) => d.dishId), isComplete: true };
+  const consumed = new Set<string>();
+  const slots: SlotValidation[] = rule.slots.map((slot) => {
+    const matched: string[] = [];
+    for (const d of dishes) {
+      if (consumed.has(d.dishId)) continue;
+      if (dishMatchesSlot(d, slot)) { matched.push(d.dishId); consumed.add(d.dishId); }
+    }
+    const count = matched.length;
+    const status: SlotValidation["status"] =
+      count === 0 && slot.minCount > 0 ? "MISSING"
+      : count < slot.minCount ? "UNDER"
+      : slot.maxCount != null && count > slot.maxCount ? "OVER"
+      : "OK";
+    return { slotId: slot.id, slotLabel: slot.slotLabel, component: slot.component, preparation: slot.preparation, minCount: slot.minCount, maxCount: slot.maxCount, count, matchedDishIds: matched, status };
+  });
+  const unmatchedDishIds = dishes.filter((d) => !consumed.has(d.dishId)).map((d) => d.dishId);
+  const isComplete = slots.every((s) => s.status === "OK");
+  return { ruleId: rule.id, ruleName: rule.name, slots, unmatchedDishIds, isComplete };
+}
+
+/** Loads chosen dishes' component + preparations for validation. */
+export async function loadDishesForValidation(dishIds: string[]): Promise<{ dishId: string; component: string; preparations: string[] }[]> {
+  if (!dishIds.length) return [];
+  const rows = await db.select({ id: dishesTable.id, component: dishesTable.component, preparations: dishesTable.preparations })
+    .from(dishesTable).where(inArray(dishesTable.id, dishIds));
+  return rows.map((r) => ({ dishId: r.id, component: r.component, preparations: r.preparations ?? [] }));
+}
+
+/** Candidate dishes to fill a slot (brand-tagged, matching component/prep), newest first. */
+export async function suggestDishesForSlot(
+  brand: string, slot: CompositionSlot, excludeDishIds: string[], limit = 10,
+): Promise<{ id: string; name: string; component: string }[]> {
+  const conds = [
+    eq(dishesTable.isActive, true),
+    sql`${dishesTable.brands} @> ARRAY[${brand}]::text[]`,
+  ] as any[];
+  if (slot.component) conds.push(eq(dishesTable.component, slot.component as any));
+  if (slot.preparation) conds.push(sql`${dishesTable.preparations} @> ARRAY[${slot.preparation}]::text[]`);
+  if (excludeDishIds.length) conds.push(sql`${dishesTable.id} <> ALL(ARRAY[${sql.join(excludeDishIds.map((d) => sql`${d}`), sql`, `)}]::text[])`);
+  const rows = await db.select({ id: dishesTable.id, name: dishesTable.name, component: dishesTable.component })
+    .from(dishesTable).where(and(...conds)).orderBy(desc(dishesTable.createdAt)).limit(limit);
+  return rows;
+}
+
+/** Auto-fills a menu slot to satisfy the rule: picks minCount newest dishes per composition slot. */
+export async function autoFillMenu(
+  brand: string, mealType: string, kitchenId: string | null,
+): Promise<{ dishId: string; slotLabel: string | null; sortOrder: number }[]> {
+  const rule = await resolveCompositionRule(brand, mealType, kitchenId);
+  if (!rule) return [];
+  const chosen: { dishId: string; slotLabel: string | null; sortOrder: number }[] = [];
+  const used = new Set<string>();
+  for (const slot of rule.slots) {
+    const need = Math.max(1, slot.minCount);
+    const candidates = await suggestDishesForSlot(brand, slot, [...used], need);
+    for (const c of candidates.slice(0, need)) {
+      if (used.has(c.id)) continue;
+      used.add(c.id);
+      chosen.push({ dishId: c.id, slotLabel: slot.slotLabel, sortOrder: slot.sortOrder });
+    }
+  }
+  return chosen;
+}
+
+export interface SharedIngredient { rawMaterialId: string; name: string; dishIds: string[] }
+/** Raw materials used by 2+ of the given dishes (drives the menu shared-ingredient warning). */
+export async function detectSharedIngredients(dishIds: string[]): Promise<SharedIngredient[]> {
+  if (dishIds.length < 2) return [];
+  const rows = await db.select({
+    rawMaterialId: dishIngredientsTable.rawMaterialId, name: rawMaterialsTable.name, dishId: dishIngredientsTable.dishId,
+  }).from(dishIngredientsTable)
+    .leftJoin(rawMaterialsTable, eq(dishIngredientsTable.rawMaterialId, rawMaterialsTable.id))
+    .where(inArray(dishIngredientsTable.dishId, dishIds));
+  const byRm = new Map<string, { name: string; dishIds: Set<string> }>();
+  for (const r of rows) {
+    const e = byRm.get(r.rawMaterialId) ?? { name: r.name ?? r.rawMaterialId, dishIds: new Set<string>() };
+    e.dishIds.add(r.dishId);
+    byRm.set(r.rawMaterialId, e);
+  }
+  return [...byRm.entries()]
+    .filter(([, v]) => v.dishIds.size >= 2)
+    .map(([rawMaterialId, v]) => ({ rawMaterialId, name: v.name, dishIds: [...v.dishIds] }));
 }
 
 /** Generates the next human Order ID for the current year, e.g. ORD-2026-000123. */
@@ -300,28 +499,23 @@ export function convertForDisplay(qty: number, unit: string): { qty: number; uni
   return { qty, unit };
 }
 
-/** Resolves the full hierarchy label for a property (for display/grouping). */
+/** Resolves the kitchen + city label for a property (for display/grouping). */
 export async function getPropertyHierarchy(propertyIds: string[]) {
-  if (propertyIds.length === 0) return new Map<string, { cluster?: string; city?: string; zone?: string }>();
+  type Info = { kitchen?: string; city?: string };
+  if (propertyIds.length === 0) return new Map<string, Info>();
   const rows = await db
     .select({
       propertyId: propertiesTable.id,
-      cluster: clustersTable.name,
+      kitchen: kitchensTable.name,
       city: citiesTable.name,
-      zone: zonesTable.name,
     })
     .from(propertiesTable)
-    .leftJoin(clustersTable, eq(propertiesTable.clusterId, clustersTable.id))
-    .leftJoin(citiesTable, eq(clustersTable.cityId, citiesTable.id))
-    .leftJoin(zonesTable, eq(citiesTable.zoneId, zonesTable.id))
+    .leftJoin(kitchensTable, eq(propertiesTable.kitchenId, kitchensTable.id))
+    .leftJoin(citiesTable, eq(kitchensTable.cityId, citiesTable.id))
     .where(inArray(propertiesTable.id, propertyIds));
-  const map = new Map<string, { cluster?: string; city?: string; zone?: string }>();
+  const map = new Map<string, Info>();
   for (const r of rows) {
-    map.set(r.propertyId, {
-      cluster: r.cluster ?? undefined,
-      city: r.city ?? undefined,
-      zone: r.zone ?? undefined,
-    });
+    map.set(r.propertyId, { kitchen: r.kitchen ?? undefined, city: r.city ?? undefined });
   }
   return map;
 }

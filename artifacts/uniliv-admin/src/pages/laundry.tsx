@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Plus, Droplets, CheckCircle, PackageCheck, AlertTriangle } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
+import { DatePicker } from "@/components/ui/date-picker";
 import { FormModal } from "@/components/ui/form-modal";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -224,7 +225,7 @@ function LogInwardModal({ open, onOpenChange }: { open: boolean, onOpenChange: (
         <div className="grid grid-cols-2 gap-4">
           <div>
             <Label>Drop Date *</Label>
-            <Input type="date" value={form.dropDate} onChange={e => setForm({...form, dropDate: e.target.value})} />
+            <DatePicker value={form.dropDate} onChange={v => setForm({...form, dropDate: v})} />
           </div>
           <div>
             <Label>Commit TAT (Days) *</Label>

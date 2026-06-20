@@ -9,7 +9,7 @@ import {
   useCreateJobRequisition,
 } from "@workspace/api-client-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useForm } from "react-hook-form";
+import { useForm, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import jsPDF from "jspdf";
@@ -20,6 +20,7 @@ import { StatusBadge } from "@/components/status-badge";
 import { FormModal } from "@/components/ui/form-modal";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { DateTimePicker, ControlledDatePicker } from "@/components/ui/date-picker";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
@@ -641,7 +642,9 @@ function CandidateSlideOver({ candidateId, onClose }: { candidateId: string | nu
         <div className="space-y-4">
           <div>
             <Label>Scheduled At *</Label>
-            <Input type="datetime-local" {...iForm.register("scheduledAt")} />
+            <Controller control={iForm.control} name="scheduledAt" render={({ field }) => (
+              <DateTimePicker value={field.value ?? ""} onChange={field.onChange} />
+            )} />
             {iForm.formState.errors.scheduledAt && <p className="text-xs text-destructive mt-1">{iForm.formState.errors.scheduledAt.message}</p>}
           </div>
           <div>
@@ -670,7 +673,7 @@ function CandidateSlideOver({ candidateId, onClose }: { candidateId: string | nu
           </div>
           <div>
             <Label>Joining Date *</Label>
-            <Input type="date" {...oForm.register("joiningDate")} />
+            <ControlledDatePicker control={oForm.control} name="joiningDate" />
             {oForm.formState.errors.joiningDate && <p className="text-xs text-destructive mt-1">{oForm.formState.errors.joiningDate.message}</p>}
           </div>
         </div>

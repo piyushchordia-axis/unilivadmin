@@ -16,9 +16,17 @@ import {
   foodOrderItemsTable,
   foodOrderEventsTable,
   dishesTable,
+  rawMaterialsTable,
+  dishIngredientsTable,
+  menuCompositionRuleTable,
+  menuCompositionSlotTable,
+  PREPARATIONS,
   foodMenuRotationTable,
   perResidentRuleTable,
   deliveryPartnersTable,
+  agenciesTable,
+  agencyLocationsTable,
+  agencyVehiclesTable,
   zonesTable,
   citiesTable,
   clustersTable,
@@ -27,6 +35,7 @@ import {
   usersTable,
   kitchensTable,
   foodDispatchesTable,
+  foodBrandsTable,
 } from "@workspace/db";
 import { and, eq, or, ilike, sql, desc, asc, gte, lte, inArray, isNull } from "drizzle-orm";
 import type { AnyColumn } from "drizzle-orm";
@@ -42,8 +51,15 @@ import {
   nextOrderNumber,
   convertForDisplay,
   resolveExpectedDeliveryAt,
+  getPropertyFoodConfig,
+  resolveCompositionRule,
+  validateMenuAgainstRule,
+  loadDishesForValidation,
+  autoFillMenu,
+  detectSharedIngredients,
 } from "../lib/food-service.js";
 import { notifyOrderEvent } from "../lib/notification-service.js";
+import { toXls } from "../lib/export-service.js";
 
 export const foodRouter: Router = Router();
 
@@ -54,7 +70,7 @@ async function propertyName(propertyId: string): Promise<string | null> {
 }
 
 const BRANDS = ["UNILIV", "HUDDLE"] as const;
-const MEAL_TYPES = ["BREAKFAST", "LUNCH", "SNACKS", "DINNER", "NIGHT_MILK"] as const;
+const MEAL_TYPES = ["BREAKFAST", "LUNCH", "SNACKS", "DINNER"] as const;
 const FOOD_USER_ROLES = [
   "UNIT_LEAD", "CLUSTER_MANAGER", "CITY_HEAD", "ZONAL_HEAD", "OPS_EXCELLENCE",
   "SENIOR_VICE_PRESIDENT", "FNB_SUPERVISOR", "FNB_MANAGER", "FNB_ZONAL_HEAD",
@@ -245,11 +261,12 @@ foodRouter.get("/orders", authenticate, authorize("FOOD_ALL_ORDERS", "view"), as
 foodRouter.post("/orders", authenticate, authorize("FOOD_PLACE_ORDER", "create"), async (req, res) => {
   try {
     const b = req.body || {};
-    const { propertyId, brand, mealType, serviceDate, quantity, residentsCount, notes } = b;
-    if (!propertyId || !brand || !mealType || !serviceDate || quantity == null) {
-      res.status(400).json({ success: false, error: "propertyId, brand, mealType, serviceDate, quantity required" });
+    const { propertyId, mealType, serviceDate, quantity, residentsCount, notes } = b;
+    if (!propertyId || !mealType || !serviceDate || quantity == null) {
+      res.status(400).json({ success: false, error: "propertyId, mealType, serviceDate, quantity required" });
       return;
     }
+    if (!(MEAL_TYPES as readonly string[]).includes(mealType)) { res.status(400).json({ success: false, error: `Invalid mealType: ${mealType}` }); return; }
     const qty = Number(quantity);
     if (!Number.isFinite(qty) || qty <= 0) { res.status(400).json({ success: false, error: "quantity must be a positive number" }); return; }
     const sd = new Date(serviceDate);
@@ -258,8 +275,12 @@ foodRouter.post("/orders", authenticate, authorize("FOOD_PLACE_ORDER", "create")
     const ids = await resolveAccessiblePropertyIds(req.user!);
     if (!isAccessible(propertyId, ids)) { res.status(403).json({ success: false, error: "Property not accessible" }); return; }
 
+    // Brand + kitchen are inherited from the property.
+    const { brand, kitchenId } = await getPropertyFoodConfig(propertyId);
+    if (!brand || !kitchenId) { res.status(422).json({ success: false, error: "This property is not configured for ordering (missing brand or kitchen)." }); return; }
+
     const residents = residentsCount != null ? Number(residentsCount) : qty;
-    const computed = await computeOrderItems(brand, mealType, sd, qty, propertyId);
+    const computed = await computeOrderItems(kitchenId, brand, mealType, sd, qty);
     const expDelivery = await resolveExpectedDeliveryAt(brand, mealType, sd, propertyId);
 
     // Insert order with order-number retry on unique violation.
@@ -273,6 +294,7 @@ foodRouter.post("/orders", authenticate, authorize("FOOD_PLACE_ORDER", "create")
           orderNumber,
           propertyId,
           brand,
+          kitchenId,
           mealType,
           unitLeadId: req.user!.id,
           residentsCount: residents,
@@ -299,6 +321,7 @@ foodRouter.post("/orders", authenticate, authorize("FOOD_PLACE_ORDER", "create")
         orderId: order!.id,
         dishId: it.dishId,
         unit: it.unit as never,
+        personsCount: residents,
         orderedQty: String(it.orderedQty),
         updatedAt: new Date(),
       }))).returning();
@@ -371,13 +394,13 @@ foodRouter.get("/orders/:id", authenticate, authorize("FOOD_ALL_ORDERS", "view")
       o: foodOrdersTable,
       propertyName: propertiesTable.name,
       unitLeadName: usersTable.name,
-      deliveryPartnerName: deliveryPartnersTable.name,
+      deliveryPartnerName: agenciesTable.name,
       kitchen: kitchensTable,
       dispatch: foodDispatchesTable,
     }).from(foodOrdersTable)
       .leftJoin(propertiesTable, eq(foodOrdersTable.propertyId, propertiesTable.id))
       .leftJoin(usersTable, eq(foodOrdersTable.unitLeadId, usersTable.id))
-      .leftJoin(deliveryPartnersTable, eq(foodOrdersTable.deliveryPartnerId, deliveryPartnersTable.id))
+      .leftJoin(agenciesTable, eq(foodOrdersTable.deliveryPartnerId, agenciesTable.id))
       .leftJoin(kitchensTable, eq(foodOrdersTable.kitchenId, kitchensTable.id))
       .leftJoin(foodDispatchesTable, eq(foodOrdersTable.dispatchId, foodDispatchesTable.id))
       .where(eq(foodOrdersTable.id, id));
@@ -464,7 +487,7 @@ foodRouter.put("/orders/:id", authenticate, authorize("FOOD_PLACE_ORDER", "edit"
     const [updated] = await db.update(foodOrdersTable).set(update as Partial<typeof foodOrdersTable.$inferInsert>).where(eq(foodOrdersTable.id, id)).returning();
 
     if (recompute) {
-      const computed = await computeOrderItems(brand, mealType, serviceDate, quantity, order.propertyId);
+      const computed = await computeOrderItems(order.kitchenId, brand, mealType, serviceDate, quantity);
       await db.delete(foodOrderItemsTable).where(eq(foodOrderItemsTable.orderId, id));
       if (computed.length) {
         await db.insert(foodOrderItemsTable).values(computed.map((it) => ({
@@ -577,7 +600,7 @@ foodRouter.post("/orders/:id/dispatch", authenticate, authorize("FOOD_DISPATCH",
     {
       const dispItems = await db.select({ name: dishesTable.name, qty: foodOrderItemsTable.preparedQty, ordered: foodOrderItemsTable.orderedQty, unit: foodOrderItemsTable.unit })
         .from(foodOrderItemsTable).leftJoin(dishesTable, eq(foodOrderItemsTable.dishId, dishesTable.id)).where(eq(foodOrderItemsTable.orderId, id));
-      const [dp] = await db.select({ name: deliveryPartnersTable.name }).from(deliveryPartnersTable).where(eq(deliveryPartnersTable.id, b.deliveryPartnerId));
+      const [dp] = await db.select({ name: agenciesTable.name }).from(agenciesTable).where(eq(agenciesTable.id, b.deliveryPartnerId));
       await notifyOrderEvent("DISPATCHED", {
         unitLeadId: order.unitLeadId, orderId: order.id, orderNumber: order.orderNumber,
         propertyName: await propertyName(order.propertyId), mealType: order.mealType, brand: order.brand,
@@ -863,13 +886,23 @@ foodRouter.get("/reports/export", authenticate, authorize("FOOD_REPORTS", "view"
 
 foodRouter.get("/lookups", authenticate, async (req, res) => {
   try {
-    const properties = await db.select({ id: propertiesTable.id, name: propertiesTable.name, clusterId: propertiesTable.clusterId })
-      .from(propertiesTable).orderBy(propertiesTable.name);
-    const partners = await db.select({ id: deliveryPartnersTable.id, name: deliveryPartnersTable.name })
-      .from(deliveryPartnersTable).where(eq(deliveryPartnersTable.isActive, true)).orderBy(deliveryPartnersTable.name);
+    const properties = await db.select({
+      id: propertiesTable.id, name: propertiesTable.name,
+      brand: propertiesTable.brand, kitchenId: propertiesTable.kitchenId, clusterId: propertiesTable.clusterId,
+    }).from(propertiesTable).orderBy(propertiesTable.name);
+    // Agencies (with their active vehicles) for the dispatch dropdowns.
+    const agencyRows = await db.select({ id: agenciesTable.id, name: agenciesTable.name })
+      .from(agenciesTable).where(eq(agenciesTable.isActive, true)).orderBy(agenciesTable.name);
+    const vehicleRows = await db.select({ id: agencyVehiclesTable.id, agencyId: agencyVehiclesTable.agencyId, vehicleNumber: agencyVehiclesTable.vehicleNumber, vehicleType: agencyVehiclesTable.vehicleType, locationId: agencyVehiclesTable.locationId })
+      .from(agencyVehiclesTable).where(eq(agencyVehiclesTable.isActive, true));
+    const vByA = new Map<string, any[]>(); for (const v of vehicleRows) { const a = vByA.get(v.agencyId) ?? []; a.push(v); vByA.set(v.agencyId, a); }
+    const agencies = agencyRows.map((a) => ({ ...a, vehicles: vByA.get(a.id) ?? [] }));
+    const brands = await db.select({ code: foodBrandsTable.code, name: foodBrandsTable.name })
+      .from(foodBrandsTable).where(eq(foodBrandsTable.isActive, true)).orderBy(foodBrandsTable.name);
     res.json({
       success: true,
-      data: { properties, deliveryPartners: partners, brands: BRANDS, mealTypes: MEAL_TYPES },
+      // deliveryPartners kept as an alias of agencies {id,name} for back-compat.
+      data: { properties, agencies, deliveryPartners: agencyRows, brands, mealTypes: MEAL_TYPES },
     });
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
@@ -883,15 +916,44 @@ foodRouter.get("/dishes", authenticate, async (req, res) => {
     const component = req.query["component"] as string | undefined;
     const search = req.query["search"] as string | undefined;
     const active = req.query["active"] as string | undefined;
+    const brand = req.query["brand"] as string | undefined;
     const conds = [] as ReturnType<typeof eq>[];
     if (component) conds.push(eq(dishesTable.component, component as never));
     if (search) conds.push(ilike(dishesTable.name, `%${search}%`));
     if (active !== undefined) conds.push(eq(dishesTable.isActive, active === "true"));
+    if (brand) conds.push(sql`${dishesTable.brands} @> ARRAY[${brand}]::text[]`);
     const where = conds.length ? and(...conds) : undefined;
-    const rows = await db.select().from(dishesTable).where(where).orderBy(dishesTable.name);
+    const sort = req.query["sort"] as string | undefined;
+    const orderCol = sort === "newest" ? desc(dishesTable.createdAt) : asc(dishesTable.name);
+    const rows = await db.select().from(dishesTable).where(where).orderBy(orderCol);
     res.json({ success: true, data: rows });
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
+
+const sanitizePreparations = (v: unknown): string[] =>
+  Array.isArray(v) ? v.filter((p): p is string => typeof p === "string" && (PREPARATIONS as readonly string[]).includes(p)) : [];
+
+/** Replace a dish's ingredient rows from a [{rawMaterialId, quantity?, unit?}] list. */
+async function replaceDishIngredients(dishId: string, ingredients: unknown): Promise<void> {
+  await db.delete(dishIngredientsTable).where(eq(dishIngredientsTable.dishId, dishId));
+  const valid = (Array.isArray(ingredients) ? ingredients : []).filter((it) => it && it.rawMaterialId);
+  if (!valid.length) return;
+  await db.insert(dishIngredientsTable).values(valid.map((it) => ({
+    id: newId(), dishId, rawMaterialId: it.rawMaterialId,
+    quantity: it.quantity != null && it.quantity !== "" ? String(it.quantity) : null,
+    unit: it.unit != null && it.unit !== "" ? it.unit : null, updatedAt: new Date(),
+  })));
+}
+
+/** Loads a dish's ingredients joined to raw-material names. */
+async function loadDishIngredients(dishId: string) {
+  return db.select({
+    id: dishIngredientsTable.id, rawMaterialId: dishIngredientsTable.rawMaterialId,
+    rawMaterialName: rawMaterialsTable.name, quantity: dishIngredientsTable.quantity, unit: dishIngredientsTable.unit,
+  }).from(dishIngredientsTable)
+    .leftJoin(rawMaterialsTable, eq(dishIngredientsTable.rawMaterialId, rawMaterialsTable.id))
+    .where(eq(dishIngredientsTable.dishId, dishId));
+}
 
 foodRouter.post("/dishes", authenticate, authorize("FOOD_SETTINGS", "create"), async (req, res) => {
   try {
@@ -902,11 +964,13 @@ foodRouter.post("/dishes", authenticate, authorize("FOOD_SETTINGS", "create"), a
       name: b.name,
       component: b.component,
       unit: b.unit,
-      isVeg: b.isVeg !== false,
+      brands: Array.isArray(b.brands) ? b.brands : [],
+      preparations: sanitizePreparations(b.preparations),
       photoUrl: b.photoUrl ?? null,
       isActive: b.isActive !== false,
       updatedAt: new Date(),
     }).returning();
+    if (b.ingredients !== undefined) await replaceDishIngredients(row.id, b.ingredients);
     res.status(201).json({ success: true, data: row });
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
@@ -915,7 +979,8 @@ foodRouter.get("/dishes/:id", authenticate, async (req, res) => {
   try {
     const [row] = await db.select().from(dishesTable).where(eq(dishesTable.id, req.params["id"]!));
     if (!row) { res.status(404).json({ success: false, error: "Not found" }); return; }
-    res.json({ success: true, data: row });
+    const ingredients = await loadDishIngredients(row.id);
+    res.json({ success: true, data: { ...row, ingredients } });
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
@@ -923,9 +988,11 @@ foodRouter.put("/dishes/:id", authenticate, authorize("FOOD_SETTINGS", "edit"), 
   try {
     const b = req.body || {};
     const u: Record<string, unknown> = { updatedAt: new Date() };
-    for (const k of ["name", "component", "unit", "isVeg", "photoUrl", "isActive"]) if (b[k] !== undefined) u[k] = b[k];
+    for (const k of ["name", "component", "unit", "brands", "photoUrl", "isActive"]) if (b[k] !== undefined) u[k] = b[k];
+    if (b.preparations !== undefined) u["preparations"] = sanitizePreparations(b.preparations);
     const [row] = await db.update(dishesTable).set(u as Partial<typeof dishesTable.$inferInsert>).where(eq(dishesTable.id, req.params["id"]!)).returning();
     if (!row) { res.status(404).json({ success: false, error: "Not found" }); return; }
+    if (b.ingredients !== undefined) await replaceDishIngredients(row.id, b.ingredients);
     res.json({ success: true, data: row });
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
@@ -939,16 +1006,69 @@ foodRouter.delete("/dishes/:id", authenticate, authorize("FOOD_SETTINGS", "delet
 });
 
 /* ────────────────────────────────────────────────────────────────────────────
+ * Master data — Raw materials (ingredients)
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+foodRouter.get("/raw-materials", authenticate, async (req, res) => {
+  try {
+    const search = req.query["search"] as string | undefined;
+    const active = req.query["active"] as string | undefined;
+    const conds = [] as ReturnType<typeof eq>[];
+    if (search) conds.push(ilike(rawMaterialsTable.name, `%${search}%`));
+    if (active !== undefined) conds.push(eq(rawMaterialsTable.isActive, active === "true"));
+    const rows = await db.select().from(rawMaterialsTable).where(conds.length ? and(...conds) : undefined).orderBy(rawMaterialsTable.name);
+    res.json({ success: true, data: rows });
+  } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
+});
+
+foodRouter.post("/raw-materials", authenticate, authorize("FOOD_SETTINGS", "create"), async (req, res) => {
+  try {
+    const b = req.body || {};
+    if (!b.name || !b.unit) { res.status(400).json({ success: false, error: "name and unit required" }); return; }
+    const [row] = await db.insert(rawMaterialsTable).values({
+      id: newId(), name: b.name, unit: b.unit, isActive: b.isActive !== false, updatedAt: new Date(),
+    }).returning();
+    res.status(201).json({ success: true, data: row });
+  } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
+});
+
+foodRouter.put("/raw-materials/:id", authenticate, authorize("FOOD_SETTINGS", "edit"), async (req, res) => {
+  try {
+    const b = req.body || {};
+    const u: Record<string, unknown> = { updatedAt: new Date() };
+    for (const k of ["name", "unit", "isActive"]) if (b[k] !== undefined) u[k] = b[k];
+    const [row] = await db.update(rawMaterialsTable).set(u as never).where(eq(rawMaterialsTable.id, req.params["id"]!)).returning();
+    if (!row) { res.status(404).json({ success: false, error: "Not found" }); return; }
+    res.json({ success: true, data: row });
+  } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
+});
+
+foodRouter.delete("/raw-materials/:id", authenticate, authorize("FOOD_SETTINGS", "delete"), async (req, res) => {
+  try {
+    const [row] = await db.update(rawMaterialsTable).set({ isActive: false, updatedAt: new Date() }).where(eq(rawMaterialsTable.id, req.params["id"]!)).returning();
+    if (!row) { res.status(404).json({ success: false, error: "Not found" }); return; }
+    res.json({ success: true, data: row });
+  } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
+});
+
+/* ────────────────────────────────────────────────────────────────────────────
  * Master data — Menu rotation
  * ──────────────────────────────────────────────────────────────────────────── */
 
 foodRouter.get("/menu-rotation/resolve", authenticate, async (req, res) => {
   try {
-    const brand = req.query["brand"] as string | undefined;
+    const propertyId = req.query["propertyId"] as string | undefined;
+    let brand = req.query["brand"] as string | undefined;
+    let kitchenId = req.query["kitchenId"] as string | undefined;
+    if (propertyId) {
+      const cfg = await getPropertyFoodConfig(propertyId);
+      brand = brand || cfg.brand || undefined;
+      kitchenId = kitchenId || cfg.kitchenId || undefined;
+    }
     const mealType = req.query["mealType"] as string | undefined;
     const date = parseDate(req.query["date"]);
     if (!brand || !mealType || !date) { res.status(400).json({ success: false, error: "brand, mealType, date required" }); return; }
-    const dishes = await resolveMenu(brand, mealType, date);
+    const dishes = await resolveMenu(kitchenId ?? null, brand, mealType, date);
     res.json({ success: true, data: dishes });
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
@@ -956,11 +1076,13 @@ foodRouter.get("/menu-rotation/resolve", authenticate, async (req, res) => {
 foodRouter.get("/menu-rotation", authenticate, async (req, res) => {
   try {
     const brand = req.query["brand"] as string | undefined;
+    const kitchenId = req.query["kitchenId"] as string | undefined;
     const rotationWeek = req.query["rotationWeek"] as string | undefined;
     const dayOfWeek = req.query["dayOfWeek"] as string | undefined;
     const mealType = req.query["mealType"] as string | undefined;
     const conds = [] as ReturnType<typeof eq>[];
     if (brand) conds.push(eq(foodMenuRotationTable.brand, brand as never));
+    if (kitchenId) conds.push(eq(foodMenuRotationTable.kitchenId, kitchenId));
     if (rotationWeek) conds.push(eq(foodMenuRotationTable.rotationWeek, Number(rotationWeek)));
     if (dayOfWeek) conds.push(eq(foodMenuRotationTable.dayOfWeek, Number(dayOfWeek)));
     if (mealType) conds.push(eq(foodMenuRotationTable.mealType, mealType as never));
@@ -970,22 +1092,62 @@ foodRouter.get("/menu-rotation", authenticate, async (req, res) => {
       dishName: dishesTable.name,
       component: dishesTable.component,
       dishUnit: dishesTable.unit,
+      kitchenName: kitchensTable.name,
     }).from(foodMenuRotationTable)
       .leftJoin(dishesTable, eq(foodMenuRotationTable.dishId, dishesTable.id))
+      .leftJoin(kitchensTable, eq(foodMenuRotationTable.kitchenId, kitchensTable.id))
       .where(where)
       .orderBy(foodMenuRotationTable.rotationWeek, foodMenuRotationTable.dayOfWeek, foodMenuRotationTable.sortOrder);
-    res.json({ success: true, data: rows.map((r) => ({ ...r.r, dishName: r.dishName, component: r.component, dishUnit: r.dishUnit })) });
+    res.json({ success: true, data: rows.map((r) => ({ ...r.r, dishName: r.dishName, component: r.component, dishUnit: r.dishUnit, kitchenName: r.kitchenName })) });
+  } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
+});
+
+// Export the current menu rotation (honours the same filters as the list) as .xls.
+foodRouter.get("/menu-rotation/export.xlsx", authenticate, authorize("FOOD_SETTINGS", "view"), async (req, res) => {
+  try {
+    const brand = req.query["brand"] as string | undefined;
+    const kitchenId = req.query["kitchenId"] as string | undefined;
+    const rotationWeek = req.query["rotationWeek"] as string | undefined;
+    const dayOfWeek = req.query["dayOfWeek"] as string | undefined;
+    const mealType = req.query["mealType"] as string | undefined;
+    const conds = [] as ReturnType<typeof eq>[];
+    if (brand) conds.push(eq(foodMenuRotationTable.brand, brand as never));
+    if (kitchenId) conds.push(eq(foodMenuRotationTable.kitchenId, kitchenId));
+    if (rotationWeek) conds.push(eq(foodMenuRotationTable.rotationWeek, Number(rotationWeek)));
+    if (dayOfWeek) conds.push(eq(foodMenuRotationTable.dayOfWeek, Number(dayOfWeek)));
+    if (mealType) conds.push(eq(foodMenuRotationTable.mealType, mealType as never));
+    const where = conds.length ? and(...conds) : undefined;
+    const rows = await db.select({
+      kitchenName: kitchensTable.name, brand: foodMenuRotationTable.brand,
+      rotationWeek: foodMenuRotationTable.rotationWeek, dayOfWeek: foodMenuRotationTable.dayOfWeek,
+      mealType: foodMenuRotationTable.mealType, dishName: dishesTable.name,
+      slotLabel: foodMenuRotationTable.slotLabel, sortOrder: foodMenuRotationTable.sortOrder,
+    }).from(foodMenuRotationTable)
+      .leftJoin(dishesTable, eq(foodMenuRotationTable.dishId, dishesTable.id))
+      .leftJoin(kitchensTable, eq(foodMenuRotationTable.kitchenId, kitchensTable.id))
+      .where(where)
+      .orderBy(kitchensTable.name, foodMenuRotationTable.brand, foodMenuRotationTable.rotationWeek, foodMenuRotationTable.dayOfWeek, foodMenuRotationTable.sortOrder);
+    const DAYS = ["", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+    const xls = toXls({
+      title: "Menu Rotation",
+      headers: ["Kitchen", "Brand", "Week", "Day", "Meal", "Dish", "Slot", "Order"],
+      rows: rows.map((r) => [r.kitchenName ?? "—", r.brand, `W${r.rotationWeek}`, DAYS[r.dayOfWeek] ?? r.dayOfWeek, r.mealType, r.dishName ?? "—", r.slotLabel ?? "", r.sortOrder]),
+    });
+    res.setHeader("Content-Type", "application/vnd.ms-excel");
+    res.setHeader("Content-Disposition", "attachment; filename=menu-rotation.xls");
+    res.send(xls);
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
 foodRouter.post("/menu-rotation", authenticate, authorize("FOOD_SETTINGS", "create"), async (req, res) => {
   try {
     const b = req.body || {};
-    if (!b.brand || !b.mealType || !b.dishId || b.dayOfWeek == null) {
-      res.status(400).json({ success: false, error: "brand, mealType, dishId, dayOfWeek required" }); return;
+    if (!b.kitchenId || !b.brand || !b.mealType || !b.dishId || b.dayOfWeek == null) {
+      res.status(400).json({ success: false, error: "kitchenId, brand, mealType, dishId, dayOfWeek required" }); return;
     }
     const [row] = await db.insert(foodMenuRotationTable).values({
       id: newId(),
+      kitchenId: b.kitchenId,
       brand: b.brand,
       rotationWeek: b.rotationWeek != null ? Number(b.rotationWeek) : 1,
       dayOfWeek: Number(b.dayOfWeek),
@@ -1002,11 +1164,106 @@ foodRouter.post("/menu-rotation", authenticate, authorize("FOOD_SETTINGS", "crea
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
+/** Bulk-add menu items for one kitchen+brand+week+day+meal (multi-dish builder). */
+foodRouter.post("/menu-rotation/bulk", authenticate, authorize("FOOD_SETTINGS", "create"), async (req, res) => {
+  try {
+    const b = req.body || {};
+    const items: Array<{ dishId: string; slotLabel?: string; sortOrder?: number }> = Array.isArray(b.items) ? b.items : [];
+    if (!b.kitchenId || !b.brand || !b.mealType || b.dayOfWeek == null || !items.length) {
+      res.status(400).json({ success: false, error: "kitchenId, brand, mealType, dayOfWeek and at least one item required" }); return;
+    }
+    const now = new Date();
+    const values = items
+      .filter((it) => it.dishId)
+      .map((it, i) => ({
+        id: newId(),
+        kitchenId: b.kitchenId,
+        brand: b.brand,
+        rotationWeek: b.rotationWeek != null ? Number(b.rotationWeek) : 1,
+        dayOfWeek: Number(b.dayOfWeek),
+        mealType: b.mealType,
+        dishId: it.dishId,
+        slotLabel: it.slotLabel ?? null,
+        sortOrder: it.sortOrder != null ? Number(it.sortOrder) : i,
+        isActive: true,
+        updatedAt: now,
+      }));
+    if (!values.length) { res.status(400).json({ success: false, error: "No valid items" }); return; }
+    const rows = await db.insert(foodMenuRotationTable).values(values).returning();
+    res.status(201).json({ success: true, data: rows });
+  } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
+});
+
+// Replace ALL dishes of one menu slot (kitchen+brand+week+day+meal) — the EDIT path.
+foodRouter.put("/menu-rotation/slot", authenticate, authorize("FOOD_SETTINGS", "edit"), async (req, res) => {
+  try {
+    const b = req.body || {};
+    const { kitchenId, brand, rotationWeek, dayOfWeek, mealType } = b;
+    const items: Array<{ dishId: string; slotLabel?: string | null; sortOrder?: number }> = Array.isArray(b.items) ? b.items : [];
+    if (!kitchenId || !brand || !mealType || rotationWeek == null || dayOfWeek == null) {
+      res.status(400).json({ success: false, error: "kitchenId, brand, rotationWeek, dayOfWeek, mealType required" }); return;
+    }
+    const slotWhere = and(
+      eq(foodMenuRotationTable.kitchenId, kitchenId),
+      eq(foodMenuRotationTable.brand, brand as never),
+      eq(foodMenuRotationTable.rotationWeek, Number(rotationWeek)),
+      eq(foodMenuRotationTable.dayOfWeek, Number(dayOfWeek)),
+      eq(foodMenuRotationTable.mealType, mealType as never),
+    );
+    const now = new Date();
+    const rows = await db.transaction(async (tx) => {
+      // Preserve each existing dish's seasonal window across the replace.
+      const existing = await tx.select({ dishId: foodMenuRotationTable.dishId, effectiveFrom: foodMenuRotationTable.effectiveFrom, effectiveTo: foodMenuRotationTable.effectiveTo })
+        .from(foodMenuRotationTable).where(slotWhere);
+      const effByDish = new Map(existing.map((e) => [e.dishId, { effectiveFrom: e.effectiveFrom, effectiveTo: e.effectiveTo }]));
+      await tx.delete(foodMenuRotationTable).where(slotWhere);
+      const valid = items.filter((it) => it.dishId);
+      if (!valid.length) return [];
+      return tx.insert(foodMenuRotationTable).values(valid.map((it, i) => ({
+        id: newId(), kitchenId, brand, rotationWeek: Number(rotationWeek), dayOfWeek: Number(dayOfWeek), mealType,
+        dishId: it.dishId, slotLabel: it.slotLabel ?? null, sortOrder: it.sortOrder != null ? Number(it.sortOrder) : i,
+        effectiveFrom: effByDish.get(it.dishId)?.effectiveFrom ?? null, effectiveTo: effByDish.get(it.dishId)?.effectiveTo ?? null,
+        isActive: true, updatedAt: now,
+      }))).returning();
+    });
+    res.json({ success: true, data: rows });
+  } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
+});
+
+// Validate the chosen dishes against the composition rule + flag shared ingredients.
+foodRouter.get("/menu-rotation/validate", authenticate, async (req, res) => {
+  try {
+    const brand = req.query["brand"] as string | undefined;
+    const mealType = req.query["mealType"] as string | undefined;
+    const kitchenId = (req.query["kitchenId"] as string) || null;
+    const raw = req.query["dishIds"] ?? req.query["dishId"];
+    const dishIds = (Array.isArray(raw) ? raw.map(String) : String(raw ?? "").split(",")).map((s) => s.trim()).filter(Boolean);
+    if (!brand || !mealType) { res.status(400).json({ success: false, error: "brand, mealType required" }); return; }
+    const rule = await resolveCompositionRule(brand, mealType, kitchenId);
+    const dishes = await loadDishesForValidation(dishIds);
+    const validation = validateMenuAgainstRule(rule, dishes);
+    const sharedIngredients = await detectSharedIngredients(dishIds);
+    res.json({ success: true, data: { ...validation, sharedIngredients } });
+  } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
+});
+
+// Suggested dishes to satisfy the composition rule for a (kitchen, brand, meal).
+foodRouter.get("/menu-rotation/auto-fill", authenticate, async (req, res) => {
+  try {
+    const brand = req.query["brand"] as string | undefined;
+    const mealType = req.query["mealType"] as string | undefined;
+    const kitchenId = (req.query["kitchenId"] as string) || null;
+    if (!brand || !mealType) { res.status(400).json({ success: false, error: "brand, mealType required" }); return; }
+    const items = await autoFillMenu(brand, mealType, kitchenId);
+    res.json({ success: true, data: items });
+  } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
+});
+
 foodRouter.put("/menu-rotation/:id", authenticate, authorize("FOOD_SETTINGS", "edit"), async (req, res) => {
   try {
     const b = req.body || {};
     const u: Record<string, unknown> = { updatedAt: new Date() };
-    for (const k of ["brand", "mealType", "dishId", "slotLabel", "isActive"]) if (b[k] !== undefined) u[k] = b[k];
+    for (const k of ["kitchenId", "brand", "mealType", "dishId", "slotLabel", "isActive"]) if (b[k] !== undefined) u[k] = b[k];
     if (b.rotationWeek !== undefined) u["rotationWeek"] = Number(b.rotationWeek);
     if (b.dayOfWeek !== undefined) u["dayOfWeek"] = Number(b.dayOfWeek);
     if (b.sortOrder !== undefined) u["sortOrder"] = Number(b.sortOrder);
@@ -1034,12 +1291,10 @@ foodRouter.get("/rules", authenticate, async (req, res) => {
     const brand = req.query["brand"] as string | undefined;
     const mealType = req.query["mealType"] as string | undefined;
     const dishId = req.query["dishId"] as string | undefined;
-    const propertyId = req.query["propertyId"] as string | undefined;
     const conds = [] as ReturnType<typeof eq>[];
     if (brand) conds.push(eq(perResidentRuleTable.brand, brand as never));
     if (mealType) conds.push(eq(perResidentRuleTable.mealType, mealType as never));
     if (dishId) conds.push(eq(perResidentRuleTable.dishId, dishId));
-    if (propertyId) conds.push(eq(perResidentRuleTable.propertyId, propertyId));
     const where = conds.length ? and(...conds) : undefined;
     const rows = await db.select({
       r: perResidentRuleTable,
@@ -1057,12 +1312,17 @@ foodRouter.post("/rules", authenticate, authorize("FOOD_SETTINGS", "create"), as
     if (!b.brand || !b.mealType || !b.dishId || b.qtyPerResident == null || !b.unit) {
       res.status(400).json({ success: false, error: "brand, mealType, dishId, qtyPerResident, unit required" }); return;
     }
+    // Rules are global per (brand, mealType, dishId) — reject duplicates.
+    const dup = await db.select({ id: perResidentRuleTable.id }).from(perResidentRuleTable).where(and(
+      eq(perResidentRuleTable.brand, b.brand as never), eq(perResidentRuleTable.mealType, b.mealType as never), eq(perResidentRuleTable.dishId, b.dishId),
+    ));
+    if (dup.length) { res.status(409).json({ success: false, error: "A rule already exists for this brand, meal and dish" }); return; }
     const [row] = await db.insert(perResidentRuleTable).values({
       id: newId(),
       brand: b.brand,
       mealType: b.mealType,
       dishId: b.dishId,
-      propertyId: b.propertyId ?? null,
+      propertyId: null,
       qtyPerResident: String(b.qtyPerResident),
       unit: b.unit,
       isActive: b.isActive !== false,
@@ -1076,7 +1336,7 @@ foodRouter.put("/rules/:id", authenticate, authorize("FOOD_SETTINGS", "edit"), a
   try {
     const b = req.body || {};
     const u: Record<string, unknown> = { updatedAt: new Date() };
-    for (const k of ["brand", "mealType", "dishId", "propertyId", "unit", "isActive"]) if (b[k] !== undefined) u[k] = b[k];
+    for (const k of ["brand", "mealType", "dishId", "unit", "isActive"]) if (b[k] !== undefined) u[k] = b[k];
     if (b.qtyPerResident !== undefined) u["qtyPerResident"] = String(b.qtyPerResident);
     const [row] = await db.update(perResidentRuleTable).set(u as Partial<typeof perResidentRuleTable.$inferInsert>).where(eq(perResidentRuleTable.id, req.params["id"]!)).returning();
     if (!row) { res.status(404).json({ success: false, error: "Not found" }); return; }
@@ -1087,6 +1347,87 @@ foodRouter.put("/rules/:id", authenticate, authorize("FOOD_SETTINGS", "edit"), a
 foodRouter.delete("/rules/:id", authenticate, authorize("FOOD_SETTINGS", "delete"), async (req, res) => {
   try {
     await db.delete(perResidentRuleTable).where(eq(perResidentRuleTable.id, req.params["id"]!));
+    res.json({ success: true });
+  } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
+});
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * Master data — Menu composition rules (the menu structure engine)
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+const slotValues = (ruleId: string, slots: any[]) =>
+  (Array.isArray(slots) ? slots : []).map((s, i) => ({
+    id: newId(), ruleId,
+    slotLabel: s.slotLabel ?? null,
+    component: s.component || null,
+    preparation: s.preparation || null,
+    minCount: s.minCount != null ? Number(s.minCount) : 1,
+    maxCount: s.maxCount != null && s.maxCount !== "" ? Number(s.maxCount) : null,
+    sortOrder: s.sortOrder != null ? Number(s.sortOrder) : i,
+    updatedAt: new Date(),
+  }));
+
+foodRouter.get("/composition-rules", authenticate, async (req, res) => {
+  try {
+    const brand = req.query["brand"] as string | undefined;
+    const mealType = req.query["mealType"] as string | undefined;
+    const kitchenId = req.query["kitchenId"] as string | undefined;
+    const conds = [] as ReturnType<typeof eq>[];
+    if (brand) conds.push(eq(menuCompositionRuleTable.brand, brand as never));
+    if (mealType) conds.push(eq(menuCompositionRuleTable.mealType, mealType as never));
+    if (kitchenId) conds.push(eq(menuCompositionRuleTable.kitchenId, kitchenId));
+    const rules = await db.select().from(menuCompositionRuleTable).where(conds.length ? and(...conds) : undefined)
+      .orderBy(menuCompositionRuleTable.brand, menuCompositionRuleTable.mealType);
+    const ids = rules.map((r) => r.id);
+    const slots = ids.length ? await db.select().from(menuCompositionSlotTable).where(inArray(menuCompositionSlotTable.ruleId, ids)).orderBy(menuCompositionSlotTable.sortOrder) : [];
+    const byRule = new Map<string, any[]>();
+    for (const s of slots) { const a = byRule.get(s.ruleId) ?? []; a.push(s); byRule.set(s.ruleId, a); }
+    res.json({ success: true, data: rules.map((r) => ({ ...r, slots: byRule.get(r.id) ?? [] })) });
+  } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
+});
+
+foodRouter.post("/composition-rules", authenticate, authorize("FOOD_SETTINGS", "create"), async (req, res) => {
+  try {
+    const b = req.body || {};
+    if (!b.brand || !b.mealType) { res.status(400).json({ success: false, error: "brand and mealType required" }); return; }
+    const result = await db.transaction(async (tx) => {
+      const [rule] = await tx.insert(menuCompositionRuleTable).values({
+        id: newId(), brand: b.brand, mealType: b.mealType, kitchenId: b.kitchenId || null,
+        name: b.name ?? null, isActive: b.isActive !== false, updatedAt: new Date(),
+      }).returning();
+      const sv = slotValues(rule!.id, b.slots);
+      const slots = sv.length ? await tx.insert(menuCompositionSlotTable).values(sv).returning() : [];
+      return { ...rule, slots };
+    });
+    res.status(201).json({ success: true, data: result });
+  } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
+});
+
+foodRouter.put("/composition-rules/:id", authenticate, authorize("FOOD_SETTINGS", "edit"), async (req, res) => {
+  try {
+    const b = req.body || {};
+    const id = req.params["id"]!;
+    const result = await db.transaction(async (tx) => {
+      const u: Record<string, unknown> = { updatedAt: new Date() };
+      for (const k of ["brand", "mealType", "kitchenId", "name", "isActive"]) if (b[k] !== undefined) u[k] = b[k] === "" ? null : b[k];
+      const [rule] = await tx.update(menuCompositionRuleTable).set(u as never).where(eq(menuCompositionRuleTable.id, id)).returning();
+      if (!rule) return null;
+      if (b.slots !== undefined) {
+        await tx.delete(menuCompositionSlotTable).where(eq(menuCompositionSlotTable.ruleId, id));
+        const sv = slotValues(id, b.slots);
+        if (sv.length) await tx.insert(menuCompositionSlotTable).values(sv);
+      }
+      const slots = await tx.select().from(menuCompositionSlotTable).where(eq(menuCompositionSlotTable.ruleId, id)).orderBy(menuCompositionSlotTable.sortOrder);
+      return { ...rule, slots };
+    });
+    if (!result) { res.status(404).json({ success: false, error: "Not found" }); return; }
+    res.json({ success: true, data: result });
+  } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
+});
+
+foodRouter.delete("/composition-rules/:id", authenticate, authorize("FOOD_SETTINGS", "delete"), async (req, res) => {
+  try {
+    await db.delete(menuCompositionRuleTable).where(eq(menuCompositionRuleTable.id, req.params["id"]!));
     res.json({ success: true });
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
@@ -1136,6 +1477,118 @@ foodRouter.delete("/delivery-partners/:id", authenticate, authorize("FOOD_SETTIN
     const [row] = await db.update(deliveryPartnersTable).set({ isActive: false, updatedAt: new Date() }).where(eq(deliveryPartnersTable.id, req.params["id"]!)).returning();
     if (!row) { res.status(404).json({ success: false, error: "Not found" }); return; }
     res.json({ success: true, data: row });
+  } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
+});
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * Master data — Delivery agencies (→ locations + vehicles)
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+foodRouter.get("/agencies", authenticate, async (req, res) => {
+  try {
+    const active = req.query["active"] as string | undefined;
+    const where = active !== undefined ? eq(agenciesTable.isActive, active === "true") : undefined;
+    const agencies = await db.select().from(agenciesTable).where(where).orderBy(agenciesTable.name);
+    const ids = agencies.map((a) => a.id);
+    const vehicles = ids.length ? await db.select().from(agencyVehiclesTable).where(inArray(agencyVehiclesTable.agencyId, ids)) : [];
+    const locations = ids.length ? await db.select().from(agencyLocationsTable).where(inArray(agencyLocationsTable.agencyId, ids)) : [];
+    const vByA = new Map<string, any[]>(); for (const v of vehicles) { const a = vByA.get(v.agencyId) ?? []; a.push(v); vByA.set(v.agencyId, a); }
+    const lByA = new Map<string, any[]>(); for (const l of locations) { const a = lByA.get(l.agencyId) ?? []; a.push(l); lByA.set(l.agencyId, a); }
+    res.json({ success: true, data: agencies.map((a) => ({ ...a, vehicles: vByA.get(a.id) ?? [], locations: lByA.get(a.id) ?? [] })) });
+  } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
+});
+
+foodRouter.post("/agencies", authenticate, authorize("FOOD_SETTINGS", "create"), async (req, res) => {
+  try {
+    const b = req.body || {};
+    if (!b.name) { res.status(400).json({ success: false, error: "name required" }); return; }
+    const [row] = await db.insert(agenciesTable).values({
+      id: newId(), name: b.name, phone: b.phone ?? null, contactName: b.contactName ?? null, email: b.email ?? null,
+      isActive: b.isActive !== false, updatedAt: new Date(),
+    }).returning();
+    res.status(201).json({ success: true, data: row });
+  } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
+});
+
+foodRouter.put("/agencies/:id", authenticate, authorize("FOOD_SETTINGS", "edit"), async (req, res) => {
+  try {
+    const b = req.body || {};
+    const u: Record<string, unknown> = { updatedAt: new Date() };
+    for (const k of ["name", "phone", "contactName", "email", "isActive"]) if (b[k] !== undefined) u[k] = b[k];
+    const [row] = await db.update(agenciesTable).set(u as never).where(eq(agenciesTable.id, req.params["id"]!)).returning();
+    if (!row) { res.status(404).json({ success: false, error: "Not found" }); return; }
+    res.json({ success: true, data: row });
+  } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
+});
+
+foodRouter.delete("/agencies/:id", authenticate, authorize("FOOD_SETTINGS", "delete"), async (req, res) => {
+  try {
+    const [row] = await db.update(agenciesTable).set({ isActive: false, updatedAt: new Date() }).where(eq(agenciesTable.id, req.params["id"]!)).returning();
+    if (!row) { res.status(404).json({ success: false, error: "Not found" }); return; }
+    res.json({ success: true, data: row });
+  } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
+});
+
+// Nested locations (flat update/delete paths to avoid :id collisions)
+foodRouter.post("/agencies/:id/locations", authenticate, authorize("FOOD_SETTINGS", "create"), async (req, res) => {
+  try {
+    const b = req.body || {};
+    if (!b.name) { res.status(400).json({ success: false, error: "name required" }); return; }
+    const [row] = await db.insert(agencyLocationsTable).values({
+      id: newId(), agencyId: req.params["id"]!, name: b.name, address: b.address ?? null, city: b.city ?? null,
+      state: b.state ?? null, pincode: b.pincode ?? null, contactName: b.contactName ?? null, contactPhone: b.contactPhone ?? null,
+      isActive: b.isActive !== false, updatedAt: new Date(),
+    }).returning();
+    res.status(201).json({ success: true, data: row });
+  } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
+});
+
+foodRouter.put("/agency-locations/:id", authenticate, authorize("FOOD_SETTINGS", "edit"), async (req, res) => {
+  try {
+    const b = req.body || {};
+    const u: Record<string, unknown> = { updatedAt: new Date() };
+    for (const k of ["name", "address", "city", "state", "pincode", "contactName", "contactPhone", "isActive"]) if (b[k] !== undefined) u[k] = b[k];
+    const [row] = await db.update(agencyLocationsTable).set(u as never).where(eq(agencyLocationsTable.id, req.params["id"]!)).returning();
+    if (!row) { res.status(404).json({ success: false, error: "Not found" }); return; }
+    res.json({ success: true, data: row });
+  } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
+});
+
+foodRouter.delete("/agency-locations/:id", authenticate, authorize("FOOD_SETTINGS", "delete"), async (req, res) => {
+  try {
+    await db.delete(agencyLocationsTable).where(eq(agencyLocationsTable.id, req.params["id"]!));
+    res.json({ success: true });
+  } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
+});
+
+// Nested vehicles
+foodRouter.post("/agencies/:id/vehicles", authenticate, authorize("FOOD_SETTINGS", "create"), async (req, res) => {
+  try {
+    const b = req.body || {};
+    if (!b.vehicleNumber) { res.status(400).json({ success: false, error: "vehicleNumber required" }); return; }
+    const [row] = await db.insert(agencyVehiclesTable).values({
+      id: newId(), agencyId: req.params["id"]!, locationId: b.locationId ?? null,
+      vehicleNumber: b.vehicleNumber, vehicleType: b.vehicleType ?? "VAN", isActive: b.isActive !== false, updatedAt: new Date(),
+    }).returning();
+    res.status(201).json({ success: true, data: row });
+  } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
+});
+
+foodRouter.put("/agency-vehicles/:id", authenticate, authorize("FOOD_SETTINGS", "edit"), async (req, res) => {
+  try {
+    const b = req.body || {};
+    const u: Record<string, unknown> = { updatedAt: new Date() };
+    for (const k of ["vehicleNumber", "vehicleType", "locationId", "isActive"]) if (b[k] !== undefined) u[k] = b[k];
+    const [row] = await db.update(agencyVehiclesTable).set(u as never).where(eq(agencyVehiclesTable.id, req.params["id"]!)).returning();
+    if (!row) { res.status(404).json({ success: false, error: "Not found" }); return; }
+    res.json({ success: true, data: row });
+  } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
+});
+
+foodRouter.delete("/agency-vehicles/:id", authenticate, authorize("FOOD_SETTINGS", "delete"), async (req, res) => {
+  try {
+    await db.delete(agencyVehiclesTable).where(eq(agencyVehiclesTable.id, req.params["id"]!));
+    res.json({ success: true });
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
@@ -1191,9 +1644,9 @@ foodRouter.get("/cities", authenticate, async (req, res) => {
 foodRouter.post("/cities", authenticate, authorize("FOOD_SETTINGS", "create"), async (req, res) => {
   try {
     const b = req.body || {};
-    if (!b.name || !b.zoneId) { res.status(400).json({ success: false, error: "name, zoneId required" }); return; }
+    if (!b.name) { res.status(400).json({ success: false, error: "name required" }); return; }
     const [row] = await db.insert(citiesTable).values({
-      id: newId(), name: b.name, zoneId: b.zoneId, isActive: b.isActive !== false, updatedAt: new Date(),
+      id: newId(), name: b.name, zoneId: b.zoneId ?? null, isActive: b.isActive !== false, updatedAt: new Date(),
     }).returning();
     res.status(201).json({ success: true, data: row });
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
@@ -1284,11 +1737,12 @@ foodRouter.post("/scopes", authenticate, authorize("FOOD_SETTINGS", "create"), a
     const geoIdByLevel: Record<string, string | undefined> = {
       ZONE: b.zoneId,
       CITY: b.cityId,
+      KITCHEN: b.kitchenId,
       CLUSTER: b.clusterId,
       PROPERTY: b.propertyId,
     };
     if (b.scopeLevel !== "GLOBAL" && !geoIdByLevel[b.scopeLevel]) {
-      const field = { ZONE: "zoneId", CITY: "cityId", CLUSTER: "clusterId", PROPERTY: "propertyId" }[b.scopeLevel as string];
+      const field = { ZONE: "zoneId", CITY: "cityId", KITCHEN: "kitchenId", CLUSTER: "clusterId", PROPERTY: "propertyId" }[b.scopeLevel as string];
       res.status(400).json({ success: false, error: field ? `${field} required for ${b.scopeLevel} scope` : `Invalid scopeLevel ${b.scopeLevel}` });
       return;
     }
@@ -1298,6 +1752,7 @@ foodRouter.post("/scopes", authenticate, authorize("FOOD_SETTINGS", "create"), a
       scopeLevel: b.scopeLevel,
       zoneId: b.zoneId ?? null,
       cityId: b.cityId ?? null,
+      kitchenId: b.kitchenId ?? null,
       clusterId: b.clusterId ?? null,
       propertyId: b.propertyId ?? null,
     }).returning();

@@ -1,6 +1,6 @@
 kind = "web"
 previewPath = "/"
-title = "UNILIV Admin"
+title = "UNILIV"
 version = "1.0.0"
 id = "artifacts/uniliv-admin"
 router = "path"

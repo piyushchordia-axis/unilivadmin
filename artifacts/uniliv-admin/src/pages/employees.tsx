@@ -19,6 +19,7 @@ import { StatCard } from "@/components/stat-card";
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { ControlledDatePicker } from "@/components/ui/date-picker";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { UserAvatar } from "@/components/ui/user-avatar";
@@ -303,7 +304,7 @@ export default function Employees() {
               </div>
               <div>
                 <Label>Date of Birth</Label>
-                <Input type="date" {...form.register("dob")} />
+                <ControlledDatePicker control={form.control} name="dob" />
               </div>
               <div>
                 <Label>Gender</Label>
@@ -362,7 +363,7 @@ export default function Employees() {
               </div>
               <div className="col-span-2">
                 <Label>Joining Date *</Label>
-                <Input type="date" {...form.register("joiningDate")} />
+                <ControlledDatePicker control={form.control} name="joiningDate" />
                 {form.formState.errors.joiningDate && <p className="text-xs text-destructive mt-1">{form.formState.errors.joiningDate.message}</p>}
               </div>
             </div>

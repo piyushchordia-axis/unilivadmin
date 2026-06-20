@@ -14,6 +14,7 @@ import { PageHeader } from "@/components/page-header";
 import { StatCard } from "@/components/stat-card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { DatePicker } from "@/components/ui/date-picker";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -277,11 +278,11 @@ export default function FoodReports() {
           <Label className="text-xs text-muted-foreground flex items-center gap-1">
             <CalendarRange className="w-3 h-3" /> From
           </Label>
-          <Input type="date" value={from} max={to} onChange={(e) => setFrom(e.target.value)} className="w-40" />
+          <DatePicker value={from} max={to} onChange={setFrom} className="w-40" />
         </div>
         <div className="flex flex-col gap-1.5">
           <Label className="text-xs text-muted-foreground">To</Label>
-          <Input type="date" value={to} min={from} max={today} onChange={(e) => setTo(e.target.value)} className="w-40" />
+          <DatePicker value={to} min={from} max={today} onChange={setTo} className="w-40" />
         </div>
         <div className="flex flex-col gap-1.5">
           <Label className="text-xs text-muted-foreground">Status</Label>

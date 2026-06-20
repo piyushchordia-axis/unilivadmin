@@ -190,7 +190,7 @@ export default function Login() {
         <div className="absolute inset-0 opacity-[0.03]" style={{ backgroundImage: "radial-gradient(circle at 2px 2px, white 1px, transparent 0)", backgroundSize: "32px 32px" }} />
         <div className="relative z-10 flex items-center gap-3">
           <div className="w-10 h-10 rounded bg-accent flex items-center justify-center text-accent-foreground font-display font-bold text-xl shadow-lg">U</div>
-          <span className="font-display font-bold text-xl tracking-tight">Uniliv Admin</span>
+          <span className="font-display font-bold text-xl tracking-tight">Uniliv</span>
         </div>
         <div className="relative z-10 max-w-md">
           <div className="inline-flex items-center gap-2 rounded-full bg-primary-foreground/10 px-3 py-1 text-xs font-medium mb-6">
@@ -224,14 +224,12 @@ export default function Login() {
                   <Label htmlFor="identifier">Username or Email</Label>
                   <Input id="identifier" autoFocus placeholder="unitlead1 or you@uniliv.com" className="h-11"
                     value={identifier} onChange={(e) => setIdentifier(e.target.value)} data-testid="input-identifier" />
+                  <button type="button" className="text-sm font-medium text-accent hover:underline" onClick={() => { setRecoverPhone(""); setView("forgot-username"); }}>
+                    Forgot your username?
+                  </button>
                 </div>
                 <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <Label htmlFor="password">Password</Label>
-                    <button type="button" className="text-sm font-medium text-accent hover:underline" onClick={() => { setRecoverId(identifier); setView("forgot-password"); }}>
-                      Forgot password?
-                    </button>
-                  </div>
+                  <Label htmlFor="password">Password</Label>
                   <div className="relative">
                     <Input id="password" type={showPassword ? "text" : "password"} placeholder="••••••••" className="h-11 pr-10"
                       value={password} onChange={(e) => setPassword(e.target.value)} data-testid="input-password" />
@@ -239,13 +237,13 @@ export default function Login() {
                       {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                     </button>
                   </div>
+                  <button type="button" className="text-sm font-medium text-accent hover:underline" onClick={() => { setRecoverId(identifier); setView("forgot-password"); }}>
+                    Forgot password?
+                  </button>
                 </div>
                 <Button type="submit" className="w-full h-11 text-base font-semibold" disabled={busy} data-testid="button-submit-login">
                   {busy && <Loader2 className="w-5 h-5 animate-spin mr-2" />} Continue
                 </Button>
-                <button type="button" className="w-full text-center text-sm text-muted-foreground hover:text-foreground" onClick={() => { setRecoverPhone(""); setView("forgot-username"); }}>
-                  Forgot your username?
-                </button>
               </form>
             </>
           )}
@@ -267,11 +265,6 @@ export default function Login() {
                   </InputOTPGroup>
                 </InputOTP>
               </div>
-              {challenge.devOtp && (
-                <div className="text-center text-xs text-muted-foreground bg-muted rounded-md py-2">
-                  Dev code (test mode): <span className="font-mono font-semibold text-foreground tracking-wider">{challenge.devOtp}</span>
-                </div>
-              )}
               <Button className="w-full h-11" disabled={busy || code.length < 6} onClick={() => onVerify()} data-testid="button-verify-otp">
                 {busy && <Loader2 className="w-5 h-5 animate-spin mr-2" />} Verify
               </Button>

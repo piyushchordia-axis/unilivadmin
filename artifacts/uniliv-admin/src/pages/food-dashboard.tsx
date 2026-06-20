@@ -31,6 +31,7 @@ import { StatCard } from "@/components/stat-card";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { DatePicker } from "@/components/ui/date-picker";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -281,33 +282,31 @@ export default function FoodDashboard() {
                 </p>
               </div>
             ) : (
-              <ul className="divide-y divide-border">
-                {cutoffs.map((c) => (
-                  <li
-                    key={c.mealType}
-                    className="flex items-center justify-between gap-3 py-2.5 first:pt-0 last:pb-0"
-                  >
-                    <div className="flex items-center gap-2.5">
-                      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-muted/50">
-                        <Clock className="h-3.5 w-3.5 text-muted-foreground" />
-                      </span>
-                      <div>
-                        <p className="text-sm font-medium text-foreground">
-                          {MEAL_LABEL[c.mealType] ?? c.mealType}
-                        </p>
-                        <p className="font-mono text-xs text-muted-foreground">
-                          Cut-off {c.cutoffTime}
-                        </p>
-                      </div>
+              <div>
+                {/* Single cut-off applies to all meals; each meal keeps its own service time. */}
+                <div className="mb-3 flex items-center justify-between gap-3 rounded-lg border bg-muted/30 px-3 py-2.5">
+                  <div className="flex items-center gap-2.5">
+                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-muted/50">
+                      <Clock className="h-3.5 w-3.5 text-muted-foreground" />
+                    </span>
+                    <div>
+                      <p className="text-sm font-medium text-foreground">Cut-off — all meals</p>
+                      <p className="font-mono text-xs text-muted-foreground">{cutoffs[0]?.cutoffTime ?? "Not set"}</p>
                     </div>
-                    {c.isPastCutoff ? (
-                      <Badge variant="destructive">Closed</Badge>
-                    ) : (
-                      <Badge variant="success">Open</Badge>
-                    )}
-                  </li>
-                ))}
-              </ul>
+                  </div>
+                  {cutoffs[0]?.cutoffTime ? (
+                    cutoffs[0]?.isPastCutoff ? <Badge variant="destructive">Closed</Badge> : <Badge variant="success">Open</Badge>
+                  ) : <Badge variant="secondary">—</Badge>}
+                </div>
+                <ul className="divide-y divide-border">
+                  {cutoffs.map((c) => (
+                    <li key={c.mealType} className="flex items-center justify-between gap-3 py-2 first:pt-0 last:pb-0">
+                      <span className="text-sm text-foreground">{MEAL_LABEL[c.mealType] ?? c.mealType}</span>
+                      <span className="font-mono text-xs text-muted-foreground">{c.serviceTime ? `Serves ${c.serviceTime}` : "—"}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
             )}
           </CardContent>
         </Card>
@@ -345,23 +344,11 @@ export default function FoodDashboard() {
 
         <div className="flex flex-col gap-1">
           <Label className="text-xs text-muted-foreground">From</Label>
-          <Input
-            type="date"
-            value={from}
-            max={to}
-            onChange={(e) => setFrom(e.target.value)}
-            className="w-40"
-          />
+          <DatePicker value={from} max={to} onChange={setFrom} className="w-40" />
         </div>
         <div className="flex flex-col gap-1">
           <Label className="text-xs text-muted-foreground">To</Label>
-          <Input
-            type="date"
-            value={to}
-            min={from}
-            onChange={(e) => setTo(e.target.value)}
-            className="w-40"
-          />
+          <DatePicker value={to} min={from} onChange={setTo} className="w-40" />
         </div>
       </div>
 

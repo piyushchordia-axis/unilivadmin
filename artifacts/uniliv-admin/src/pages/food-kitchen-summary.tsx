@@ -11,7 +11,6 @@ import {
   ListChecks,
   Building2,
   CookingPot,
-  CalendarDays,
   RefreshCw,
   Loader2,
 } from "lucide-react";
@@ -19,7 +18,7 @@ import { PageHeader } from "@/components/page-header";
 import { StatCard } from "@/components/stat-card";
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { DatePicker } from "@/components/ui/date-picker";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -180,15 +179,7 @@ export default function FoodKitchenSummary() {
 
       {/* Filters */}
       <div className="flex flex-wrap items-center gap-3">
-        <div className="relative">
-          <CalendarDays className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground pointer-events-none" />
-          <Input
-            type="date"
-            value={date}
-            onChange={(e) => setDate(e.target.value)}
-            className="pl-9 w-44"
-          />
-        </div>
+        <DatePicker value={date} onChange={setDate} className="w-44" />
         <Select value={brand} onValueChange={setBrand}>
           <SelectTrigger className="w-40"><SelectValue placeholder="Brand" /></SelectTrigger>
           <SelectContent>

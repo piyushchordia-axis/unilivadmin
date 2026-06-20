@@ -15,6 +15,7 @@ import { PageHeader } from "@/components/page-header";
 import { StatCard } from "@/components/stat-card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { DatePicker } from "@/components/ui/date-picker";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent } from "@/components/ui/card";
 import { FormModal } from "@/components/ui/form-modal";
@@ -299,13 +300,13 @@ export default function ElectricityPage() {
             <div><Label>Rate / Unit *</Label><Input type="number" step="0.01" value={tariffForm.ratePerUnit ?? ""} onChange={(e) => setTariffForm({ ...tariffForm, ratePerUnit: Number(e.target.value) })} data-testid="input-rate" /></div>
             <div><Label>Fixed Charge</Label><Input type="number" step="0.01" value={tariffForm.fixedCharge ?? ""} onChange={(e) => setTariffForm({ ...tariffForm, fixedCharge: Number(e.target.value) })} /></div>
           </div>
-          <div><Label>Effective From *</Label><Input type="date" value={tariffForm.effectiveFrom || ""} onChange={(e) => setTariffForm({ ...tariffForm, effectiveFrom: e.target.value })} /></div>
+          <div><Label>Effective From *</Label><DatePicker value={tariffForm.effectiveFrom || ""} onChange={(v) => setTariffForm({ ...tariffForm, effectiveFrom: v })} /></div>
         </div>
       </FormModal>
 
       <FormModal open={bulkOpen} onOpenChange={setBulkOpen} title="Bulk Upload Readings" onSave={() => bulkUpload.mutate()} isSaving={bulkUpload.isPending} saveLabel="Upload">
         <div className="space-y-4">
-          <div><Label>Default Reading Date</Label><Input type="date" value={bulkDate} onChange={(e) => setBulkDate(e.target.value)} data-testid="input-bulk-date" /></div>
+          <div><Label>Default Reading Date</Label><DatePicker value={bulkDate} onChange={setBulkDate} data-testid="input-bulk-date" /></div>
           <div>
             <Label>Readings (CSV) *</Label>
             <p className="text-xs text-muted-foreground mb-2">One per line: <code className="bg-muted px-1">meterNo,reading[,date]</code></p>
@@ -322,7 +323,7 @@ export default function ElectricityPage() {
 
       <FormModal open={readingOpen} onOpenChange={setReadingOpen} title={`Record Reading · ${readingForm.meterNo || ""}`} onSave={() => saveReading.mutate(readingForm)} isSaving={saveReading.isPending}>
         <div className="space-y-4">
-          <div><Label>Reading Date *</Label><Input type="date" value={readingForm.readingDate || ""} onChange={(e) => setReadingForm({ ...readingForm, readingDate: e.target.value })} /></div>
+          <div><Label>Reading Date *</Label><DatePicker value={readingForm.readingDate || ""} onChange={(v) => setReadingForm({ ...readingForm, readingDate: v })} /></div>
           <div><Label>Reading (kWh) *</Label><Input type="number" step="0.01" value={readingForm.reading} onChange={(e) => setReadingForm({ ...readingForm, reading: e.target.value })} data-testid="input-reading-value" /></div>
           <p className="text-xs text-muted-foreground">Units & charge will be calculated against the previous reading and tariff automatically.</p>
         </div>

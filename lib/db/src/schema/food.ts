@@ -22,21 +22,23 @@ import {
   numeric,
   doublePrecision,
   json,
+  index,
+  uniqueIndex,
   pgEnum,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import { propertiesTable, usersTable } from "./core";
 
 /* ────────────────────────────────────────────────────────────────────────────
  * Enums
  * ──────────────────────────────────────────────────────────────────────────── */
 
-/** Meal types orders can be placed for (PRD §7.3, §10). */
+/** Meal types orders can be placed for. Fixed set of 4 (Evening Snacks = SNACKS). */
 export const mealTypeEnum = pgEnum("food_meal_type", [
   "BREAKFAST",
   "LUNCH",
   "SNACKS",
   "DINNER",
-  "NIGHT_MILK",
 ]);
 
 /**
@@ -59,8 +61,11 @@ export const foodOrderStatusEnum = pgEnum("food_order_status", [
   "CANCELLED",
 ]);
 
-/** Brand / service set — same menu, different number of components served (PRD §10.1). */
-export const foodBrandEnum = pgEnum("food_brand", ["UNILIV", "HUDDLE"]);
+/**
+ * Brand is now an admin-managed master list (foodBrandsTable), not a fixed enum.
+ * Every `brand` column stores the brand CODE as text (e.g. "UNILIV", "HUDDLE",
+ * or any code an admin creates), validated at the app layer against active brands.
+ */
 
 /** Measurement units; Kitchen Summary auto-converts g→kg, ml→litre (PRD §7.4). */
 export const measurementUnitEnum = pgEnum("food_measurement_unit", [
@@ -73,10 +78,10 @@ export const measurementUnitEnum = pgEnum("food_measurement_unit", [
   "SERVING",
 ]);
 
-/** Menu components from the catalogue (PRD §10.1). */
+/** Dish course/component (a category, NOT a diet tag — see preparation). */
 export const dishComponentEnum = pgEnum("food_dish_component", [
   "HOT_FOOD",
-  "VEG",
+  "SABZI",
   "DAL",
   "RICE",
   "BREAD",
@@ -94,11 +99,18 @@ export const dishComponentEnum = pgEnum("food_dish_component", [
   "OTHER",
 ]);
 
-/** Access scope levels for the role hierarchy (PRD §3–5). */
+/** Dish preparation / diet tags (a dish can carry several, e.g. VEG + JAIN). */
+export const PREPARATIONS = ["VEG", "NON_VEG", "JAIN"] as const;
+
+/**
+ * Access scope levels. Hierarchy is City → Kitchen → Property (ZONE/CLUSTER are
+ * retained for back-compat data but no longer used by the resolver/UI).
+ */
 export const foodScopeLevelEnum = pgEnum("food_scope_level", [
   "GLOBAL",
   "ZONE",
   "CITY",
+  "KITCHEN",
   "CLUSTER",
   "PROPERTY",
 ]);
@@ -135,9 +147,8 @@ export const zonesTable = pgTable("zones", {
 export const citiesTable = pgTable("cities", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
-  zoneId: text("zone_id")
-    .notNull()
-    .references(() => zonesTable.id),
+  /** Nullable — cities sit directly under the implicit "India" root. */
+  zoneId: text("zone_id").references(() => zonesTable.id),
   isActive: boolean("is_active").default(true).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
@@ -172,6 +183,7 @@ export const userScopesTable = pgTable("user_scopes", {
   scopeLevel: foodScopeLevelEnum("scope_level").notNull(),
   zoneId: text("zone_id").references(() => zonesTable.id),
   cityId: text("city_id").references(() => citiesTable.id),
+  kitchenId: text("kitchen_id").references(() => kitchensTable.id),
   clusterId: text("cluster_id").references(() => clustersTable.id),
   propertyId: text("property_id").references(() => propertiesTable.id),
   createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -182,8 +194,21 @@ export const userScopesTable = pgTable("user_scopes", {
  * ──────────────────────────────────────────────────────────────────────────── */
 
 /**
- * Dish catalogue — veg-only shared menu (PRD §10). Dishes are shared across
- * brands; brands differ only in how many are served (see foodMenuRotationTable).
+ * Brand master — admin-managed list of brands (Uniliv, Huddle, …). All `brand`
+ * columns across the food schema store this table's `code`.
+ */
+export const foodBrandsTable = pgTable("food_brands", {
+  id: text("id").primaryKey(),
+  code: text("code").notNull().unique(),
+  name: text("name").notNull(),
+  isActive: boolean("is_active").default(true).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+/**
+ * Dish catalogue — shared, veg-only (PRD §10). A dish is tagged with one OR more
+ * brand codes (`brands`); the same dish (e.g. Rice) can be reused across brands.
  */
 export const dishesTable = pgTable("dishes", {
   id: text("id").primaryKey(),
@@ -191,12 +216,74 @@ export const dishesTable = pgTable("dishes", {
   component: dishComponentEnum("component").notNull(),
   /** Default unit this dish is measured/ordered in. */
   unit: measurementUnitEnum("unit").notNull(),
-  isVeg: boolean("is_veg").default(true).notNull(),
+  /** Brand codes this dish belongs to (one or more). */
+  brands: text("brands").array().notNull().default(sql`'{}'::text[]`),
+  /** Preparation/diet tags (VEG, NON_VEG, JAIN — one or more). Replaces isVeg. */
+  preparations: text("preparations").array().notNull().default(sql`'{}'::text[]`),
   photoUrl: text("photo_url"),
   isActive: boolean("is_active").default(true).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
+
+/** Raw-material master (ingredients used in dishes — Aloo, Pyaaz, Tomato, …). */
+export const rawMaterialsTable = pgTable("raw_materials", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  unit: measurementUnitEnum("unit").notNull(),
+  isActive: boolean("is_active").default(true).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => ({ nameIdx: index("idx_raw_materials_name").on(t.name) }));
+
+/** Per-dish ingredient list (dish ↔ raw material, with optional quantity). */
+export const dishIngredientsTable = pgTable("dish_ingredients", {
+  id: text("id").primaryKey(),
+  dishId: text("dish_id").notNull().references(() => dishesTable.id, { onDelete: "cascade" }),
+  rawMaterialId: text("raw_material_id").notNull().references(() => rawMaterialsTable.id),
+  quantity: numeric("quantity", { precision: 12, scale: 3 }),
+  unit: measurementUnitEnum("unit"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => ({
+  dishIdx: index("idx_dish_ingredients_dish").on(t.dishId),
+  rmIdx: index("idx_dish_ingredients_rm").on(t.rawMaterialId),
+}));
+
+/**
+ * Menu-composition rule — the STRUCTURE of a meal per (brand, mealType, kitchen?).
+ * A rule = a header + N slots (e.g. Lunch = 1 DAL + 1 SABZI + 1 RICE + 1 SALAD).
+ * A kitchen-specific rule (kitchenId set) overrides the brand default (kitchenId null).
+ */
+export const menuCompositionRuleTable = pgTable("menu_composition_rules", {
+  id: text("id").primaryKey(),
+  brand: text("brand").notNull(),
+  mealType: mealTypeEnum("meal_type").notNull(),
+  /** Null → applies to all kitchens of the brand (default). */
+  kitchenId: text("kitchen_id").references(() => kitchensTable.id),
+  name: text("name"),
+  isActive: boolean("is_active").default(true).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => ({
+  resolveIdx: index("idx_comp_rule_resolve").on(t.brand, t.mealType, t.kitchenId, t.isActive),
+}));
+
+/** A required slot within a composition rule (by component and/or preparation, with counts). */
+export const menuCompositionSlotTable = pgTable("menu_composition_slots", {
+  id: text("id").primaryKey(),
+  ruleId: text("rule_id").notNull().references(() => menuCompositionRuleTable.id, { onDelete: "cascade" }),
+  slotLabel: text("slot_label"),
+  /** Match dishes of this component (nullable → any). */
+  component: dishComponentEnum("component"),
+  /** Match dishes whose preparations[] contains this tag (nullable → any). */
+  preparation: text("preparation"),
+  minCount: integer("min_count").default(1).notNull(),
+  maxCount: integer("max_count"),
+  sortOrder: integer("sort_order").default(0).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => ({ ruleIdx: index("idx_comp_slot_rule").on(t.ruleId) }));
 
 /**
  * Weekly menu rotation = the meal → dish mapping per brand/service set, with a
@@ -211,7 +298,9 @@ export const dishesTable = pgTable("dishes", {
  */
 export const foodMenuRotationTable = pgTable("food_menu_rotation", {
   id: text("id").primaryKey(),
-  brand: foodBrandEnum("brand").notNull(),
+  /** Kitchen this menu belongs to (menus are defined per kitchen). */
+  kitchenId: text("kitchen_id").references(() => kitchensTable.id),
+  brand: text("brand").notNull(),
   /** 1-based rotation week index in the multi-week cycle (1, 2, 3, …). */
   rotationWeek: integer("rotation_week").default(1).notNull(),
   /** Day of week: 1 = Monday … 7 = Sunday. */
@@ -229,7 +318,11 @@ export const foodMenuRotationTable = pgTable("food_menu_rotation", {
   isActive: boolean("is_active").default(true).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
-});
+}, (t) => ({
+  resolveIdx: index("idx_rotation_resolve").on(
+    t.kitchenId, t.brand, t.mealType, t.rotationWeek, t.dayOfWeek, t.isActive,
+  ),
+}));
 
 /**
  * Per-resident quantity rules (PRD §7.9). Drive kitchen aggregation: ordered
@@ -238,7 +331,7 @@ export const foodMenuRotationTable = pgTable("food_menu_rotation", {
  */
 export const perResidentRuleTable = pgTable("per_resident_rules", {
   id: text("id").primaryKey(),
-  brand: foodBrandEnum("brand").notNull(),
+  brand: text("brand").notNull(),
   mealType: mealTypeEnum("meal_type").notNull(),
   dishId: text("dish_id")
     .notNull()
@@ -252,7 +345,7 @@ export const perResidentRuleTable = pgTable("per_resident_rules", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
-/** Delivery partners assignable at Dispatch (PRD §7.5, §7.9). */
+/** Delivery partners — legacy flat table, superseded by agencies (kept for migration). */
 export const deliveryPartnersTable = pgTable("delivery_partners", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
@@ -262,6 +355,48 @@ export const deliveryPartnersTable = pgTable("delivery_partners", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
+
+/** Delivery AGENCY — a vendor with multiple locations + vehicles. Dispatch picks agency → vehicle. */
+export const agenciesTable = pgTable("agencies", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  phone: text("phone"),
+  contactName: text("contact_name"),
+  email: text("email"),
+  isActive: boolean("is_active").default(true).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+/** A physical location/hub of an agency. */
+export const agencyLocationsTable = pgTable("agency_locations", {
+  id: text("id").primaryKey(),
+  agencyId: text("agency_id").notNull().references(() => agenciesTable.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  address: text("address"),
+  city: text("city"),
+  state: text("state"),
+  pincode: text("pincode"),
+  contactName: text("contact_name"),
+  contactPhone: text("contact_phone"),
+  isActive: boolean("is_active").default(true).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => ({ agencyIdx: index("idx_agency_locations_agency").on(t.agencyId) }));
+
+export const agencyVehicleTypeEnum = pgEnum("food_vehicle_type", ["VAN", "BIKE", "TRUCK", "CAR", "TEMPO", "OTHER"]);
+
+/** A vehicle belonging to an agency (optionally based at a location). */
+export const agencyVehiclesTable = pgTable("agency_vehicles", {
+  id: text("id").primaryKey(),
+  agencyId: text("agency_id").notNull().references(() => agenciesTable.id, { onDelete: "cascade" }),
+  locationId: text("location_id").references(() => agencyLocationsTable.id),
+  vehicleNumber: text("vehicle_number").notNull(),
+  vehicleType: agencyVehicleTypeEnum("vehicle_type").default("VAN").notNull(),
+  isActive: boolean("is_active").default(true).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => ({ agencyIdx: index("idx_agency_vehicles_agency").on(t.agencyId) }));
 
 /**
  * Kitchen master — orders are dispatched FROM a kitchen (Persona st.24 requires
@@ -273,16 +408,20 @@ export const kitchensTable = pgTable("kitchens", {
   name: text("name").notNull(),
   /** Human-facing Kitchen ID shown on dispatch details. */
   code: text("code").notNull().unique(),
-  brand: foodBrandEnum("brand"),
+  brand: text("brand"),
   address: text("address"),
   city: text("city"),
   state: text("state"),
   pincode: text("pincode"),
   lat: doublePrecision("lat"),
   lng: doublePrecision("lng"),
+  /** Kitchen head contact. */
   contactName: text("contact_name"),
   contactPhone: text("contact_phone"),
-  /** Cluster this kitchen primarily serves (geo hierarchy); nullable. */
+  contactEmail: text("contact_email"),
+  /** City this kitchen belongs to (hierarchy: City → Kitchen → Property). */
+  cityId: text("city_id").references(() => citiesTable.id),
+  /** Legacy cluster link (retired in favour of cityId). */
   clusterId: text("cluster_id").references(() => clustersTable.id),
   isActive: boolean("is_active").default(true).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -298,7 +437,7 @@ export const foodMealConfigTable = pgTable("food_meal_config", {
   id: text("id").primaryKey(),
   mealType: mealTypeEnum("meal_type").notNull().unique(),
   displayLabel: text("display_label").notNull(),
-  brand: foodBrandEnum("brand"),
+  brand: text("brand"),
   sortOrder: integer("sort_order").default(0).notNull(),
   isEnabled: boolean("is_enabled").default(true).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -306,18 +445,19 @@ export const foodMealConfigTable = pgTable("food_meal_config", {
 });
 
 /**
- * Order cut-off windows per meal (Persona st.11 cut-off time; st.33 delay
- * baseline). Global default = null propertyId; a property row overrides it
- * (same pattern as perResidentRuleTable).
+ * Per-meal SERVICE windows (planned service/delivery time + lead time for delay
+ * analytics). The cut-off time is now a single brand-level value (foodCutoffsTable);
+ * `cutoffTime` here is legacy/ignored. Global default = null propertyId; a property
+ * row overrides it (same pattern as perResidentRuleTable).
  */
 export const foodMealWindowsTable = pgTable("food_meal_windows", {
   id: text("id").primaryKey(),
-  brand: foodBrandEnum("brand"),
+  brand: text("brand"),
   /** Null → applies to all properties (default). */
   propertyId: text("property_id").references(() => propertiesTable.id),
   mealType: mealTypeEnum("meal_type").notNull(),
-  /** Cut-off time of day for placing orders, "HH:MM" 24h. */
-  cutoffTime: text("cutoff_time").notNull(),
+  /** @deprecated Legacy per-meal cut-off; resolution now uses foodCutoffsTable. */
+  cutoffTime: text("cutoff_time"),
   /** Planned service/delivery time of day, "HH:MM" 24h. */
   serviceTime: text("service_time"),
   /** Lead time used to compute expectedDeliveryAt for delay analytics. */
@@ -328,6 +468,25 @@ export const foodMealWindowsTable = pgTable("food_meal_windows", {
 });
 
 /**
+ * Single order cut-off time per brand (one value applies to ALL meals that day).
+ * Global default = null propertyId; a property row overrides it. Per-meal service
+ * times live on foodMealWindowsTable.
+ */
+export const foodCutoffsTable = pgTable("food_cutoffs", {
+  id: text("id").primaryKey(),
+  brand: text("brand").notNull(),
+  /** Null → applies to all properties of the brand (default). */
+  propertyId: text("property_id").references(() => propertiesTable.id),
+  /** Cut-off time of day for placing orders, "HH:MM" 24h. */
+  cutoffTime: text("cutoff_time").notNull(),
+  isActive: boolean("is_active").default(true).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => ({
+  brandPropIdx: uniqueIndex("idx_food_cutoffs_brand_prop").on(t.brand, t.propertyId),
+}));
+
+/**
  * Dispatch trip / manifest (Persona st.24). One trip groups many orders carried
  * on a single van; orders link via foodOrders.dispatchId. Captures van number,
  * driver name+mobile, and estimated arrival time the Unit Lead sees.
@@ -336,9 +495,11 @@ export const foodDispatchesTable = pgTable("food_dispatches", {
   id: text("id").primaryKey(),
   dispatchNumber: text("dispatch_number").notNull().unique(),
   kitchenId: text("kitchen_id").references(() => kitchensTable.id),
+  /** @deprecated column name kept; now references agencies.id. */
   deliveryPartnerId: text("delivery_partner_id").references(
-    () => deliveryPartnersTable.id,
+    () => agenciesTable.id,
   ),
+  vehicleId: text("vehicle_id").references(() => agencyVehiclesTable.id),
   vehicleNumber: text("vehicle_number"),
   driverName: text("driver_name"),
   driverPhone: text("driver_phone"),
@@ -365,7 +526,7 @@ export const foodOrderBatchesTable = pgTable("food_order_batches", {
   unitLeadId: text("unit_lead_id")
     .notNull()
     .references(() => usersTable.id),
-  brand: foodBrandEnum("brand").notNull(),
+  brand: text("brand").notNull(),
   serviceDate: timestamp("service_date").notNull(),
   residentsCount: integer("residents_count").notNull(),
   notes: text("notes"),
@@ -387,7 +548,7 @@ export const foodOrdersTable = pgTable("food_orders", {
   propertyId: text("property_id")
     .notNull()
     .references(() => propertiesTable.id),
-  brand: foodBrandEnum("brand").notNull(),
+  brand: text("brand").notNull(),
   mealType: mealTypeEnum("meal_type").notNull(),
   /** Unit Lead who placed the order (PRD §4.1). */
   unitLeadId: text("unit_lead_id")
@@ -402,9 +563,11 @@ export const foodOrdersTable = pgTable("food_orders", {
   notes: text("notes"),
 
   // ── Dispatch (PRD §7.5) ──
+  /** @deprecated column name kept; now references agencies.id. */
   deliveryPartnerId: text("delivery_partner_id").references(
-    () => deliveryPartnersTable.id,
+    () => agenciesTable.id,
   ),
+  vehicleId: text("vehicle_id").references(() => agencyVehiclesTable.id),
   dispatchedById: text("dispatched_by_id").references(() => usersTable.id),
   dispatchStartedAt: timestamp("dispatch_started_at"),
   dispatchedAt: timestamp("dispatched_at"),
@@ -456,6 +619,8 @@ export const foodOrderItemsTable = pgTable("food_order_items", {
     .references(() => dishesTable.id),
   unit: measurementUnitEnum("unit").notNull(),
   orderedQty: numeric("ordered_qty", { precision: 12, scale: 3 }).notNull(),
+  /** Per-item head count the unit lead entered (default = order-level persons). */
+  personsCount: integer("persons_count"),
   /**
    * Quantity the kitchen actually prepared (PRD §7.5 Dispatch shows prepared
    * qty). May differ from orderedQty; defaults to orderedQty at dispatch time.
@@ -497,7 +662,7 @@ export const foodMenuSharesTable = pgTable("food_menu_shares", {
   propertyId: text("property_id")
     .notNull()
     .references(() => propertiesTable.id),
-  brand: foodBrandEnum("brand").notNull(),
+  brand: text("brand").notNull(),
   mealType: mealTypeEnum("meal_type"),
   menuDate: timestamp("menu_date"),
   channel: foodMenuShareChannelEnum("channel").notNull(),
@@ -521,6 +686,9 @@ export type Dish = typeof dishesTable.$inferSelect;
 export type FoodMenuRotation = typeof foodMenuRotationTable.$inferSelect;
 export type PerResidentRule = typeof perResidentRuleTable.$inferSelect;
 export type DeliveryPartner = typeof deliveryPartnersTable.$inferSelect;
+export type Agency = typeof agenciesTable.$inferSelect;
+export type AgencyLocation = typeof agencyLocationsTable.$inferSelect;
+export type AgencyVehicle = typeof agencyVehiclesTable.$inferSelect;
 export type FoodOrder = typeof foodOrdersTable.$inferSelect;
 export type FoodOrderItem = typeof foodOrderItemsTable.$inferSelect;
 export type FoodOrderEvent = typeof foodOrderEventsTable.$inferSelect;
@@ -529,7 +697,13 @@ export type FoodDispatch = typeof foodDispatchesTable.$inferSelect;
 export type FoodOrderBatch = typeof foodOrderBatchesTable.$inferSelect;
 export type FoodMealConfig = typeof foodMealConfigTable.$inferSelect;
 export type FoodMealWindow = typeof foodMealWindowsTable.$inferSelect;
+export type FoodCutoffRow = typeof foodCutoffsTable.$inferSelect;
+export type RawMaterial = typeof rawMaterialsTable.$inferSelect;
+export type DishIngredient = typeof dishIngredientsTable.$inferSelect;
+export type MenuCompositionRule = typeof menuCompositionRuleTable.$inferSelect;
+export type MenuCompositionSlot = typeof menuCompositionSlotTable.$inferSelect;
 export type FoodMenuShare = typeof foodMenuSharesTable.$inferSelect;
+export type FoodBrandRow = typeof foodBrandsTable.$inferSelect;
 
 export type NewFoodOrder = typeof foodOrdersTable.$inferInsert;
 export type NewFoodOrderItem = typeof foodOrderItemsTable.$inferInsert;

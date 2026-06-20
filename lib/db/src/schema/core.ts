@@ -156,6 +156,13 @@ export const propertiesTable = pgTable("properties", {
    * is enforced at the application layer (see food.ts clustersTable).
    */
   clusterId: text("cluster_id"),
+  /**
+   * Food-ops links (hierarchy City → Kitchen → Property; property → one brand).
+   * Plain text / no FK — same core→food decoupling as `clusterId`; integrity is
+   * enforced at the app layer. `brand` is a food_brands.code; `kitchenId` a kitchens.id.
+   */
+  brand: text("brand"),
+  kitchenId: text("kitchen_id"),
   phone: text("phone"),
   email: text("email"),
   amenities: json("amenities").$type<string[]>().default([]).notNull(),

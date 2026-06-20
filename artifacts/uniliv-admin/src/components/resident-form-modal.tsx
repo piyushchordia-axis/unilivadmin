@@ -13,6 +13,7 @@ import {
 } from "@workspace/api-client-react";
 import { FormModal } from "@/components/ui/form-modal";
 import { Input } from "@/components/ui/input";
+import { ControlledDatePicker } from "@/components/ui/date-picker";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -213,7 +214,7 @@ export function ResidentFormModal({ open, onOpenChange }: ResidentFormModalProps
             </div>
             <div>
               <Label>Date of Birth</Label>
-              <Input type="date" {...form1.register("dob")} />
+              <ControlledDatePicker control={form1.control} name="dob" />
             </div>
             <div>
               <Label>Gender</Label>
@@ -308,7 +309,7 @@ export function ResidentFormModal({ open, onOpenChange }: ResidentFormModalProps
           <div className="grid grid-cols-2 gap-3">
             <div>
               <Label>Check-in Date *</Label>
-              <Input type="date" {...form2.register("checkInDate")} />
+              <ControlledDatePicker control={form2.control} name="checkInDate" />
               {form2.formState.errors.checkInDate && <p className="text-xs text-destructive">{form2.formState.errors.checkInDate.message}</p>}
             </div>
             <div>

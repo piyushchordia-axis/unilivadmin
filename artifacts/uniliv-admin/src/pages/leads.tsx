@@ -10,6 +10,7 @@ import { DataTable } from "@/components/data-table";
 import { FormModal } from "@/components/ui/form-modal";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { DatePicker, DateTimePicker, ControlledDatePicker } from "@/components/ui/date-picker";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
@@ -201,7 +202,7 @@ export default function Leads() {
             <div><Label>Budget min</Label><Input type="number" {...form.register("budgetMin")} /></div>
             <div><Label>Budget max</Label><Input type="number" {...form.register("budgetMax")} /></div>
           </div>
-          <div><Label>Move-in date</Label><Input type="date" {...form.register("moveInDate")} /></div>
+          <div><Label>Move-in date</Label><ControlledDatePicker control={form.control} name="moveInDate" /></div>
           <div><Label>Assign to</Label>
             <Select value={form.watch("assignedTo") || ""} onValueChange={(v) => form.setValue("assignedTo", v)}><SelectTrigger><SelectValue placeholder="Auto-assign" /></SelectTrigger><SelectContent>{users.map((u: any) => <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>)}</SelectContent></Select>
           </div>
@@ -327,7 +328,7 @@ function ScheduleVisitDialog({ id, onClose, onDone }: any) {
         toast({ title: "Visit scheduled — confirmation SMS queued" }); onClose(); onDone();
       } catch (e: any) { toast({ title: "Error", description: e.message, variant: "destructive" }); }
     }}>
-      <Label>Visit date &amp; time</Label><Input type="datetime-local" value={dt} onChange={(e) => setDt(e.target.value)} />
+      <Label>Visit date &amp; time</Label><DateTimePicker value={dt} onChange={setDt} />
     </FormModal>
   );
 }
@@ -369,7 +370,7 @@ function FollowUpDialog({ id, onClose, onDone }: any) {
         toast({ title: "Follow-up set" }); onClose(); onDone();
       } catch (e: any) { toast({ title: "Error", description: e.message, variant: "destructive" }); }
     }}>
-      <div className="space-y-3"><div><Label>When</Label><Input type="datetime-local" value={dt} onChange={(e) => setDt(e.target.value)} /></div><div><Label>Reminder note</Label><Textarea rows={3} value={note} onChange={(e) => setNote(e.target.value)} /></div></div>
+      <div className="space-y-3"><div><Label>When</Label><DateTimePicker value={dt} onChange={setDt} /></div><div><Label>Reminder note</Label><Textarea rows={3} value={note} onChange={(e) => setNote(e.target.value)} /></div></div>
     </FormModal>
   );
 }
@@ -412,7 +413,7 @@ function ConvertDialog({ lead, properties, onClose, onDone }: any) {
           <Select value={planType} onValueChange={setPlanType}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{["MONTHLY", "QUARTERLY", "ANNUAL"].map((p) => <SelectItem key={p} value={p}>{p}</SelectItem>)}</SelectContent></Select>
         </div>
         <div className="grid grid-cols-2 gap-3"><div><Label>Monthly rent</Label><Input type="number" value={monthlyRent} onChange={(e) => setMonthlyRent(Number(e.target.value))} /></div><div><Label>Deposit</Label><Input type="number" value={depositAmount} onChange={(e) => setDepositAmount(Number(e.target.value))} /></div></div>
-        <div><Label>Check-in date</Label><Input type="date" value={checkInDate} onChange={(e) => setCheckInDate(e.target.value)} /></div>
+        <div><Label>Check-in date</Label><DatePicker value={checkInDate} onChange={setCheckInDate} /></div>
       </div>
     </FormModal>
   );

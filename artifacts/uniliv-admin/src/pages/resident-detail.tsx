@@ -27,6 +27,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { DatePicker } from "@/components/ui/date-picker";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { UserAvatar } from "@/components/ui/user-avatar";
@@ -776,7 +777,7 @@ function AddLedgerModal({ open, onOpenChange, residentId }: { open: boolean; onO
         </div>
         <div>
           <Label>Due Date</Label>
-          <Input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
+          <DatePicker value={dueDate} onChange={setDueDate} />
         </div>
       </div>
     </FormModal>

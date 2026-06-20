@@ -7,6 +7,7 @@ import { Plus, Trash2, Settings2, Check, X, Banknote, Receipt, Wallet, AlertCirc
 import { FormModal } from "@/components/ui/form-modal";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Input } from "@/components/ui/input";
+import { DatePicker } from "@/components/ui/date-picker";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -220,7 +221,7 @@ function ExpensesTab() {
             </div>
             <div>
               <Label>Date *</Label>
-              <Input type="date" value={form.expenseDate} onChange={e => setForm({...form, expenseDate: e.target.value})} />
+              <DatePicker value={form.expenseDate} onChange={v => setForm({...form, expenseDate: v})} />
             </div>
           </div>
           <div>

@@ -15,6 +15,7 @@ import {
 } from "@workspace/api-client-react";
 import { FormModal } from "@/components/ui/form-modal";
 import { Input } from "@/components/ui/input";
+import { ControlledDatePicker } from "@/components/ui/date-picker";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -95,6 +96,7 @@ export function BookingFormModal({
 
   const {
     register,
+    control,
     handleSubmit,
     reset,
     watch,
@@ -277,10 +279,10 @@ export function BookingFormModal({
         <div className="grid grid-cols-2 gap-3">
           <div>
             <Label>Check-in *</Label>
-            <Input
-              type="date"
+            <ControlledDatePicker
+              control={control}
+              name="checkInDate"
               data-testid="input-booking-checkin"
-              {...register("checkInDate")}
             />
             {errors.checkInDate && (
               <p className="text-xs text-destructive">{errors.checkInDate.message}</p>
@@ -288,10 +290,10 @@ export function BookingFormModal({
           </div>
           <div>
             <Label>Check-out *</Label>
-            <Input
-              type="date"
+            <ControlledDatePicker
+              control={control}
+              name="checkOutDate"
               data-testid="input-booking-checkout"
-              {...register("checkOutDate")}
             />
             {errors.checkOutDate && (
               <p className="text-xs text-destructive">{errors.checkOutDate.message}</p>

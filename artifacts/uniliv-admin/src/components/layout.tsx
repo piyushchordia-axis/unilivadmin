@@ -8,7 +8,8 @@ import {
   PackageCheck, Boxes, ChefHat, CalendarDays, TrendingUp, MapPin,
   BookOpen, CreditCard, Shield, Settings, LogOut, Search, Menu, BarChart3,
   Repeat, BellRing, Landmark, Receipt, Wrench, Zap, ClipboardCheck, Radio, Wallet,
-  UtensilsCrossed, ListOrdered, FilePlus2, Soup, Send, CheckCircle2, Trash2, SlidersHorizontal
+  UtensilsCrossed, ListOrdered, FilePlus2, Soup, Send, CheckCircle2, Trash2, SlidersHorizontal,
+  Network, Home
 } from "lucide-react"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
@@ -54,6 +55,8 @@ const navGroups: Array<{ title: string; items: Array<{ title: string; href: stri
   ]},
   { title: "Food Ordering", items: [
     { title: "Dashboard", href: "/food/dashboard", icon: UtensilsCrossed, module: "FOOD_DASHBOARD" },
+    { title: "My Properties", href: "/food/my-properties", icon: Home, module: "FOOD_DASHBOARD" },
+    { title: "Organization", href: "/food/organization", icon: Network, module: "FOOD_ORG" },
     { title: "All Orders", href: "/food/orders", icon: ListOrdered, module: "FOOD_ALL_ORDERS" },
     { title: "Place Order", href: "/food/place-order", icon: FilePlus2, module: "FOOD_PLACE_ORDER" },
     { title: "Active Guests", href: "/food/guests", icon: Users, module: "FOOD_DASHBOARD" },
@@ -125,14 +128,14 @@ export function Layout({ children }: { children: React.ReactNode }) {
     if (i.href === location || (i.href !== "/" && location.startsWith(i.href))) pageTitle = i.title;
   }));
 
-  React.useEffect(() => { document.title = `${pageTitle} | Uniliv Admin`; }, [pageTitle]);
+  React.useEffect(() => { document.title = `${pageTitle} | Uniliv`; }, [pageTitle]);
 
   return (
     <div className="flex h-screen bg-surface overflow-hidden">
       <div className="w-64 bg-sidebar text-sidebar-foreground flex flex-col h-full shrink-0 border-r border-sidebar shadow-xl z-20 hidden md:flex">
         <div className="p-5 flex items-center gap-3">
           <div className="w-8 h-8 rounded bg-accent flex items-center justify-center text-accent-foreground font-display font-bold text-lg shadow-sm">U</div>
-          <span className="font-display font-bold text-lg tracking-tight">Uniliv Admin</span>
+          <span className="font-display font-bold text-lg tracking-tight">Uniliv</span>
         </div>
         <div className="px-4 pb-4 border-b border-sidebar-foreground/10">
           <Select value={propertyId || "all"} onValueChange={(val) => setPropertyId(val === "all" ? null : val)}>

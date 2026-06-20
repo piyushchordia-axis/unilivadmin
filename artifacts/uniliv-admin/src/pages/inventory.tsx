@@ -12,6 +12,7 @@ import { StatCard } from "@/components/stat-card";
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { ControlledDatePicker } from "@/components/ui/date-picker";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
@@ -225,7 +226,7 @@ export default function Inventory() {
             </div>
             <div>
               <Label>Expiry Date</Label>
-              <Input type="date" {...form.register("expiryDate")} />
+              <ControlledDatePicker control={form.control} name="expiryDate" />
             </div>
           </div>
 

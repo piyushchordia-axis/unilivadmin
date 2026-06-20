@@ -11,6 +11,7 @@ import { StatCard } from "@/components/stat-card";
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { DatePicker } from "@/components/ui/date-picker";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -85,7 +86,8 @@ export default function FoodDispatch() {
   const [tripOpen, setTripOpen] = React.useState(false);
   const [tripForm, setTripForm] = React.useState({
     kitchenId: "",
-    deliveryPartnerId: "",
+    deliveryPartnerId: "", // agency id
+    vehicleId: "",
     vehicleNumber: "",
     driverName: "",
     driverPhone: "",
@@ -102,6 +104,8 @@ export default function FoodDispatch() {
   });
   const properties = lookups?.properties ?? [];
   const partners = lookups?.deliveryPartners ?? [];
+  const agencies = lookups?.agencies ?? [];
+  const tripAgency = agencies.find((a) => a.id === tripForm.deliveryPartnerId);
   const propName = (id?: string | null) =>
     id ? properties.find((p) => p.id === id)?.name ?? "—" : "—";
   const partnerName = (id?: string | null) =>
@@ -204,7 +208,7 @@ export default function FoodDispatch() {
         description: trip?.dispatchNumber ? `Trip ${trip.dispatchNumber} is loading` : undefined,
       });
       setSelected(new Set());
-      setTripForm({ kitchenId: "", deliveryPartnerId: "", vehicleNumber: "", driverName: "", driverPhone: "", etaMinutes: "" });
+      setTripForm({ kitchenId: "", deliveryPartnerId: "", vehicleId: "", vehicleNumber: "", driverName: "", driverPhone: "", etaMinutes: "" });
       setTripOpen(false);
       invalidate();
     },
@@ -239,14 +243,15 @@ export default function FoodDispatch() {
       return;
     }
     if (!tripForm.deliveryPartnerId) {
-      toast({ title: "Choose a delivery partner", variant: "destructive" });
+      toast({ title: "Choose an agency", variant: "destructive" });
       return;
     }
     const eta = tripForm.etaMinutes.trim();
     createTrip.mutate({
       orderIds: [...selected],
       kitchenId: tripForm.kitchenId || undefined,
-      deliveryPartnerId: tripForm.deliveryPartnerId,
+      agencyId: tripForm.deliveryPartnerId,
+      vehicleId: tripForm.vehicleId || undefined,
       vehicleNumber: tripForm.vehicleNumber.trim() || undefined,
       driverName: tripForm.driverName.trim() || undefined,
       driverPhone: tripForm.driverPhone.trim() || undefined,
@@ -312,7 +317,7 @@ export default function FoodDispatch() {
             {MEAL_TYPES.map((m) => (<SelectItem key={m} value={m}>{MEAL_LABEL[m]}</SelectItem>))}
           </SelectContent>
         </Select>
-        <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="w-44" />
+        <DatePicker value={date} onChange={setDate} className="w-44" />
         {date && (
           <Button variant="ghost" size="sm" onClick={() => setDate("")} className="text-muted-foreground">
             <X className="w-4 h-4 mr-1" /> Clear date
@@ -608,19 +613,41 @@ export default function FoodDispatch() {
 
               <div className="space-y-1.5">
                 <Label className="flex items-center gap-1.5">
-                  <Truck className="w-3.5 h-3.5 text-muted-foreground" /> Delivery partner
+                  <Truck className="w-3.5 h-3.5 text-muted-foreground" /> Agency
                 </Label>
                 <Select
                   value={tripForm.deliveryPartnerId}
-                  onValueChange={(v) => setTripForm((f) => ({ ...f, deliveryPartnerId: v }))}
+                  onValueChange={(v) => setTripForm((f) => ({ ...f, deliveryPartnerId: v, vehicleId: "", vehicleNumber: "" }))}
                 >
-                  <SelectTrigger><SelectValue placeholder="Select partner" /></SelectTrigger>
+                  <SelectTrigger><SelectValue placeholder="Select agency" /></SelectTrigger>
                   <SelectContent>
-                    {partners.length === 0 ? (
-                      <div className="px-2 py-1.5 text-sm text-muted-foreground">No partners available</div>
+                    {agencies.length === 0 ? (
+                      <div className="px-2 py-1.5 text-sm text-muted-foreground">No agencies available</div>
                     ) : (
-                      partners.map((p) => (<SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>))
+                      agencies.map((a) => (<SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>))
                     )}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label className="flex items-center gap-1.5">
+                  <Truck className="w-3.5 h-3.5 text-muted-foreground" /> Vehicle
+                </Label>
+                <Select
+                  value={tripForm.vehicleId || "__none"}
+                  onValueChange={(v) => {
+                    const veh = tripAgency?.vehicles.find((x) => x.id === v);
+                    setTripForm((f) => ({ ...f, vehicleId: v === "__none" ? "" : v, vehicleNumber: veh?.vehicleNumber ?? f.vehicleNumber }));
+                  }}
+                  disabled={!tripAgency}
+                >
+                  <SelectTrigger><SelectValue placeholder={tripAgency ? "Select vehicle" : "Pick an agency first"} /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none">— No vehicle —</SelectItem>
+                    {(tripAgency?.vehicles ?? []).map((veh) => (
+                      <SelectItem key={veh.id} value={veh.id}>{veh.vehicleNumber} · {veh.vehicleType}</SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>

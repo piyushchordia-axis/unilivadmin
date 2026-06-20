@@ -8,6 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { DatePicker } from "@/components/ui/date-picker";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { FormModal } from "@/components/ui/form-modal";
@@ -267,8 +268,8 @@ function RateContractsTab({ vendorId }: { vendorId: string }) {
           <div className="grid grid-cols-2 gap-3">
             <div><Label>Unit *</Label><Input value={form.unit} onChange={(e) => setForm({ ...form, unit: e.target.value })} /></div>
             <div><Label>Rate *</Label><Input type="number" step="0.01" value={form.rate} onChange={(e) => setForm({ ...form, rate: e.target.value })} /></div>
-            <div><Label>Valid From *</Label><Input type="date" value={form.validFrom} onChange={(e) => setForm({ ...form, validFrom: e.target.value })} /></div>
-            <div><Label>Valid To *</Label><Input type="date" value={form.validTo} onChange={(e) => setForm({ ...form, validTo: e.target.value })} /></div>
+            <div><Label>Valid From *</Label><DatePicker value={form.validFrom} onChange={(v) => setForm({ ...form, validFrom: v })} /></div>
+            <div><Label>Valid To *</Label><DatePicker value={form.validTo} onChange={(v) => setForm({ ...form, validTo: v })} /></div>
           </div>
           <div><Label>Notes</Label><Textarea rows={2} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} /></div>
         </div>
@@ -406,7 +407,7 @@ function ComplianceTab({ vendorId }: { vendorId: string }) {
             </Select>
           </div>
           <div><Label>File URL *</Label><Input value={form.fileUrl} onChange={(e) => setForm({ ...form, fileUrl: e.target.value })} placeholder="https://..." /></div>
-          <div><Label>Expiry Date</Label><Input type="date" value={form.expiryDate} onChange={(e) => setForm({ ...form, expiryDate: e.target.value })} /></div>
+          <div><Label>Expiry Date</Label><DatePicker value={form.expiryDate} onChange={(v) => setForm({ ...form, expiryDate: v })} /></div>
           <div><Label>Notes</Label><Textarea rows={2} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} /></div>
         </div>
       </FormModal>

@@ -8,6 +8,7 @@ import { PageHeader } from "@/components/page-header";
 import { StatCard } from "@/components/stat-card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { DatePicker, DateTimePicker } from "@/components/ui/date-picker";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent } from "@/components/ui/card";
@@ -112,7 +113,7 @@ export default function ResidentAttendancePage() {
           </div>
 
           <Card><CardContent className="p-4 flex flex-wrap items-end gap-3">
-            <div><Label>Date</Label><Input type="date" value={date} onChange={(e) => setDate(e.target.value)} data-testid="input-att-date" /></div>
+            <div><Label>Date</Label><DatePicker value={date} onChange={setDate} data-testid="input-att-date" /></div>
             {!propertyId && <div><Label>Property</Label>
               <Select value={propId} onValueChange={setLocalPropId}>
                 <SelectTrigger className="w-[220px]" data-testid="select-att-property"><SelectValue /></SelectTrigger>
@@ -216,8 +217,8 @@ export default function ResidentAttendancePage() {
           <div><Label>Reason *</Label><Input value={opForm.reason || ""} onChange={(e) => setOpForm({ ...opForm, reason: e.target.value })} data-testid="input-op-reason" /></div>
           <div><Label>Destination</Label><Input value={opForm.destination || ""} onChange={(e) => setOpForm({ ...opForm, destination: e.target.value })} /></div>
           <div className="grid grid-cols-2 gap-3">
-            <div><Label>Leave on *</Label><Input type="datetime-local" value={opForm.leaveOn || ""} onChange={(e) => setOpForm({ ...opForm, leaveOn: e.target.value })} /></div>
-            <div><Label>Expected return *</Label><Input type="datetime-local" value={opForm.expectedReturn || ""} onChange={(e) => setOpForm({ ...opForm, expectedReturn: e.target.value })} /></div>
+            <div><Label>Leave on *</Label><DateTimePicker value={opForm.leaveOn || ""} onChange={(v) => setOpForm({ ...opForm, leaveOn: v })} /></div>
+            <div><Label>Expected return *</Label><DateTimePicker value={opForm.expectedReturn || ""} onChange={(v) => setOpForm({ ...opForm, expectedReturn: v })} /></div>
           </div>
         </div>
       </FormModal>

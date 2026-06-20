@@ -2,8 +2,8 @@ import * as React from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Plus, Pencil, Trash2, UtensilsCrossed, CalendarRange, Scale, Truck,
-  Network, ShieldCheck, Leaf, Beef, Building2, MapPin, Layers, Globe,
-  ChefHat, ListChecks, Clock, Phone,
+  Network, ShieldCheck, Building2, MapPin, Layers, Globe,
+  ChefHat, ListChecks, Clock, Phone, Search, Boxes, Sparkles, CheckCircle2, AlertTriangle, SlidersHorizontal,
 } from "lucide-react";
 import { DataTable } from "@/components/data-table";
 import { PageHeader } from "@/components/page-header";
@@ -20,16 +20,20 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
+import { apiDownload } from "@/lib/api-fetch";
+import { Download } from "lucide-react";
 import {
-  foodApi, foodKeys, MEAL_TYPES, BRANDS, MEAL_LABEL, DAY_LABEL, fmtQty,
-  type Dish, type MenuRotationRow, type PerResidentRule, type DeliveryPartner,
+  foodApi, foodKeys, MEAL_TYPES, BRANDS, MEAL_LABEL, DAY_LABEL, fmtQty, PREPARATIONS, PREPARATION_LABEL,
+  type Dish, type MenuRotationRow, type PerResidentRule,
+  type Agency, type AgencyVehicle, type AgencyLocation,
   type Zone, type City, type Cluster, type UserScope, type FoodUser, type FoodLookups,
-  type FoodBrand, type MealType, type Kitchen, type MealConfig, type MealWindow,
+  type FoodBrand, type MealType, type Kitchen, type MealConfig, type MealWindow, type FoodCutoffConfig,
+  type RawMaterial, type CompositionRule,
 } from "@/lib/food-api";
 
 // ─── Enums (from spec) ────────────────────────────────────────────────────────
 const DISH_COMPONENTS = [
-  "HOT_FOOD", "VEG", "DAL", "RICE", "BREAD", "SALAD", "CURD_RAITA", "DESSERT",
+  "HOT_FOOD", "SABZI", "DAL", "RICE", "BREAD", "SALAD", "CURD_RAITA", "DESSERT",
   "PAPAD_PICKLE", "CHUTNEY", "PICKLE", "FRUITS", "BAKERY", "BEVERAGE", "SNACK", "MILK", "OTHER",
 ];
 const UNITS = ["G", "KG", "ML", "LITRE", "PCS", "PLATE", "SERVING"];
@@ -95,20 +99,24 @@ export default function FoodSettings() {
       <Tabs defaultValue="dishes" className="space-y-4">
         <TabsList className="flex-wrap h-auto">
           <TabsTrigger value="dishes"><UtensilsCrossed className="h-4 w-4 mr-2" /> Dishes</TabsTrigger>
+          <TabsTrigger value="raw-materials"><Boxes className="h-4 w-4 mr-2" /> Raw Materials</TabsTrigger>
           <TabsTrigger value="rotation"><CalendarRange className="h-4 w-4 mr-2" /> Menu Rotation</TabsTrigger>
+          <TabsTrigger value="composition"><SlidersHorizontal className="h-4 w-4 mr-2" /> Menu Rules</TabsTrigger>
           <TabsTrigger value="rules"><Scale className="h-4 w-4 mr-2" /> Per-Resident Rules</TabsTrigger>
-          <TabsTrigger value="partners"><Truck className="h-4 w-4 mr-2" /> Delivery Partners</TabsTrigger>
+          <TabsTrigger value="partners"><Truck className="h-4 w-4 mr-2" /> Agencies</TabsTrigger>
           <TabsTrigger value="kitchens"><ChefHat className="h-4 w-4 mr-2" /> Kitchens</TabsTrigger>
           <TabsTrigger value="meals"><ListChecks className="h-4 w-4 mr-2" /> Meal Types</TabsTrigger>
-          <TabsTrigger value="cutoffs"><Clock className="h-4 w-4 mr-2" /> Cut-off Windows</TabsTrigger>
+          <TabsTrigger value="cutoffs"><Clock className="h-4 w-4 mr-2" /> Cut-offs & Service</TabsTrigger>
           <TabsTrigger value="hierarchy"><Network className="h-4 w-4 mr-2" /> Hierarchy</TabsTrigger>
           <TabsTrigger value="users"><ShieldCheck className="h-4 w-4 mr-2" /> Users & Scopes</TabsTrigger>
         </TabsList>
 
         <TabsContent value="dishes"><DishesTab /></TabsContent>
+        <TabsContent value="raw-materials"><RawMaterialsTab /></TabsContent>
         <TabsContent value="rotation"><RotationTab /></TabsContent>
-        <TabsContent value="rules"><RulesTab properties={properties} propName={propName} /></TabsContent>
-        <TabsContent value="partners"><PartnersTab /></TabsContent>
+        <TabsContent value="composition"><CompositionRulesTab /></TabsContent>
+        <TabsContent value="rules"><RulesTab /></TabsContent>
+        <TabsContent value="partners"><AgenciesTab /></TabsContent>
         <TabsContent value="kitchens"><KitchensTab /></TabsContent>
         <TabsContent value="meals"><MealTypesTab /></TabsContent>
         <TabsContent value="cutoffs"><CutoffWindowsTab properties={properties} propName={propName} /></TabsContent>
@@ -122,8 +130,15 @@ export default function FoodSettings() {
 // ════════════════════════════════════════════════════════════════════════════
 // 1) DISHES
 // ════════════════════════════════════════════════════════════════════════════
-type DishForm = { name: string; component: string; unit: string; isVeg: boolean };
-const emptyDish: DishForm = { name: "", component: "HOT_FOOD", unit: "SERVING", isVeg: true };
+type IngredientRow = { rawMaterialId: string; quantity: string; unit: string };
+type DishForm = { name: string; component: string; unit: string; preparations: string[]; brands: string[]; ingredients: IngredientRow[] };
+const emptyDish: DishForm = { name: "", component: "HOT_FOOD", unit: "SERVING", preparations: ["VEG"], brands: [], ingredients: [] };
+
+// Live, admin-managed brand list (active only).
+function useActiveBrands(): { code: string; name: string }[] {
+  const { data } = useQuery({ queryKey: foodKeys.brands(), queryFn: () => foodApi.listBrands() });
+  return (data ?? []).filter((b) => b.isActive).map((b) => ({ code: b.code, name: b.name }));
+}
 
 function DishesTab() {
   const qc = useQueryClient();
@@ -132,10 +147,13 @@ function DishesTab() {
   const [editing, setEditing] = React.useState<Dish | null>(null);
   const [delTarget, setDelTarget] = React.useState<Dish | null>(null);
   const [form, setForm] = React.useState<DishForm>(emptyDish);
+  const [search, setSearch] = React.useState("");
 
+  // Newest dishes first so a just-added dish appears on top.
+  const dishParams = { search: search.trim() || undefined, sort: "newest" as const };
   const { data: dishes = [], isLoading } = useQuery<Dish[]>({
-    queryKey: foodKeys.dishes({}),
-    queryFn: () => foodApi.listDishes(),
+    queryKey: foodKeys.dishes(dishParams),
+    queryFn: () => foodApi.listDishes(dishParams),
   });
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ["food", "dishes"] });
@@ -157,24 +175,44 @@ function DishesTab() {
     onError: (e: any) => toast({ title: e?.message || "Failed", variant: "destructive" }),
   });
 
+  const brandOptions = useActiveBrands();
+  const { data: rawMaterials = [] } = useQuery<RawMaterial[]>({ queryKey: foodKeys.rawMaterials(), queryFn: () => foodApi.listRawMaterials() });
   const openCreate = () => { setEditing(null); setForm(emptyDish); setModalOpen(true); };
-  const openEdit = (d: Dish) => {
+  const openEdit = async (d: Dish) => {
     setEditing(d);
-    setForm({ name: d.name, component: d.component, unit: d.unit, isVeg: d.isVeg });
+    setForm({ name: d.name, component: d.component, unit: d.unit, preparations: d.preparations ?? [], brands: d.brands ?? [], ingredients: [] });
     setModalOpen(true);
+    try {
+      const full = await foodApi.getDish(d.id);
+      setForm((f) => ({ ...f, ingredients: (full.ingredients ?? []).map((i) => ({ rawMaterialId: i.rawMaterialId, quantity: i.quantity != null ? String(i.quantity) : "", unit: i.unit ?? "" })) }));
+    } catch { /* leave ingredients empty */ }
   };
+  const toggleDishBrand = (code: string) =>
+    setForm((f) => ({ ...f, brands: f.brands.includes(code) ? f.brands.filter((b) => b !== code) : [...f.brands, code] }));
+  const togglePrep = (p: string) =>
+    setForm((f) => ({ ...f, preparations: f.preparations.includes(p) ? f.preparations.filter((x) => x !== p) : [...f.preparations, p] }));
+  const addIngredient = () => setForm((f) => ({ ...f, ingredients: [...f.ingredients, { rawMaterialId: "", quantity: "", unit: "" }] }));
+  const updateIngredient = (i: number, patch: Partial<IngredientRow>) => setForm((f) => ({ ...f, ingredients: f.ingredients.map((r, j) => j === i ? { ...r, ...patch } : r) }));
+  const removeIngredient = (i: number) => setForm((f) => ({ ...f, ingredients: f.ingredients.filter((_, j) => j !== i) }));
   const submit = () => {
     if (!form.name.trim()) { toast({ title: "Name is required", variant: "destructive" }); return; }
-    saveMut.mutate(form);
+    saveMut.mutate({ ...form, ingredients: form.ingredients.filter((i) => i.rawMaterialId) });
   };
 
   const cols = [
     { accessorKey: "name", header: "Dish", cell: ({ row }: any) => <span className="font-medium text-primary">{row.original.name}</span> },
     { accessorKey: "component", header: "Component", cell: ({ row }: any) => <Badge variant="secondary" className="text-[10px] uppercase tracking-wider">{labelize(row.original.component)}</Badge> },
     { accessorKey: "unit", header: "Unit", cell: ({ row }: any) => <span className="text-muted-foreground text-xs uppercase">{row.original.unit}</span> },
-    { accessorKey: "isVeg", header: "Type", cell: ({ row }: any) => row.original.isVeg
-        ? <span className="inline-flex items-center gap-1 text-success text-xs font-medium"><Leaf className="h-3.5 w-3.5" /> Veg</span>
-        : <span className="inline-flex items-center gap-1 text-destructive text-xs font-medium"><Beef className="h-3.5 w-3.5" /> Non-veg</span> },
+    { accessorKey: "brands", header: "Brands", cell: ({ row }: any) => {
+        const bs: string[] = row.original.brands ?? [];
+        return bs.length ? <div className="flex flex-wrap gap-1">{bs.map((b) => <Badge key={b} variant="outline" className="text-[10px]">{b}</Badge>)}</div> : <span className="text-muted-foreground text-xs">—</span>;
+      } },
+    { accessorKey: "preparations", header: "Preparation", cell: ({ row }: any) => {
+        const ps: string[] = row.original.preparations ?? [];
+        return ps.length ? <div className="flex flex-wrap gap-1">{ps.map((p) => (
+          <Badge key={p} variant="outline" className={`text-[10px] ${p === "NON_VEG" ? "text-destructive" : p === "JAIN" ? "text-amber-600" : "text-success"}`}>{PREPARATION_LABEL[p] ?? p}</Badge>
+        ))}</div> : <span className="text-muted-foreground text-xs">—</span>;
+      } },
     { accessorKey: "isActive", header: "Status", cell: ({ row }: any) => <Badge variant={row.original.isActive ? "success" : "secondary"} className="text-[10px]">{row.original.isActive ? "ACTIVE" : "INACTIVE"}</Badge> },
     { id: "actions", header: () => <div className="text-right">Actions</div>, cell: ({ row }: any) => <RowActions onEdit={() => openEdit(row.original)} onDelete={() => setDelTarget(row.original)} /> },
   ];
@@ -185,6 +223,10 @@ function DishesTab() {
         title="Dishes" description="Master catalogue of dishes used across menus and orders."
         action={<Button className="bg-accent hover:bg-accent/90 text-white" onClick={openCreate}><Plus className="h-4 w-4 mr-2" /> Add Dish</Button>}
       />
+      <div className="relative max-w-sm">
+        <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground pointer-events-none" />
+        <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search dishes…" className="pl-9" />
+      </div>
       <DataTable columns={cols as any} data={dishes} isLoading={isLoading} />
 
       <FormModal open={modalOpen} onOpenChange={setModalOpen} title={editing ? "Edit Dish" : "Add Dish"} onSave={submit} isSaving={saveMut.isPending} saveLabel={editing ? "Save Changes" : "Create Dish"}>
@@ -209,9 +251,128 @@ function DishesTab() {
               </Select>
             </div>
           </div>
-          <div className="flex items-center gap-2 border-t pt-3">
-            <Checkbox id="dish-veg" checked={form.isVeg} onCheckedChange={(v) => setForm({ ...form, isVeg: !!v })} />
-            <label htmlFor="dish-veg" className="text-sm">Vegetarian</label>
+          <div>
+            <Label>Brands</Label>
+            <p className="text-xs text-muted-foreground mb-2">Which brands can serve this dish.</p>
+            <div className="flex flex-wrap gap-2">
+              {brandOptions.length === 0 && <span className="text-xs text-muted-foreground">No brands defined yet.</span>}
+              {brandOptions.map((b) => (
+                <label key={b.code} className={`flex cursor-pointer items-center gap-2 rounded-md border px-2.5 py-1.5 text-sm ${form.brands.includes(b.code) ? "border-accent bg-accent/5" : "border-border"}`}>
+                  <Checkbox checked={form.brands.includes(b.code)} onCheckedChange={() => toggleDishBrand(b.code)} />
+                  {b.name}
+                </label>
+              ))}
+            </div>
+          </div>
+          <div className="border-t pt-3">
+            <Label>Preparation</Label>
+            <p className="text-xs text-muted-foreground mb-2">A dish can be tagged with several (e.g. Veg + Jain).</p>
+            <div className="flex flex-wrap gap-2">
+              {PREPARATIONS.map((p) => (
+                <label key={p} className={`flex cursor-pointer items-center gap-2 rounded-md border px-2.5 py-1.5 text-sm ${form.preparations.includes(p) ? "border-accent bg-accent/5" : "border-border"}`}>
+                  <Checkbox checked={form.preparations.includes(p)} onCheckedChange={() => togglePrep(p)} />
+                  {PREPARATION_LABEL[p] ?? p}
+                </label>
+              ))}
+            </div>
+          </div>
+          <div className="border-t pt-3">
+            <div className="flex items-center justify-between mb-2">
+              <div>
+                <Label>Ingredients</Label>
+                <p className="text-xs text-muted-foreground">Raw materials used (drives shared-ingredient menu warnings).</p>
+              </div>
+              <Button type="button" variant="outline" size="sm" onClick={addIngredient}><Plus className="h-3.5 w-3.5 mr-1" /> Add</Button>
+            </div>
+            {form.ingredients.length === 0 && <p className="text-xs text-muted-foreground">No ingredients added.</p>}
+            <div className="space-y-2">
+              {form.ingredients.map((ing, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <Select value={ing.rawMaterialId} onValueChange={(v) => updateIngredient(i, { rawMaterialId: v })}>
+                    <SelectTrigger className="flex-1"><SelectValue placeholder="Raw material" /></SelectTrigger>
+                    <SelectContent>{rawMaterials.filter((r) => r.isActive).map((r) => <SelectItem key={r.id} value={r.id}>{r.name}</SelectItem>)}</SelectContent>
+                  </Select>
+                  <Input value={ing.quantity} onChange={(e) => updateIngredient(i, { quantity: e.target.value })} placeholder="Qty" className="w-20 font-mono" />
+                  <Select value={ing.unit || "__none"} onValueChange={(v) => updateIngredient(i, { unit: v === "__none" ? "" : v })}>
+                    <SelectTrigger className="w-24"><SelectValue placeholder="Unit" /></SelectTrigger>
+                    <SelectContent><SelectItem value="__none">—</SelectItem>{UNITS.map((u) => <SelectItem key={u} value={u}>{u}</SelectItem>)}</SelectContent>
+                  </Select>
+                  <Button type="button" variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={() => removeIngredient(i)}><Trash2 className="h-3.5 w-3.5" /></Button>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </FormModal>
+
+      <ConfirmDelete open={!!delTarget} onOpenChange={(o) => !o && setDelTarget(null)} label={delTarget?.name ?? ""} onConfirm={() => delTarget && delMut.mutate(delTarget.id)} isDeleting={delMut.isPending} />
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// 1b) RAW MATERIALS (ingredients master)
+// ════════════════════════════════════════════════════════════════════════════
+type RawMaterialForm = { name: string; unit: string; isActive: boolean };
+const emptyRawMaterial: RawMaterialForm = { name: "", unit: "KG", isActive: true };
+
+function RawMaterialsTab() {
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  const [modalOpen, setModalOpen] = React.useState(false);
+  const [editing, setEditing] = React.useState<RawMaterial | null>(null);
+  const [delTarget, setDelTarget] = React.useState<RawMaterial | null>(null);
+  const [form, setForm] = React.useState<RawMaterialForm>(emptyRawMaterial);
+
+  const { data: rows = [], isLoading } = useQuery<RawMaterial[]>({ queryKey: foodKeys.rawMaterials(), queryFn: () => foodApi.listRawMaterials() });
+  const invalidate = () => qc.invalidateQueries({ queryKey: ["food", "raw-materials"] });
+
+  const saveMut = useMutation({
+    mutationFn: (v: RawMaterialForm) => editing ? foodApi.updateRawMaterial(editing.id, v) : foodApi.createRawMaterial(v),
+    onSuccess: () => { toast({ title: editing ? "Raw material updated" : "Raw material created" }); invalidate(); setModalOpen(false); },
+    onError: (e: any) => toast({ title: e?.message || "Failed", variant: "destructive" }),
+  });
+  const delMut = useMutation({
+    mutationFn: (id: string) => foodApi.deleteRawMaterial(id),
+    onSuccess: () => { toast({ title: "Raw material deleted" }); invalidate(); setDelTarget(null); },
+    onError: (e: any) => toast({ title: e?.message || "Failed", variant: "destructive" }),
+  });
+
+  const openCreate = () => { setEditing(null); setForm(emptyRawMaterial); setModalOpen(true); };
+  const openEdit = (r: RawMaterial) => { setEditing(r); setForm({ name: r.name, unit: r.unit, isActive: r.isActive }); setModalOpen(true); };
+  const submit = () => { if (!form.name.trim()) { toast({ title: "Name is required", variant: "destructive" }); return; } saveMut.mutate(form); };
+
+  const cols = [
+    { accessorKey: "name", header: "Raw Material", cell: ({ row }: any) => <span className="font-medium text-primary">{row.original.name}</span> },
+    { accessorKey: "unit", header: "Unit", cell: ({ row }: any) => <span className="text-muted-foreground text-xs uppercase">{row.original.unit}</span> },
+    { accessorKey: "isActive", header: "Status", cell: ({ row }: any) => <Badge variant={row.original.isActive ? "success" : "secondary"} className="text-[10px]">{row.original.isActive ? "ACTIVE" : "INACTIVE"}</Badge> },
+    { id: "actions", header: () => <div className="text-right">Actions</div>, cell: ({ row }: any) => <RowActions onEdit={() => openEdit(row.original)} onDelete={() => setDelTarget(row.original)} /> },
+  ];
+
+  return (
+    <div className="space-y-4">
+      <SectionHeader
+        title="Raw Materials" description="Ingredient master (Aloo, Pyaaz, Tomato, …) attached to dishes; powers shared-ingredient menu warnings."
+        action={<Button className="bg-accent hover:bg-accent/90 text-white" onClick={openCreate}><Plus className="h-4 w-4 mr-2" /> Add Raw Material</Button>}
+      />
+      <DataTable columns={cols as any} data={rows} isLoading={isLoading} />
+
+      <FormModal open={modalOpen} onOpenChange={setModalOpen} title={editing ? "Edit Raw Material" : "Add Raw Material"} onSave={submit} isSaving={saveMut.isPending} saveLabel={editing ? "Save Changes" : "Create"}>
+        <div className="space-y-4">
+          <div>
+            <Label>Name *</Label>
+            <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="e.g. Aloo" />
+          </div>
+          <div>
+            <Label>Default Unit</Label>
+            <Select value={form.unit} onValueChange={(v) => setForm({ ...form, unit: v })}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>{UNITS.map((u) => <SelectItem key={u} value={u}>{u}</SelectItem>)}</SelectContent>
+            </Select>
+          </div>
+          <div className="flex items-center justify-between border-t pt-3">
+            <Label>Active</Label>
+            <Switch checked={form.isActive} onCheckedChange={(v) => setForm({ ...form, isActive: v })} />
           </div>
         </div>
       </FormModal>
@@ -225,16 +386,17 @@ function DishesTab() {
 // 2) MENU ROTATION
 // ════════════════════════════════════════════════════════════════════════════
 type RotationForm = {
-  brand: FoodBrand; rotationWeek: number; dayOfWeek: number; mealType: MealType;
+  kitchenId: string; brand: FoodBrand; rotationWeek: number; dayOfWeek: number; mealType: MealType;
   dishId: string; slotLabel: string; sortOrder: number;
 };
 const emptyRotation: RotationForm = {
-  brand: "UNILIV", rotationWeek: 1, dayOfWeek: 1, mealType: "BREAKFAST", dishId: "", slotLabel: "", sortOrder: 0,
+  kitchenId: "", brand: "UNILIV", rotationWeek: 1, dayOfWeek: 1, mealType: "BREAKFAST", dishId: "", slotLabel: "", sortOrder: 0,
 };
 
 function RotationTab() {
   const qc = useQueryClient();
   const { toast } = useToast();
+  const [kitchen, setKitchen] = React.useState("ALL");
   const [brand, setBrand] = React.useState("ALL");
   const [week, setWeek] = React.useState("ALL");
   const [day, setDay] = React.useState("ALL");
@@ -243,20 +405,45 @@ function RotationTab() {
   const [editing, setEditing] = React.useState<MenuRotationRow | null>(null);
   const [delTarget, setDelTarget] = React.useState<MenuRotationRow | null>(null);
   const [form, setForm] = React.useState<RotationForm>(emptyRotation);
+  const [bulkDishIds, setBulkDishIds] = React.useState<string[]>([]); // create-mode multi-dish
 
-  const params: Record<string, unknown> = { brand, rotationWeek: week, dayOfWeek: day, mealType: meal };
+  const params: Record<string, unknown> = { kitchenId: kitchen, brand, rotationWeek: week, dayOfWeek: day, mealType: meal };
   const { data: rows = [], isLoading } = useQuery<MenuRotationRow[]>({
     queryKey: foodKeys.rotation(params),
     queryFn: () => foodApi.listRotation(params),
   });
   const { data: dishes = [] } = useQuery<Dish[]>({ queryKey: foodKeys.dishes({}), queryFn: () => foodApi.listDishes() });
+  const { data: kitchens = [] } = useQuery<Kitchen[]>({ queryKey: foodKeys.kitchens(), queryFn: () => foodApi.listKitchens() });
+  const brandOptions = useActiveBrands();
   const dishName = (id: string) => dishes.find((d) => d.id === id)?.name ?? id;
+  const kitchenName = (id: string | null) => kitchens.find((k) => k.id === id)?.name ?? id ?? "—";
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ["food", "menu-rotation"] });
 
   const saveMut = useMutation({
-    mutationFn: (v: RotationForm) => editing ? foodApi.updateRotation(editing.id, v) : foodApi.createRotation(v),
-    onSuccess: () => { toast({ title: editing ? "Rotation updated" : "Rotation added" }); invalidate(); setModalOpen(false); },
+    mutationFn: async (v: RotationForm) => {
+      const ids = bulkDishIds.length ? bulkDishIds : (v.dishId ? [v.dishId] : []);
+      // Edit replaces the whole slot — but PRESERVE each existing dish's own slotLabel/sortOrder
+      // (e.g. "Veg" vs "Veg 2"); only newly-added dishes get the form label + a tail order.
+      if (editing) {
+        const orig = new Map(rows
+          .filter((x) => x.kitchenId === v.kitchenId && x.brand === v.brand && x.rotationWeek === v.rotationWeek && x.dayOfWeek === v.dayOfWeek && x.mealType === v.mealType)
+          .map((x) => [x.dishId, { slotLabel: x.slotLabel, sortOrder: x.sortOrder }]));
+        let tail = Math.max(0, ...[...orig.values()].map((o) => o.sortOrder));
+        const items = ids.map((dishId) => {
+          const o = orig.get(dishId);
+          return o ? { dishId, slotLabel: o.slotLabel, sortOrder: o.sortOrder } : { dishId, slotLabel: v.slotLabel || null, sortOrder: ++tail };
+        });
+        return foodApi.replaceRotationSlot({ kitchenId: v.kitchenId, brand: v.brand, rotationWeek: v.rotationWeek, dayOfWeek: v.dayOfWeek, mealType: v.mealType, items });
+      }
+      const items = ids.map((dishId, i) => ({ dishId, slotLabel: v.slotLabel || null, sortOrder: v.sortOrder + i }));
+      return foodApi.createRotationBulk({ kitchenId: v.kitchenId, brand: v.brand, mealType: v.mealType, rotationWeek: v.rotationWeek, dayOfWeek: v.dayOfWeek, items });
+    },
+    onSuccess: (res: any) => {
+      const n = Array.isArray(res) ? res.length : 1;
+      toast({ title: editing ? `Menu updated (${n} item${n === 1 ? "" : "s"})` : `${n} item${n === 1 ? "" : "s"} added` });
+      invalidate(); setModalOpen(false);
+    },
     onError: (e: any) => toast({ title: e?.message || "Failed", variant: "destructive" }),
   });
   const delMut = useMutation({
@@ -265,18 +452,47 @@ function RotationTab() {
     onError: (e: any) => toast({ title: e?.message || "Failed", variant: "destructive" }),
   });
 
-  const openCreate = () => { setEditing(null); setForm(emptyRotation); setModalOpen(true); };
-  const openEdit = (r: MenuRotationRow) => {
-    setEditing(r);
-    setForm({ brand: r.brand, rotationWeek: r.rotationWeek, dayOfWeek: r.dayOfWeek, mealType: r.mealType, dishId: r.dishId, slotLabel: r.slotLabel ?? "", sortOrder: r.sortOrder });
+  const openCreate = () => {
+    setEditing(null);
+    setForm({ ...emptyRotation, kitchenId: kitchen !== "ALL" ? kitchen : (kitchens[0]?.id ?? ""), brand: (brand !== "ALL" ? brand : brandOptions[0]?.code) ?? "UNILIV" });
+    setBulkDishIds([]);
     setModalOpen(true);
   };
+  // Edit operates on the WHOLE menu slot — preload all dishes in that slot.
+  const openEdit = (r: MenuRotationRow) => {
+    setEditing(r);
+    setForm({ kitchenId: r.kitchenId ?? "", brand: r.brand, rotationWeek: r.rotationWeek, dayOfWeek: r.dayOfWeek, mealType: r.mealType, dishId: "", slotLabel: r.slotLabel ?? "", sortOrder: r.sortOrder });
+    const slotIds = rows.filter((x) => x.kitchenId === r.kitchenId && x.brand === r.brand && x.rotationWeek === r.rotationWeek && x.dayOfWeek === r.dayOfWeek && x.mealType === r.mealType).map((x) => x.dishId);
+    setBulkDishIds([...new Set(slotIds)]);
+    setModalOpen(true);
+  };
+  const toggleBulkDish = (id: string) =>
+    setBulkDishIds((ids) => ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]);
   const submit = () => {
-    if (!form.dishId) { toast({ title: "Dish is required", variant: "destructive" }); return; }
+    if (!form.kitchenId) { toast({ title: "Kitchen is required", variant: "destructive" }); return; }
+    if (bulkDishIds.length === 0) { toast({ title: "Select at least one dish", variant: "destructive" }); return; }
     saveMut.mutate(form);
   };
 
+  // Live composition validation + shared-ingredient warning for the chosen dishes.
+  const { data: validation } = useQuery({
+    queryKey: foodKeys.rotationValidate({ kitchenId: form.kitchenId, brand: form.brand, mealType: form.mealType, dishIds: bulkDishIds.join(",") }),
+    queryFn: () => foodApi.validateRotation({ kitchenId: form.kitchenId, brand: form.brand, mealType: form.mealType, dishIds: bulkDishIds.join(",") }),
+    enabled: modalOpen && !!form.kitchenId && !!form.brand && !!form.mealType && bulkDishIds.length > 0,
+  });
+  const autoFill = useMutation({
+    mutationFn: () => foodApi.autoFillRotation({ kitchenId: form.kitchenId, brand: form.brand, mealType: form.mealType }),
+    onSuccess: (items: any) => {
+      const ids = (items ?? []).map((i: any) => i.dishId);
+      if (!ids.length) { toast({ title: "No composition rule / no matching dishes to auto-fill", variant: "destructive" }); return; }
+      setBulkDishIds((cur) => [...new Set([...cur, ...ids])]);
+      toast({ title: `Auto-filled ${ids.length} dish${ids.length === 1 ? "" : "es"} from the rule` });
+    },
+    onError: (e: any) => toast({ title: e?.message || "Auto-fill failed", variant: "destructive" }),
+  });
+
   const cols = [
+    { accessorKey: "kitchenId", header: "Kitchen", cell: ({ row }: any) => <span className="text-xs">{row.original.kitchenName ?? kitchenName(row.original.kitchenId)}</span> },
     { accessorKey: "brand", header: "Brand", cell: ({ row }: any) => <Badge variant="outline" className="text-[10px]">{row.original.brand}</Badge> },
     { accessorKey: "rotationWeek", header: "Week", cell: ({ row }: any) => <span className="font-mono text-xs">W{row.original.rotationWeek}</span> },
     { accessorKey: "dayOfWeek", header: "Day", cell: ({ row }: any) => DAY_LABEL[row.original.dayOfWeek] ?? row.original.dayOfWeek },
@@ -291,15 +507,30 @@ function RotationTab() {
     <div className="space-y-4">
       <SectionHeader
         title="Menu Rotation" description="Weekly per-brand rotation that drives auto-suggested menus."
-        action={<Button className="bg-accent hover:bg-accent/90 text-white" onClick={openCreate}><Plus className="h-4 w-4 mr-2" /> Add Entry</Button>}
+        action={
+          <div className="flex items-center gap-2">
+            <Button variant="outline" onClick={async () => {
+              try { await apiDownload(foodApi.rotationExportXlsxUrl({ kitchenId: kitchen, brand, rotationWeek: week, dayOfWeek: day, mealType: meal }), "menu-rotation.xls"); toast({ title: "Export ready", description: "menu-rotation.xls" }); }
+              catch (e: any) { toast({ title: e?.message || "Export failed", variant: "destructive" }); }
+            }}><Download className="h-4 w-4 mr-2" /> Export</Button>
+            <Button className="bg-accent hover:bg-accent/90 text-white" onClick={openCreate}><Plus className="h-4 w-4 mr-2" /> Add Entry</Button>
+          </div>
+        }
       />
 
       <div className="flex flex-wrap items-center gap-3">
+        <Select value={kitchen} onValueChange={setKitchen}>
+          <SelectTrigger className="w-52"><SelectValue placeholder="Kitchen" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="ALL">All Kitchens</SelectItem>
+            {kitchens.map((k) => <SelectItem key={k.id} value={k.id}>{k.name}</SelectItem>)}
+          </SelectContent>
+        </Select>
         <Select value={brand} onValueChange={setBrand}>
           <SelectTrigger className="w-40"><SelectValue placeholder="Brand" /></SelectTrigger>
           <SelectContent>
             <SelectItem value="ALL">All Brands</SelectItem>
-            {BRANDS.map((b) => <SelectItem key={b} value={b}>{b}</SelectItem>)}
+            {brandOptions.map((b) => <SelectItem key={b.code} value={b.code}>{b.name}</SelectItem>)}
           </SelectContent>
         </Select>
         <Select value={week} onValueChange={setWeek}>
@@ -327,14 +558,21 @@ function RotationTab() {
 
       <DataTable columns={cols as any} data={rows} isLoading={isLoading} />
 
-      <FormModal open={modalOpen} onOpenChange={setModalOpen} title={editing ? "Edit Rotation Entry" : "Add Rotation Entry"} onSave={submit} isSaving={saveMut.isPending} saveLabel={editing ? "Save Changes" : "Add Entry"}>
+      <FormModal open={modalOpen} onOpenChange={setModalOpen} title={editing ? "Edit Menu Slot" : "Add Menu Items"} onSave={submit} isSaving={saveMut.isPending} saveLabel={editing ? `Save ${bulkDishIds.length} dish${bulkDishIds.length === 1 ? "" : "es"}` : `Add ${bulkDishIds.length || ""} item${bulkDishIds.length === 1 ? "" : "s"}`.trim()}>
         <div className="space-y-4">
+          <div>
+            <Label>Kitchen *</Label>
+            <Select value={form.kitchenId} onValueChange={(v) => setForm({ ...form, kitchenId: v })}>
+              <SelectTrigger><SelectValue placeholder="Select kitchen" /></SelectTrigger>
+              <SelectContent>{kitchens.map((k) => <SelectItem key={k.id} value={k.id}>{k.name}</SelectItem>)}</SelectContent>
+            </Select>
+          </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
               <Label>Brand</Label>
               <Select value={form.brand} onValueChange={(v) => setForm({ ...form, brand: v as FoodBrand })}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>{BRANDS.map((b) => <SelectItem key={b} value={b}>{b}</SelectItem>)}</SelectContent>
+                <SelectContent>{brandOptions.map((b) => <SelectItem key={b.code} value={b.code}>{b.name}</SelectItem>)}</SelectContent>
               </Select>
             </div>
             <div>
@@ -356,20 +594,62 @@ function RotationTab() {
               </Select>
             </div>
           </div>
+
           <div>
-            <Label>Dish *</Label>
-            <Select value={form.dishId} onValueChange={(v) => setForm({ ...form, dishId: v })}>
-              <SelectTrigger><SelectValue placeholder="Select dish" /></SelectTrigger>
-              <SelectContent>{dishes.map((d) => <SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>)}</SelectContent>
-            </Select>
+            <div className="flex items-center justify-between mb-2">
+              <Label>Dishes <span className="font-normal text-muted-foreground">({bulkDishIds.length} selected)</span></Label>
+              <Button type="button" variant="outline" size="sm" onClick={() => autoFill.mutate()} disabled={autoFill.isPending || !form.kitchenId}>
+                <Sparkles className="h-3.5 w-3.5 mr-1" /> Auto-fill from rule
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground mb-2">{editing ? "Edit the dishes in this menu slot." : "Pick one or more dishes for this slot."}</p>
+            <div className="max-h-52 space-y-1 overflow-y-auto rounded-md border p-2">
+              {dishes.filter((d) => d.isActive).map((d) => (
+                <label key={d.id} className={`flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-muted/60 ${bulkDishIds.includes(d.id) ? "bg-accent/5" : ""}`}>
+                  <Checkbox checked={bulkDishIds.includes(d.id)} onCheckedChange={() => toggleBulkDish(d.id)} />
+                  <span className="flex-1">{d.name}</span>
+                  <Badge variant="secondary" className="text-[10px] uppercase">{labelize(d.component)}</Badge>
+                </label>
+              ))}
+            </div>
+
+            {validation && (validation.slots.length > 0 || validation.sharedIngredients.length > 0) && (
+              <div className="mt-3 space-y-2 rounded-md border p-3">
+                {validation.slots.length > 0 && (
+                  <div>
+                    <p className="mb-1.5 flex items-center gap-1 text-xs font-medium">
+                      {validation.isComplete
+                        ? <><CheckCircle2 className="h-3.5 w-3.5 text-success" /> Menu complete</>
+                        : <><AlertTriangle className="h-3.5 w-3.5 text-amber-600" /> Menu composition{validation.ruleName ? ` · ${validation.ruleName}` : ""}</>}
+                    </p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {validation.slots.map((s) => (
+                        <Badge key={s.slotId} variant="outline" className={`text-[10px] ${s.status === "OK" ? "border-success/40 text-success" : s.status === "OVER" ? "border-amber-400 text-amber-600" : "border-destructive/40 text-destructive"}`}>
+                          {s.slotLabel || labelize(s.component || s.preparation || "slot")}: {s.count}/{s.minCount}{s.maxCount ? `–${s.maxCount}` : ""} {s.status === "OK" ? "✓" : `· ${s.status}`}
+                        </Badge>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {validation.sharedIngredients.length > 0 && (
+                  <div className="rounded-md bg-amber-50 px-2 py-1.5 text-xs text-amber-700 dark:bg-amber-950/30 dark:text-amber-400">
+                    <span className="flex items-center gap-1 font-medium"><AlertTriangle className="h-3.5 w-3.5" /> Shared ingredients</span>
+                    {validation.sharedIngredients.map((si) => (
+                      <div key={si.rawMaterialId}>{si.name} is used in {si.dishIds.length} dishes ({si.dishIds.map((id) => dishName(id)).join(", ")})</div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
+
           <div className="grid grid-cols-2 gap-3">
             <div>
               <Label>Slot Label</Label>
               <Input value={form.slotLabel} onChange={(e) => setForm({ ...form, slotLabel: e.target.value })} placeholder="e.g. Main course" />
             </div>
             <div>
-              <Label>Sort Order</Label>
+              <Label>Sort Order {editing ? "" : "(start)"}</Label>
               <Input type="number" value={form.sortOrder} onChange={(e) => setForm({ ...form, sortOrder: Number(e.target.value) })} />
             </div>
           </div>
@@ -382,17 +662,176 @@ function RotationTab() {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
+// 2b) MENU COMPOSITION RULES (the menu structure engine)
+// ════════════════════════════════════════════════════════════════════════════
+type CompSlotForm = { slotLabel: string; component: string; preparation: string; minCount: number; maxCount: string };
+type CompositionForm = { brand: FoodBrand; mealType: MealType; kitchenId: string; name: string; slots: CompSlotForm[] };
+const emptyCompSlot: CompSlotForm = { slotLabel: "", component: "", preparation: "", minCount: 1, maxCount: "" };
+const emptyComposition = (): CompositionForm => ({ brand: "UNILIV", mealType: "LUNCH", kitchenId: "", name: "", slots: [{ ...emptyCompSlot }] });
+
+function CompositionRulesTab() {
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  const brandOptions = useActiveBrands();
+  const { data: rules = [], isLoading } = useQuery<CompositionRule[]>({ queryKey: foodKeys.compositionRules(), queryFn: () => foodApi.listCompositionRules() });
+  const { data: kitchens = [] } = useQuery<Kitchen[]>({ queryKey: foodKeys.kitchens(), queryFn: () => foodApi.listKitchens() });
+  const kitchenName = (id: string | null) => kitchens.find((k) => k.id === id)?.name ?? (id ? id : "All kitchens");
+  const invalidate = () => qc.invalidateQueries({ queryKey: ["food", "composition-rules"] });
+
+  const [open, setOpen] = React.useState(false);
+  const [editing, setEditing] = React.useState<CompositionRule | null>(null);
+  const [form, setForm] = React.useState<CompositionForm>(emptyComposition());
+  const [delTarget, setDelTarget] = React.useState<CompositionRule | null>(null);
+
+  const save = useMutation({
+    mutationFn: () => {
+      const body = {
+        brand: form.brand, mealType: form.mealType, kitchenId: form.kitchenId || null, name: form.name || null,
+        slots: form.slots.map((s, i) => ({ slotLabel: s.slotLabel || null, component: s.component || null, preparation: s.preparation || null, minCount: s.minCount, maxCount: s.maxCount === "" ? null : Number(s.maxCount), sortOrder: i })),
+      };
+      return editing ? foodApi.updateCompositionRule(editing.id, body) : foodApi.createCompositionRule(body);
+    },
+    onSuccess: () => { toast({ title: editing ? "Rule updated" : "Rule created" }); invalidate(); setOpen(false); },
+    onError: (e: any) => toast({ title: e?.message || "Failed", variant: "destructive" }),
+  });
+  const del = useMutation({
+    mutationFn: (id: string) => foodApi.deleteCompositionRule(id),
+    onSuccess: () => { toast({ title: "Rule deleted" }); invalidate(); setDelTarget(null); },
+    onError: (e: any) => toast({ title: e?.message || "Failed", variant: "destructive" }),
+  });
+
+  const openCreate = () => { setEditing(null); setForm(emptyComposition()); setOpen(true); };
+  const openEdit = (r: CompositionRule) => {
+    setEditing(r);
+    setForm({
+      brand: r.brand, mealType: r.mealType, kitchenId: r.kitchenId ?? "", name: r.name ?? "",
+      slots: (r.slots.length ? r.slots : [emptyCompSlot]).map((s) => ({ slotLabel: s.slotLabel ?? "", component: s.component ?? "", preparation: s.preparation ?? "", minCount: s.minCount, maxCount: s.maxCount != null ? String(s.maxCount) : "" })),
+    });
+    setOpen(true);
+  };
+  const addSlot = () => setForm((f) => ({ ...f, slots: [...f.slots, { ...emptyCompSlot }] }));
+  const updateSlot = (i: number, patch: Partial<CompSlotForm>) => setForm((f) => ({ ...f, slots: f.slots.map((s, j) => j === i ? { ...s, ...patch } : s) }));
+  const removeSlot = (i: number) => setForm((f) => ({ ...f, slots: f.slots.filter((_, j) => j !== i) }));
+
+  return (
+    <div className="space-y-4">
+      <SectionHeader
+        title="Menu Composition Rules" description="Define the STRUCTURE of a meal (e.g. Lunch = 1 Dal + 1 Sabzi + 1 Rice + 1 Salad). The menu builder validates against these and can auto-fill."
+        action={<Button className="bg-accent hover:bg-accent/90 text-white" onClick={openCreate}><Plus className="h-4 w-4 mr-2" /> Add Rule</Button>}
+      />
+      {isLoading ? <p className="py-6 text-center text-sm text-muted-foreground">Loading…</p>
+        : rules.length === 0 ? <p className="rounded-md border border-dashed py-8 text-center text-sm text-muted-foreground">No composition rules yet. Add one to guide menu building.</p>
+        : (
+        <div className="space-y-2">
+          {rules.map((r) => (
+            <div key={r.id} className="rounded-md border p-3">
+              <div className="flex items-center gap-2">
+                <Badge variant="outline" className="text-[10px]">{r.brand}</Badge>
+                <span className="text-sm font-medium">{MEAL_LABEL[r.mealType as MealType] ?? r.mealType}</span>
+                {r.name && <span className="text-xs text-muted-foreground">· {r.name}</span>}
+                <Badge variant="secondary" className="text-[10px]">{kitchenName(r.kitchenId)}</Badge>
+                <div className="ml-auto flex items-center gap-1">
+                  <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => openEdit(r)}><Pencil className="h-3.5 w-3.5" /></Button>
+                  <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setDelTarget(r)}><Trash2 className="h-3.5 w-3.5" /></Button>
+                </div>
+              </div>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {r.slots.sort((a, b) => a.sortOrder - b.sortOrder).map((s) => (
+                  <Badge key={s.id} variant="outline" className="text-[10px]">
+                    {s.slotLabel || labelize(s.component || s.preparation || "any")} ×{s.minCount}{s.maxCount ? `–${s.maxCount}` : ""}
+                  </Badge>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <FormModal open={open} onOpenChange={setOpen} title={editing ? "Edit Composition Rule" : "Add Composition Rule"} onSave={() => save.mutate()} isSaving={save.isPending} saveLabel={editing ? "Save" : "Create"}>
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label>Brand</Label>
+              <Select value={form.brand} onValueChange={(v) => setForm({ ...form, brand: v as FoodBrand })}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>{brandOptions.map((b) => <SelectItem key={b.code} value={b.code}>{b.name}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label>Meal</Label>
+              <Select value={form.mealType} onValueChange={(v) => setForm({ ...form, mealType: v as MealType })}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>{MEAL_TYPES.map((m) => <SelectItem key={m} value={m}>{MEAL_LABEL[m]}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label>Kitchen</Label>
+              <Select value={form.kitchenId || "__all"} onValueChange={(v) => setForm({ ...form, kitchenId: v === "__all" ? "" : v })}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent><SelectItem value="__all">All kitchens (brand default)</SelectItem>{kitchens.map((k) => <SelectItem key={k.id} value={k.id}>{k.name}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label>Name</Label>
+              <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="e.g. Standard Lunch" />
+            </div>
+          </div>
+
+          <div className="border-t pt-3">
+            <div className="flex items-center justify-between mb-2">
+              <Label>Slots <span className="font-normal text-muted-foreground">(courses that make up the meal)</span></Label>
+              <Button type="button" variant="outline" size="sm" onClick={addSlot}><Plus className="h-3.5 w-3.5 mr-1" /> Add slot</Button>
+            </div>
+            <div className="space-y-2">
+              {form.slots.map((s, i) => (
+                <div key={i} className="grid grid-cols-[1fr_1fr_auto_auto_auto] items-end gap-2 rounded-md border p-2">
+                  <div>
+                    <Label className="text-[10px]">Component</Label>
+                    <Select value={s.component || "__any"} onValueChange={(v) => updateSlot(i, { component: v === "__any" ? "" : v })}>
+                      <SelectTrigger className="h-8"><SelectValue /></SelectTrigger>
+                      <SelectContent><SelectItem value="__any">Any</SelectItem>{DISH_COMPONENTS.map((c) => <SelectItem key={c} value={c}>{labelize(c)}</SelectItem>)}</SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <Label className="text-[10px]">Preparation</Label>
+                    <Select value={s.preparation || "__any"} onValueChange={(v) => updateSlot(i, { preparation: v === "__any" ? "" : v })}>
+                      <SelectTrigger className="h-8"><SelectValue /></SelectTrigger>
+                      <SelectContent><SelectItem value="__any">Any</SelectItem>{PREPARATIONS.map((p) => <SelectItem key={p} value={p}>{PREPARATION_LABEL[p] ?? p}</SelectItem>)}</SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <Label className="text-[10px]">Min</Label>
+                    <Input type="number" min={0} value={s.minCount} onChange={(e) => updateSlot(i, { minCount: Number(e.target.value) })} className="h-8 w-16" />
+                  </div>
+                  <div>
+                    <Label className="text-[10px]">Max</Label>
+                    <Input type="number" min={0} value={s.maxCount} onChange={(e) => updateSlot(i, { maxCount: e.target.value })} className="h-8 w-16" placeholder="∞" />
+                  </div>
+                  <Button type="button" variant="ghost" size="icon" className="h-8 w-8" onClick={() => removeSlot(i)}><Trash2 className="h-3.5 w-3.5" /></Button>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </FormModal>
+
+      <ConfirmDelete open={!!delTarget} onOpenChange={(o) => !o && setDelTarget(null)} label={delTarget ? `${delTarget.brand} ${MEAL_LABEL[delTarget.mealType as MealType]} rule` : ""} onConfirm={() => delTarget && del.mutate(delTarget.id)} isDeleting={del.isPending} />
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
 // 3) PER-RESIDENT RULES
 // ════════════════════════════════════════════════════════════════════════════
 type RuleForm = {
-  brand: FoodBrand; mealType: MealType; dishId: string; propertyId: string;
+  brand: FoodBrand; mealType: MealType; dishId: string;
   qtyPerResident: string; unit: string;
 };
 const emptyRule: RuleForm = {
-  brand: "UNILIV", mealType: "BREAKFAST", dishId: "", propertyId: "", qtyPerResident: "", unit: "SERVING",
+  brand: "UNILIV", mealType: "BREAKFAST", dishId: "", qtyPerResident: "", unit: "SERVING",
 };
 
-function RulesTab({ properties, propName }: { properties: FoodLookups["properties"]; propName: (id?: string | null) => string }) {
+function RulesTab() {
   const qc = useQueryClient();
   const { toast } = useToast();
   const [brand, setBrand] = React.useState("ALL");
@@ -417,7 +856,6 @@ function RulesTab({ properties, propName }: { properties: FoodLookups["propertie
       const body: Record<string, unknown> = {
         brand: v.brand, mealType: v.mealType, dishId: v.dishId,
         qtyPerResident: v.qtyPerResident, unit: v.unit,
-        propertyId: v.propertyId || null,
       };
       return editing ? foodApi.updateRule(editing.id, body) : foodApi.createRule(body);
     },
@@ -433,7 +871,7 @@ function RulesTab({ properties, propName }: { properties: FoodLookups["propertie
   const openCreate = () => { setEditing(null); setForm(emptyRule); setModalOpen(true); };
   const openEdit = (r: PerResidentRule) => {
     setEditing(r);
-    setForm({ brand: r.brand, mealType: r.mealType, dishId: r.dishId, propertyId: r.propertyId ?? "", qtyPerResident: String(r.qtyPerResident ?? ""), unit: r.unit });
+    setForm({ brand: r.brand, mealType: r.mealType, dishId: r.dishId, qtyPerResident: String(r.qtyPerResident ?? ""), unit: r.unit });
     setModalOpen(true);
   };
   const submit = () => {
@@ -446,9 +884,6 @@ function RulesTab({ properties, propName }: { properties: FoodLookups["propertie
     { accessorKey: "brand", header: "Brand", cell: ({ row }: any) => <Badge variant="outline" className="text-[10px]">{row.original.brand}</Badge> },
     { accessorKey: "mealType", header: "Meal", cell: ({ row }: any) => MEAL_LABEL[row.original.mealType as MealType] ?? row.original.mealType },
     { accessorKey: "dishId", header: "Dish", cell: ({ row }: any) => <span className="font-medium text-primary">{row.original.dishName ?? dishName(row.original.dishId)}</span> },
-    { accessorKey: "propertyId", header: "Scope", cell: ({ row }: any) => row.original.propertyId
-        ? <span className="text-sm">{propName(row.original.propertyId)}</span>
-        : <Badge variant="secondary" className="text-[10px]">GLOBAL DEFAULT</Badge> },
     { accessorKey: "qtyPerResident", header: "Qty / Resident", cell: ({ row }: any) => <span className="font-medium">{fmtQty(row.original.qtyPerResident, row.original.unit)}</span> },
     { id: "actions", header: () => <div className="text-right">Actions</div>, cell: ({ row }: any) => <RowActions onEdit={() => openEdit(row.original)} onDelete={() => setDelTarget(row.original)} /> },
   ];
@@ -456,7 +891,7 @@ function RulesTab({ properties, propName }: { properties: FoodLookups["propertie
   return (
     <div className="space-y-4">
       <SectionHeader
-        title="Per-Resident Rules" description="Default quantity per resident, optionally overridden per property."
+        title="Per-Resident Rules" description="Default quantity per resident for each brand + meal + dish."
         action={<Button className="bg-accent hover:bg-accent/90 text-white" onClick={openCreate}><Plus className="h-4 w-4 mr-2" /> Add Rule</Button>}
       />
 
@@ -504,17 +939,6 @@ function RulesTab({ properties, propName }: { properties: FoodLookups["propertie
               <SelectContent>{dishes.map((d) => <SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>)}</SelectContent>
             </Select>
           </div>
-          <div>
-            <Label>Property</Label>
-            <Select value={form.propertyId || "__GLOBAL__"} onValueChange={(v) => setForm({ ...form, propertyId: v === "__GLOBAL__" ? "" : v })}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="__GLOBAL__">Global default (all properties)</SelectItem>
-                {properties.map((p) => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}
-              </SelectContent>
-            </Select>
-            <p className="text-xs text-muted-foreground mt-1">Leave as global to apply across all properties.</p>
-          </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
               <Label>Qty per Resident *</Label>
@@ -539,86 +963,147 @@ function RulesTab({ properties, propName }: { properties: FoodLookups["propertie
 // ════════════════════════════════════════════════════════════════════════════
 // 4) DELIVERY PARTNERS
 // ════════════════════════════════════════════════════════════════════════════
-type PartnerForm = { name: string; phone: string; vehicleNumber: string };
-const emptyPartner: PartnerForm = { name: "", phone: "", vehicleNumber: "" };
+const VEHICLE_TYPES = ["VAN", "BIKE", "TRUCK", "CAR", "TEMPO", "OTHER"];
 
-function PartnersTab() {
+function AgenciesTab() {
   const qc = useQueryClient();
   const { toast } = useToast();
-  const [modalOpen, setModalOpen] = React.useState(false);
-  const [editing, setEditing] = React.useState<DeliveryPartner | null>(null);
-  const [delTarget, setDelTarget] = React.useState<DeliveryPartner | null>(null);
-  const [form, setForm] = React.useState<PartnerForm>(emptyPartner);
+  const { data: agencies = [], isLoading } = useQuery<Agency[]>({ queryKey: foodKeys.agencies(), queryFn: () => foodApi.listAgencies() });
+  const invalidate = () => { qc.invalidateQueries({ queryKey: ["food", "agencies"] }); qc.invalidateQueries({ queryKey: foodKeys.lookups() }); };
 
-  const { data: partners = [], isLoading } = useQuery<DeliveryPartner[]>({
-    queryKey: foodKeys.partners({}),
-    queryFn: () => foodApi.listPartners(),
-  });
+  // Agency modal
+  const [agOpen, setAgOpen] = React.useState(false);
+  const [agEdit, setAgEdit] = React.useState<Agency | null>(null);
+  const [agForm, setAgForm] = React.useState({ name: "", phone: "", contactName: "", email: "" });
+  const [agDel, setAgDel] = React.useState<Agency | null>(null);
+  // Vehicle modal
+  const [vOpen, setVOpen] = React.useState(false);
+  const [vAgencyId, setVAgencyId] = React.useState("");
+  const [vEdit, setVEdit] = React.useState<AgencyVehicle | null>(null);
+  const [vForm, setVForm] = React.useState({ vehicleNumber: "", vehicleType: "VAN" });
+  // Location modal
+  const [lOpen, setLOpen] = React.useState(false);
+  const [lAgencyId, setLAgencyId] = React.useState("");
+  const [lEdit, setLEdit] = React.useState<AgencyLocation | null>(null);
+  const [lForm, setLForm] = React.useState({ name: "", city: "", address: "", contactPhone: "" });
 
-  const invalidate = () => {
-    qc.invalidateQueries({ queryKey: ["food", "delivery-partners"] });
-    qc.invalidateQueries({ queryKey: foodKeys.lookups() });
-  };
-
-  const saveMut = useMutation({
-    mutationFn: (v: PartnerForm) => {
-      const body = { name: v.name, phone: v.phone || null, vehicleNumber: v.vehicleNumber || null };
-      return editing ? foodApi.updatePartner(editing.id, body) : foodApi.createPartner(body);
-    },
-    onSuccess: () => { toast({ title: editing ? "Partner updated" : "Partner created" }); invalidate(); setModalOpen(false); },
+  const agSave = useMutation({
+    mutationFn: () => { const b = { name: agForm.name, phone: agForm.phone || null, contactName: agForm.contactName || null, email: agForm.email || null }; return agEdit ? foodApi.updateAgency(agEdit.id, b) : foodApi.createAgency(b); },
+    onSuccess: () => { toast({ title: agEdit ? "Agency updated" : "Agency created" }); invalidate(); setAgOpen(false); },
     onError: (e: any) => toast({ title: e?.message || "Failed", variant: "destructive" }),
   });
-  const delMut = useMutation({
-    mutationFn: (id: string) => foodApi.deletePartner(id),
-    onSuccess: () => { toast({ title: "Partner deleted" }); invalidate(); setDelTarget(null); },
+  const agDelMut = useMutation({ mutationFn: (id: string) => foodApi.deleteAgency(id), onSuccess: () => { toast({ title: "Agency deactivated" }); invalidate(); setAgDel(null); }, onError: (e: any) => toast({ title: e?.message || "Failed", variant: "destructive" }) });
+  const vSave = useMutation({
+    mutationFn: () => { const b = { vehicleNumber: vForm.vehicleNumber, vehicleType: vForm.vehicleType }; return vEdit ? foodApi.updateAgencyVehicle(vEdit.id, b) : foodApi.createAgencyVehicle(vAgencyId, b); },
+    onSuccess: () => { toast({ title: vEdit ? "Vehicle updated" : "Vehicle added" }); invalidate(); setVOpen(false); },
     onError: (e: any) => toast({ title: e?.message || "Failed", variant: "destructive" }),
   });
+  const vDel = useMutation({ mutationFn: (id: string) => foodApi.deleteAgencyVehicle(id), onSuccess: () => { toast({ title: "Vehicle removed" }); invalidate(); }, onError: (e: any) => toast({ title: e?.message || "Failed", variant: "destructive" }) });
+  const lSave = useMutation({
+    mutationFn: () => { const b = { name: lForm.name, city: lForm.city || null, address: lForm.address || null, contactPhone: lForm.contactPhone || null }; return lEdit ? foodApi.updateAgencyLocation(lEdit.id, b) : foodApi.createAgencyLocation(lAgencyId, b); },
+    onSuccess: () => { toast({ title: lEdit ? "Location updated" : "Location added" }); invalidate(); setLOpen(false); },
+    onError: (e: any) => toast({ title: e?.message || "Failed", variant: "destructive" }),
+  });
+  const lDel = useMutation({ mutationFn: (id: string) => foodApi.deleteAgencyLocation(id), onSuccess: () => { toast({ title: "Location removed" }); invalidate(); }, onError: (e: any) => toast({ title: e?.message || "Failed", variant: "destructive" }) });
 
-  const openCreate = () => { setEditing(null); setForm(emptyPartner); setModalOpen(true); };
-  const openEdit = (p: DeliveryPartner) => {
-    setEditing(p);
-    setForm({ name: p.name, phone: p.phone ?? "", vehicleNumber: p.vehicleNumber ?? "" });
-    setModalOpen(true);
-  };
-  const submit = () => {
-    if (!form.name.trim()) { toast({ title: "Name is required", variant: "destructive" }); return; }
-    saveMut.mutate(form);
-  };
-
-  const cols = [
-    { accessorKey: "name", header: "Partner", cell: ({ row }: any) => <span className="font-medium text-primary">{row.original.name}</span> },
-    { accessorKey: "phone", header: "Phone", cell: ({ row }: any) => row.original.phone ? <span className="font-mono text-xs">{row.original.phone}</span> : <span className="text-muted-foreground text-xs">—</span> },
-    { accessorKey: "vehicleNumber", header: "Vehicle", cell: ({ row }: any) => row.original.vehicleNumber ? <span className="font-mono text-xs bg-muted/30 px-2 py-1 rounded">{row.original.vehicleNumber}</span> : <span className="text-muted-foreground text-xs">—</span> },
-    { accessorKey: "isActive", header: "Status", cell: ({ row }: any) => <Badge variant={row.original.isActive ? "success" : "secondary"} className="text-[10px]">{row.original.isActive ? "ACTIVE" : "INACTIVE"}</Badge> },
-    { id: "actions", header: () => <div className="text-right">Actions</div>, cell: ({ row }: any) => <RowActions onEdit={() => openEdit(row.original)} onDelete={() => setDelTarget(row.original)} /> },
-  ];
+  const openAgCreate = () => { setAgEdit(null); setAgForm({ name: "", phone: "", contactName: "", email: "" }); setAgOpen(true); };
+  const openAgEdit = (a: Agency) => { setAgEdit(a); setAgForm({ name: a.name, phone: a.phone ?? "", contactName: a.contactName ?? "", email: a.email ?? "" }); setAgOpen(true); };
+  const openVCreate = (agencyId: string) => { setVEdit(null); setVAgencyId(agencyId); setVForm({ vehicleNumber: "", vehicleType: "VAN" }); setVOpen(true); };
+  const openVEdit = (v: AgencyVehicle) => { setVEdit(v); setVAgencyId(v.agencyId); setVForm({ vehicleNumber: v.vehicleNumber, vehicleType: v.vehicleType }); setVOpen(true); };
+  const openLCreate = (agencyId: string) => { setLEdit(null); setLAgencyId(agencyId); setLForm({ name: "", city: "", address: "", contactPhone: "" }); setLOpen(true); };
+  const openLEdit = (l: AgencyLocation) => { setLEdit(l); setLAgencyId(l.agencyId); setLForm({ name: l.name, city: l.city ?? "", address: l.address ?? "", contactPhone: l.contactPhone ?? "" }); setLOpen(true); };
 
   return (
     <div className="space-y-4">
       <SectionHeader
-        title="Delivery Partners" description="People and vehicles available for dispatching food orders."
-        action={<Button className="bg-accent hover:bg-accent/90 text-white" onClick={openCreate}><Plus className="h-4 w-4 mr-2" /> Add Partner</Button>}
+        title="Delivery Agencies" description="Agencies that fulfil dispatch — each with multiple locations and vehicles. A dispatch picks an agency, then a vehicle."
+        action={<Button className="bg-accent hover:bg-accent/90 text-white" onClick={openAgCreate}><Plus className="h-4 w-4 mr-2" /> Add Agency</Button>}
       />
-      <DataTable columns={cols as any} data={partners} isLoading={isLoading} />
+      {isLoading ? <p className="py-6 text-center text-sm text-muted-foreground">Loading…</p>
+        : agencies.length === 0 ? <p className="rounded-md border border-dashed py-8 text-center text-sm text-muted-foreground">No agencies yet.</p>
+        : agencies.map((a) => (
+          <Card key={a.id}>
+            <CardHeader className="flex flex-row items-start justify-between pb-3">
+              <div>
+                <CardTitle className="flex items-center gap-2 text-base"><Truck className="h-4 w-4 text-muted-foreground" /> {a.name} {!a.isActive && <Badge variant="secondary" className="text-[10px]">Inactive</Badge>}</CardTitle>
+                <CardDescription className="text-xs">{[a.contactName, a.phone, a.email].filter(Boolean).join(" · ") || "No contact"}</CardDescription>
+              </div>
+              <div className="flex items-center gap-1">
+                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => openAgEdit(a)}><Pencil className="h-3.5 w-3.5" /></Button>
+                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setAgDel(a)}><Trash2 className="h-3.5 w-3.5" /></Button>
+              </div>
+            </CardHeader>
+            <CardContent className="grid gap-4 md:grid-cols-2">
+              <div>
+                <div className="mb-1.5 flex items-center justify-between"><span className="text-xs font-medium text-muted-foreground">Vehicles ({a.vehicles?.length ?? 0})</span><Button variant="outline" size="sm" className="h-7" onClick={() => openVCreate(a.id)}><Plus className="h-3 w-3 mr-1" /> Add</Button></div>
+                <div className="space-y-1">
+                  {(a.vehicles ?? []).length === 0 && <p className="text-xs text-muted-foreground">No vehicles.</p>}
+                  {(a.vehicles ?? []).map((v) => (
+                    <div key={v.id} className="flex items-center gap-2 rounded-md border px-2 py-1.5">
+                      <span className="font-mono text-xs">{v.vehicleNumber}</span>
+                      <Badge variant="outline" className="text-[10px]">{v.vehicleType}</Badge>
+                      <div className="ml-auto flex items-center gap-0.5">
+                        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openVEdit(v)}><Pencil className="h-3 w-3" /></Button>
+                        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => vDel.mutate(v.id)}><Trash2 className="h-3 w-3" /></Button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <div className="mb-1.5 flex items-center justify-between"><span className="text-xs font-medium text-muted-foreground">Locations ({a.locations?.length ?? 0})</span><Button variant="outline" size="sm" className="h-7" onClick={() => openLCreate(a.id)}><Plus className="h-3 w-3 mr-1" /> Add</Button></div>
+                <div className="space-y-1">
+                  {(a.locations ?? []).length === 0 && <p className="text-xs text-muted-foreground">No locations.</p>}
+                  {(a.locations ?? []).map((l) => (
+                    <div key={l.id} className="flex items-center gap-2 rounded-md border px-2 py-1.5">
+                      <span className="text-xs">{l.name}{l.city ? ` · ${l.city}` : ""}</span>
+                      <div className="ml-auto flex items-center gap-0.5">
+                        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openLEdit(l)}><Pencil className="h-3 w-3" /></Button>
+                        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => lDel.mutate(l.id)}><Trash2 className="h-3 w-3" /></Button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        ))}
 
-      <FormModal open={modalOpen} onOpenChange={setModalOpen} title={editing ? "Edit Partner" : "Add Partner"} onSave={submit} isSaving={saveMut.isPending} saveLabel={editing ? "Save Changes" : "Create Partner"}>
+      <FormModal open={agOpen} onOpenChange={setAgOpen} title={agEdit ? "Edit Agency" : "Add Agency"} onSave={() => { if (!agForm.name.trim()) { toast({ title: "Name required", variant: "destructive" }); return; } agSave.mutate(); }} isSaving={agSave.isPending} saveLabel={agEdit ? "Save" : "Create"}>
         <div className="space-y-4">
-          <div>
-            <Label>Name *</Label>
-            <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+          <div><Label>Name *</Label><Input value={agForm.name} onChange={(e) => setAgForm({ ...agForm, name: e.target.value })} placeholder="e.g. Swift Logistics" /></div>
+          <div className="grid grid-cols-2 gap-3">
+            <div><Label>Contact name</Label><Input value={agForm.contactName} onChange={(e) => setAgForm({ ...agForm, contactName: e.target.value })} /></div>
+            <div><Label>Phone</Label><Input value={agForm.phone} onChange={(e) => setAgForm({ ...agForm, phone: e.target.value })} className="font-mono" /></div>
           </div>
-          <div>
-            <Label>Phone</Label>
-            <Input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} className="font-mono" />
-          </div>
-          <div>
-            <Label>Vehicle Number</Label>
-            <Input value={form.vehicleNumber} onChange={(e) => setForm({ ...form, vehicleNumber: e.target.value })} className="font-mono" />
+          <div><Label>Email</Label><Input type="email" value={agForm.email} onChange={(e) => setAgForm({ ...agForm, email: e.target.value })} /></div>
+        </div>
+      </FormModal>
+
+      <FormModal open={vOpen} onOpenChange={setVOpen} title={vEdit ? "Edit Vehicle" : "Add Vehicle"} onSave={() => { if (!vForm.vehicleNumber.trim()) { toast({ title: "Vehicle number required", variant: "destructive" }); return; } vSave.mutate(); }} isSaving={vSave.isPending} saveLabel={vEdit ? "Save" : "Add"}>
+        <div className="space-y-4">
+          <div><Label>Vehicle Number *</Label><Input value={vForm.vehicleNumber} onChange={(e) => setVForm({ ...vForm, vehicleNumber: e.target.value })} className="font-mono" placeholder="KA05AB1234" /></div>
+          <div><Label>Type</Label>
+            <Select value={vForm.vehicleType} onValueChange={(v) => setVForm({ ...vForm, vehicleType: v })}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>{VEHICLE_TYPES.map((t) => <SelectItem key={t} value={t}>{labelize(t)}</SelectItem>)}</SelectContent>
+            </Select>
           </div>
         </div>
       </FormModal>
 
-      <ConfirmDelete open={!!delTarget} onOpenChange={(o) => !o && setDelTarget(null)} label={delTarget?.name ?? ""} onConfirm={() => delTarget && delMut.mutate(delTarget.id)} isDeleting={delMut.isPending} />
+      <FormModal open={lOpen} onOpenChange={setLOpen} title={lEdit ? "Edit Location" : "Add Location"} onSave={() => { if (!lForm.name.trim()) { toast({ title: "Name required", variant: "destructive" }); return; } lSave.mutate(); }} isSaving={lSave.isPending} saveLabel={lEdit ? "Save" : "Add"}>
+        <div className="space-y-4">
+          <div><Label>Name *</Label><Input value={lForm.name} onChange={(e) => setLForm({ ...lForm, name: e.target.value })} placeholder="e.g. Koramangala Hub" /></div>
+          <div className="grid grid-cols-2 gap-3">
+            <div><Label>City</Label><Input value={lForm.city} onChange={(e) => setLForm({ ...lForm, city: e.target.value })} /></div>
+            <div><Label>Phone</Label><Input value={lForm.contactPhone} onChange={(e) => setLForm({ ...lForm, contactPhone: e.target.value })} className="font-mono" /></div>
+          </div>
+          <div><Label>Address</Label><Input value={lForm.address} onChange={(e) => setLForm({ ...lForm, address: e.target.value })} /></div>
+        </div>
+      </FormModal>
+
+      <ConfirmDelete open={!!agDel} onOpenChange={(o) => !o && setAgDel(null)} label={agDel?.name ?? ""} onConfirm={() => agDel && agDelMut.mutate(agDel.id)} isDeleting={agDelMut.isPending} />
     </div>
   );
 }
@@ -628,11 +1113,11 @@ function PartnersTab() {
 // ════════════════════════════════════════════════════════════════════════════
 type KitchenForm = {
   name: string; code: string; brand: string; address: string; city: string;
-  state: string; pincode: string; contactName: string; contactPhone: string;
+  state: string; pincode: string; contactName: string; contactPhone: string; contactEmail: string;
 };
 const emptyKitchen: KitchenForm = {
   name: "", code: "", brand: "__SHARED__", address: "", city: "",
-  state: "", pincode: "", contactName: "", contactPhone: "",
+  state: "", pincode: "", contactName: "", contactPhone: "", contactEmail: "",
 };
 
 function KitchensTab() {
@@ -662,6 +1147,7 @@ function KitchensTab() {
         pincode: v.pincode.trim() || null,
         contactName: v.contactName.trim() || null,
         contactPhone: v.contactPhone.trim() || null,
+        contactEmail: v.contactEmail.trim() || null,
       };
       return editing ? foodApi.updateKitchen(editing.id, body) : foodApi.createKitchen(body);
     },
@@ -680,7 +1166,7 @@ function KitchensTab() {
     setForm({
       name: k.name, code: k.code, brand: k.brand ?? "__SHARED__",
       address: k.address ?? "", city: k.city ?? "", state: k.state ?? "",
-      pincode: k.pincode ?? "", contactName: k.contactName ?? "", contactPhone: k.contactPhone ?? "",
+      pincode: k.pincode ?? "", contactName: k.contactName ?? "", contactPhone: k.contactPhone ?? "", contactEmail: k.contactEmail ?? "",
     });
     setModalOpen(true);
   };
@@ -760,14 +1246,21 @@ function KitchensTab() {
               <Input value={form.pincode} onChange={(e) => setForm({ ...form, pincode: e.target.value })} className="font-mono" />
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-3 border-t pt-3">
-            <div>
-              <Label>Contact Name</Label>
-              <Input value={form.contactName} onChange={(e) => setForm({ ...form, contactName: e.target.value })} />
-            </div>
-            <div>
-              <Label>Contact Phone</Label>
-              <Input value={form.contactPhone} onChange={(e) => setForm({ ...form, contactPhone: e.target.value })} className="font-mono" />
+          <div className="border-t pt-3">
+            <p className="mb-2 text-xs font-medium text-muted-foreground">Kitchen head</p>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label>Name</Label>
+                <Input value={form.contactName} onChange={(e) => setForm({ ...form, contactName: e.target.value })} />
+              </div>
+              <div>
+                <Label>Phone</Label>
+                <Input value={form.contactPhone} onChange={(e) => setForm({ ...form, contactPhone: e.target.value })} className="font-mono" />
+              </div>
+              <div className="col-span-2">
+                <Label>Email</Label>
+                <Input type="email" value={form.contactEmail} onChange={(e) => setForm({ ...form, contactEmail: e.target.value })} placeholder="kitchenhead@uniliv.com" />
+              </div>
             </div>
           </div>
         </div>
@@ -890,13 +1383,102 @@ function MealTypesTab() {
 // 7) CUT-OFF WINDOWS
 // ════════════════════════════════════════════════════════════════════════════
 type WindowForm = {
-  brand: FoodBrand; mealType: MealType; cutoffTime: string; serviceTime: string;
+  brand: FoodBrand; mealType: MealType; serviceTime: string;
   leadTimeMinutes: number; propertyId: string;
 };
 const emptyWindow: WindowForm = {
-  brand: "UNILIV", mealType: "BREAKFAST", cutoffTime: "", serviceTime: "",
+  brand: "UNILIV", mealType: "BREAKFAST", serviceTime: "",
   leadTimeMinutes: 0, propertyId: "",
 };
+
+// Single cut-off time per brand (applies to ALL meals; optional per-property override).
+type CutoffForm = { brand: FoodBrand; cutoffTime: string; propertyId: string };
+function CutoffConfigPanel({ properties, propName }: { properties: FoodLookups["properties"]; propName: (id?: string | null) => string }) {
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  const brandOptions = useActiveBrands();
+  const { data: rows = [], isLoading } = useQuery<FoodCutoffConfig[]>({ queryKey: foodKeys.cutoffConfig(), queryFn: () => foodApi.listCutoffConfig() });
+  const invalidate = () => { qc.invalidateQueries({ queryKey: ["food", "cutoff-config"] }); qc.invalidateQueries({ queryKey: ["food", "cutoffs"] }); };
+
+  const [open, setOpen] = React.useState(false);
+  const [editing, setEditing] = React.useState<FoodCutoffConfig | null>(null);
+  const [form, setForm] = React.useState<CutoffForm>({ brand: "UNILIV", cutoffTime: "21:00", propertyId: "" });
+  const [delTarget, setDelTarget] = React.useState<FoodCutoffConfig | null>(null);
+
+  const save = useMutation({
+    mutationFn: () => {
+      const body = { brand: form.brand, cutoffTime: form.cutoffTime.trim(), propertyId: form.propertyId || null };
+      return editing ? foodApi.updateCutoffConfig(editing.id, body) : foodApi.createCutoffConfig(body);
+    },
+    onSuccess: () => { toast({ title: editing ? "Cut-off updated" : "Cut-off added" }); invalidate(); setOpen(false); },
+    onError: (e: any) => toast({ title: e?.message || "Failed", variant: "destructive" }),
+  });
+  const del = useMutation({
+    mutationFn: (id: string) => foodApi.deleteCutoffConfig(id),
+    onSuccess: () => { toast({ title: "Cut-off removed" }); invalidate(); setDelTarget(null); },
+    onError: (e: any) => toast({ title: e?.message || "Failed", variant: "destructive" }),
+  });
+
+  const openAdd = () => { setEditing(null); setForm({ brand: (brandOptions[0]?.code as FoodBrand) ?? "UNILIV", cutoffTime: "21:00", propertyId: "" }); setOpen(true); };
+  const openEdit = (c: FoodCutoffConfig) => { setEditing(c); setForm({ brand: c.brand, cutoffTime: c.cutoffTime, propertyId: c.propertyId ?? "" }); setOpen(true); };
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between">
+        <div>
+          <CardTitle className="text-base flex items-center gap-2"><Clock className="h-4 w-4" /> Cut-off time</CardTitle>
+          <CardDescription className="text-xs">One cut-off applies to <span className="font-medium">all meals</span> that day. Set a default per brand; optionally override per property.</CardDescription>
+        </div>
+        <Button size="sm" onClick={openAdd}><Plus className="h-4 w-4 mr-1" /> Add cut-off</Button>
+      </CardHeader>
+      <CardContent className="space-y-1">
+        {isLoading ? <p className="py-4 text-sm text-muted-foreground">Loading…</p>
+          : rows.length === 0 ? <p className="py-4 text-sm text-muted-foreground">No cut-off set — orders never close. Add one.</p>
+          : rows.map((c) => (
+            <div key={c.id} className="flex items-center gap-3 rounded-md border px-3 py-2">
+              <Badge variant="outline" className="text-[10px]">{c.brand}</Badge>
+              {c.propertyId
+                ? <span className="text-sm inline-flex items-center gap-1"><Building2 className="h-3.5 w-3.5 text-muted-foreground" />{propName(c.propertyId)}</span>
+                : <Badge variant="secondary" className="text-[10px]"><Globe className="h-3 w-3 mr-1" /> GLOBAL</Badge>}
+              <span className="ml-auto font-mono text-sm inline-flex items-center gap-1"><Clock className="h-3.5 w-3.5 text-muted-foreground" />{c.cutoffTime}</span>
+              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => openEdit(c)}><Pencil className="h-3.5 w-3.5" /></Button>
+              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setDelTarget(c)}><Trash2 className="h-3.5 w-3.5" /></Button>
+            </div>
+          ))}
+      </CardContent>
+
+      <FormModal open={open} onOpenChange={setOpen} title={editing ? "Edit Cut-off" : "Add Cut-off"} onSave={() => { if (!form.cutoffTime.trim()) { toast({ title: "Cut-off time required", variant: "destructive" }); return; } save.mutate(); }} isSaving={save.isPending} saveLabel={editing ? "Save" : "Add"}>
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label>Brand</Label>
+              <Select value={form.brand} onValueChange={(v) => setForm({ ...form, brand: v as FoodBrand })}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>{brandOptions.map((b) => <SelectItem key={b.code} value={b.code}>{b.name}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label>Cut-off Time *</Label>
+              <Input value={form.cutoffTime} onChange={(e) => setForm({ ...form, cutoffTime: e.target.value })} className="font-mono" placeholder="HH:MM" />
+            </div>
+          </div>
+          <div>
+            <Label>Property</Label>
+            <Select value={form.propertyId || "__GLOBAL__"} onValueChange={(v) => setForm({ ...form, propertyId: v === "__GLOBAL__" ? "" : v })}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__GLOBAL__">Global (all properties)</SelectItem>
+                {properties.map((p) => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+      </FormModal>
+
+      <ConfirmDelete open={!!delTarget} onOpenChange={(o) => !o && setDelTarget(null)} label={delTarget ? `${delTarget.brand} cut-off` : ""} onConfirm={() => delTarget && del.mutate(delTarget.id)} isDeleting={del.isPending} />
+    </Card>
+  );
+}
 
 function CutoffWindowsTab({ properties, propName }: { properties: FoodLookups["properties"]; propName: (id?: string | null) => string }) {
   const qc = useQueryClient();
@@ -920,7 +1502,6 @@ function CutoffWindowsTab({ properties, propName }: { properties: FoodLookups["p
       const body: Record<string, unknown> = {
         brand: v.brand,
         mealType: v.mealType,
-        cutoffTime: v.cutoffTime.trim(),
         serviceTime: v.serviceTime.trim() || null,
         leadTimeMinutes: v.leadTimeMinutes,
         propertyId: v.propertyId || null,
@@ -940,21 +1521,19 @@ function CutoffWindowsTab({ properties, propName }: { properties: FoodLookups["p
   const openEdit = (w: MealWindow) => {
     setEditing(w);
     setForm({
-      brand: w.brand, mealType: w.mealType, cutoffTime: w.cutoffTime ?? "",
+      brand: w.brand, mealType: w.mealType,
       serviceTime: w.serviceTime ?? "", leadTimeMinutes: w.leadTimeMinutes ?? 0,
       propertyId: w.propertyId ?? "",
     });
     setModalOpen(true);
   };
   const submit = () => {
-    if (!form.cutoffTime.trim()) { toast({ title: "Cut-off time is required", variant: "destructive" }); return; }
     saveMut.mutate(form);
   };
 
   const cols = [
     { accessorKey: "brand", header: "Brand", cell: ({ row }: any) => <Badge variant="outline" className="text-[10px]">{row.original.brand}</Badge> },
     { accessorKey: "mealType", header: "Meal", cell: ({ row }: any) => MEAL_LABEL[row.original.mealType as MealType] ?? row.original.mealType },
-    { accessorKey: "cutoffTime", header: "Cut-off", cell: ({ row }: any) => <span className="font-mono text-xs inline-flex items-center gap-1"><Clock className="h-3.5 w-3.5 text-muted-foreground" />{row.original.cutoffTime}</span> },
     { accessorKey: "serviceTime", header: "Service", cell: ({ row }: any) => row.original.serviceTime ? <span className="font-mono text-xs">{row.original.serviceTime}</span> : <span className="text-muted-foreground text-xs">—</span> },
     { accessorKey: "leadTimeMinutes", header: "Lead (min)", cell: ({ row }: any) => <span className="text-muted-foreground text-xs">{row.original.leadTimeMinutes}</span> },
     { accessorKey: "propertyId", header: "Scope", cell: ({ row }: any) => row.original.propertyId
@@ -964,10 +1543,12 @@ function CutoffWindowsTab({ properties, propName }: { properties: FoodLookups["p
   ];
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
+      <CutoffConfigPanel properties={properties} propName={propName} />
+
       <SectionHeader
-        title="Cut-off Windows" description="Per-brand ordering cut-offs and service times, optionally overridden per property."
-        action={<Button className="bg-accent hover:bg-accent/90 text-white" onClick={openCreate}><Plus className="h-4 w-4 mr-2" /> Add Window</Button>}
+        title="Service Times" description="Per-meal service/delivery time + lead time (used for ETAs & delay analytics). The cut-off above applies to all meals."
+        action={<Button className="bg-accent hover:bg-accent/90 text-white" onClick={openCreate}><Plus className="h-4 w-4 mr-2" /> Add Service Time</Button>}
       />
 
       <div className="flex flex-wrap items-center gap-3">
@@ -982,7 +1563,7 @@ function CutoffWindowsTab({ properties, propName }: { properties: FoodLookups["p
 
       <DataTable columns={cols as any} data={windows} isLoading={isLoading} />
 
-      <FormModal open={modalOpen} onOpenChange={setModalOpen} title={editing ? "Edit Cut-off Window" : "Add Cut-off Window"} onSave={submit} isSaving={saveMut.isPending} saveLabel={editing ? "Save Changes" : "Create Window"}>
+      <FormModal open={modalOpen} onOpenChange={setModalOpen} title={editing ? "Edit Service Time" : "Add Service Time"} onSave={submit} isSaving={saveMut.isPending} saveLabel={editing ? "Save Changes" : "Create"}>
         <div className="space-y-4">
           <div className="grid grid-cols-2 gap-3">
             <div>
@@ -1000,11 +1581,7 @@ function CutoffWindowsTab({ properties, propName }: { properties: FoodLookups["p
               </Select>
             </div>
           </div>
-          <div className="grid grid-cols-3 gap-3">
-            <div>
-              <Label>Cut-off Time *</Label>
-              <Input value={form.cutoffTime} onChange={(e) => setForm({ ...form, cutoffTime: e.target.value })} className="font-mono" placeholder="HH:MM" />
-            </div>
+          <div className="grid grid-cols-2 gap-3">
             <div>
               <Label>Service Time</Label>
               <Input value={form.serviceTime} onChange={(e) => setForm({ ...form, serviceTime: e.target.value })} className="font-mono" placeholder="HH:MM" />
