@@ -20,6 +20,7 @@ import {
 import { eq } from "drizzle-orm";
 import { newId } from "./id.js";
 import { logger } from "./logger.js";
+import { enqueueDelivery, processDelivery, queueEnabled } from "@workspace/notify-core";
 
 type Channel = "EMAIL" | "SMS" | "PUSH";
 
@@ -53,63 +54,11 @@ export interface NotifyInput {
 }
 
 /**
- * Delivers a single outbox row. Returns the provider message id on success.
- * Selects a real transport when credentials exist, else logs (dev).
+ * Persists an outbox row (durable, PENDING) and hands it to the async dispatcher.
+ * Delivery itself — transport selection, retries, status updates — lives in the
+ * notify-service worker (via @workspace/notify-core). When no queue is configured
+ * (REDIS_URL unset / worker not running) we deliver inline so the app still works.
  */
-async function deliver(row: {
-  channel: Channel;
-  toAddress: string;
-  subject: string | null;
-  body: string | null;
-}): Promise<string> {
-  const smtpReady = !!process.env["SMTP_HOST"];
-  const twilioReady = !!process.env["TWILIO_AUTH_TOKEN"];
-
-  if (row.channel === "EMAIL" && smtpReady) {
-    // Real SMTP via nodemailer (optional dependency; only imported when used).
-    // Indirect specifier so TS doesn't require the module at build time.
-    const pkg = "nodemailer";
-    const nodemailer = (await import(pkg)) as any;
-    const transport = nodemailer.createTransport({
-      host: process.env["SMTP_HOST"],
-      port: Number(process.env["SMTP_PORT"] || 587),
-      secure: process.env["SMTP_SECURE"] === "true",
-      auth: process.env["SMTP_USER"]
-        ? { user: process.env["SMTP_USER"], pass: process.env["SMTP_PASS"] }
-        : undefined,
-    });
-    const info = await transport.sendMail({
-      from: process.env["SMTP_FROM"] || "Uniliv <no-reply@uniliv.com>",
-      to: row.toAddress,
-      subject: row.subject || "",
-      text: row.body || "",
-    });
-    return info.messageId;
-  }
-
-  if (row.channel === "SMS" && twilioReady) {
-    const pkg = "twilio";
-    const twilioMod = (await import(pkg)) as any;
-    const twilio = twilioMod.default(
-      process.env["TWILIO_ACCOUNT_SID"]!,
-      process.env["TWILIO_AUTH_TOKEN"]!,
-    );
-    const msg = await twilio.messages.create({
-      from: process.env["TWILIO_FROM"]!,
-      to: row.toAddress,
-      body: row.body || "",
-    });
-    return msg.sid;
-  }
-
-  // Dev/log transport — record the rendered message; pretend it was sent.
-  logger.info(
-    { channel: row.channel, to: row.toAddress, subject: row.subject },
-    `[notify:${row.channel}] ${row.body?.slice(0, 160) ?? ""}`,
-  );
-  return `log-${newId()}`;
-}
-
 async function enqueueAndSend(input: {
   userId: string;
   channel: Channel;
@@ -131,23 +80,11 @@ async function enqueueAndSend(input: {
     entityId: input.entityId ?? null,
     status: "PENDING",
   });
-  try {
-    const providerMessageId = await deliver({
-      channel: input.channel,
-      toAddress: input.toAddress,
-      subject: input.subject,
-      body: input.body,
-    });
-    await db
-      .update(notificationOutboxTable)
-      .set({ status: "SENT", providerMessageId, sentAt: new Date(), attempts: 1 })
-      .where(eq(notificationOutboxTable.id, id));
-  } catch (err) {
-    logger.error({ err }, "outbox delivery failed");
-    await db
-      .update(notificationOutboxTable)
-      .set({ status: "FAILED", lastError: String((err as Error)?.message ?? err), attempts: 1 })
-      .where(eq(notificationOutboxTable.id, id));
+  if (queueEnabled()) {
+    const queued = await enqueueDelivery(id);
+    if (!queued) await processDelivery(id); // safety net if the queue refused the job
+  } else {
+    await processDelivery(id); // inline fallback — single attempt, no retry
   }
 }
 
