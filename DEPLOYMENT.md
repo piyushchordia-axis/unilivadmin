@@ -20,7 +20,7 @@ browser ──HTTPS──▶ [edge TLS] ──▶ nginx (web :80) ──/──�
   > target a specific arch from another builder, prefix:
   > `DOCKER_DEFAULT_PLATFORM=linux/amd64 docker compose build`.
 - PostgreSQL already running on the host.
-- DNS: `unilivues.sleebit.com` → this server.
+- DNS: `unilivues1.enaacreations.com` → this server.
 
 ## 1. Prepare host PostgreSQL (installed via apt, NOT in Docker)
 
@@ -144,7 +144,7 @@ the site over **HTTPS** for token refresh to work. Terminate TLS upstream — pi
 one:
 
 - **Host reverse proxy** (recommended): run your existing host nginx / Caddy /
-  Traefik with a Let's Encrypt cert for `unilivues.sleebit.com` and
+  Traefik with a Let's Encrypt cert for `unilivues1.enaacreations.com` and
   proxy to this container. Map the container to a non-80 port to avoid clashing:
   in `docker-compose.yml` set the `web` port to e.g. `"8080:80"`.
 - **Certbot in the container**: mount certs into the `web` container and add a
@@ -185,4 +185,4 @@ docker compose down
 | Build fails on a native binary (rollup/oxide/lightningcss) | Build for your server's arch, e.g. `DOCKER_DEFAULT_PLATFORM=linux/amd64 docker compose build`. |
 | Login works but session drops after 15 min | Serve over **HTTPS** (Secure cookies); see §6. |
 | 502 from nginx | API unhealthy — `docker compose logs api`, check DB connectivity. |
-| `web` fails: `bind host port 0.0.0.0:80: address already in use` | A host web server already owns :80. Run the container on another port (`echo 'WEB_PORT=8080' >> .env && docker compose up -d`) and reverse-proxy `unilivues.sleebit.com` → `127.0.0.1:8080` from your host nginx (terminate TLS there). See §6. |
+| `web` fails: `bind host port 0.0.0.0:80: address already in use` | A host web server already owns :80. Run the container on another port (`echo 'WEB_PORT=8080' >> .env && docker compose up -d`) and reverse-proxy `unilivues1.enaacreations.com` → `127.0.0.1:8080` from your host nginx (terminate TLS there). See §6. |
