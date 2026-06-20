@@ -79,6 +79,13 @@ cp .env.docker.example .env.docker
 #   SESSION_SECRET=$(openssl rand -hex 48)
 ```
 
+> **Password with special characters?** A `/`, `#`, `@`, `:`, space or `%` in the
+> password breaks the URL parser (`TypeError: Invalid URL`). Either use a
+> URL-safe password (`openssl rand -hex 24`), URL-encode the chars (`/`→`%2F`,
+> `#`→`%23`, …), **or** skip `DATABASE_URL` and set the raw `PG*` vars instead:
+> `PGHOST=/var/run/postgresql PGUSER=admin PGPASSWORD=… PGDATABASE=uniliv`
+> (no encoding needed). Both are wired through to the api + tools containers.
+
 ## 3. Build
 
 ```bash
