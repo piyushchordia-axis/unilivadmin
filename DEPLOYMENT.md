@@ -30,22 +30,23 @@ compose file bind-mounts the host socket dir (`/var/run/postgresql`) into the
 `api` and `tools` containers, so the only DB setup is a password role + one
 `pg_hba` line.
 
-**a) Create the database + a password role.** Socket connections from the
-container can't use `peer` auth (the container's uid won't map to the role), so
-set a real password:
+**a) Give the `admin` role a password + create the database.** Socket
+connections from the container can't use `peer` auth (the container's uid won't
+map to the role), so the role needs a password. (The database is named `uniliv`
+and owned by `admin`; rename it if you prefer.)
 
 ```bash
-sudo -u postgres psql -c "CREATE USER uniliv WITH PASSWORD 'a-strong-password';"
-sudo -u postgres psql -c "CREATE DATABASE uniliv OWNER uniliv;"
+sudo -u postgres psql -c "ALTER USER admin WITH PASSWORD 'a-strong-password';"
+sudo -u postgres psql -c "CREATE DATABASE uniliv OWNER admin;"
 ```
 
-**b) Allow that role over the local socket with a password.** Insert a `local`
-rule *above* the default `peer` catch-all (pg_hba is first-match), so existing
-local logins like `sudo -u postgres psql` keep working:
+**b) Allow `admin` over the local socket with a password.** Insert a `local`
+rule *above* the default `peer` catch-all (pg_hba is first-match), scoped to the
+`uniliv` DB so other local logins (e.g. `sudo -u postgres psql`) are untouched:
 
 ```bash
 PGHBA=$(dirname "$(sudo -u postgres psql -tAc 'SHOW config_file')")/pg_hba.conf
-sudo sed -i "0,/^local/s//local   uniliv   uniliv   scram-sha-256\nlocal/" "$PGHBA"
+sudo sed -i "0,/^local/s//local   uniliv   admin   scram-sha-256\nlocal/" "$PGHBA"
 sudo systemctl reload postgresql
 ```
 
@@ -60,21 +61,21 @@ rule.** (Verify the rule landed above the `local all all … peer` line:
 > user. On **SELinux** hosts, add `:z` to the volume mount in `docker-compose.yml`.
 
 `DATABASE_URL` (step 2) uses the socket:
-`postgresql://uniliv:a-strong-password@/uniliv?host=/var/run/postgresql`
+`postgresql://admin:a-strong-password@/uniliv?host=/var/run/postgresql`
 
 > **Alternative — TCP over the host gateway** (only if you can't share the
 > socket): set `listen_addresses = '*'` (or `'localhost,172.17.0.1'`), add
-> `host all all 172.16.0.0/12 scram-sha-256` to `pg_hba.conf`, restart Postgres,
-> re-add `extra_hosts: ["host.docker.internal:host-gateway"]` to the `api`/`tools`
-> services, and use
-> `DATABASE_URL=postgresql://uniliv:pw@host.docker.internal:5432/uniliv`.
+> `host uniliv admin 172.16.0.0/12 scram-sha-256` to `pg_hba.conf`, restart
+> Postgres, re-add `extra_hosts: ["host.docker.internal:host-gateway"]` to the
+> `api`/`tools` services, and use
+> `DATABASE_URL=postgresql://admin:pw@host.docker.internal:5432/uniliv`.
 
 ## 2. Configure env
 
 ```bash
 cp .env.docker.example .env.docker
 # edit .env.docker:
-#   DATABASE_URL=postgresql://uniliv:a-strong-password@/uniliv?host=/var/run/postgresql
+#   DATABASE_URL=postgresql://admin:a-strong-password@/uniliv?host=/var/run/postgresql
 #   SESSION_SECRET=$(openssl rand -hex 48)
 ```
 
@@ -167,8 +168,8 @@ docker compose down
 
 | Symptom | Fix |
 |---|---|
-| API can't reach DB | Confirm the socket exists (`ls /var/run/postgresql/.s.PGSQL.5432`), `DATABASE_URL` ends with `?host=/var/run/postgresql`, the `local uniliv uniliv scram-sha-256` pg_hba rule is **above** the `peer` catch-all, and the role's password matches. `docker compose logs api`. |
-| `peer authentication failed` for uniliv | Your pg_hba `local … peer` rule is matching first — move the `scram-sha-256` line above it and `sudo systemctl reload postgresql`. |
+| API can't reach DB | Confirm the socket exists (`ls /var/run/postgresql/.s.PGSQL.5432`), `DATABASE_URL` ends with `?host=/var/run/postgresql`, the `local uniliv admin scram-sha-256` pg_hba rule is **above** the `peer` catch-all, and `admin`'s password matches. `docker compose logs api`. |
+| `peer authentication failed` for admin | Your pg_hba `local … peer` rule is matching first — move the `scram-sha-256` line above it and `sudo systemctl reload postgresql`. |
 | Build fails on a native binary (rollup/oxide/lightningcss) | Build for your server's arch, e.g. `DOCKER_DEFAULT_PLATFORM=linux/amd64 docker compose build`. |
 | Login works but session drops after 15 min | Serve over **HTTPS** (Secure cookies); see §6. |
 | 502 from nginx | API unhealthy — `docker compose logs api`, check DB connectivity. |
