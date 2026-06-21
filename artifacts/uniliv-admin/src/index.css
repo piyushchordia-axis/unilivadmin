@@ -209,6 +209,11 @@
   .bg-brand-gradient {
     background-image: var(--brand-gradient);
   }
+  /* Vertical rail variant: top→bottom sunset-orange → violet, so the gradient
+     reads along a thin (3px) active-nav rail where the 120deg diagonal can't. */
+  .bg-rail-gradient {
+    background-image: linear-gradient(180deg, #F2603C 0%, #C2459A 100%);
+  }
   .text-brand-gradient {
     background-image: var(--brand-gradient);
     -webkit-background-clip: text;

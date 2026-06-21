@@ -74,7 +74,7 @@ function NavLink({ item, location, onNavigate }: { item: NavItem; location: stri
             : "text-sidebar-foreground/70 hover:text-sidebar-foreground",
         )}
       >
-        {isActive && <span aria-hidden className="absolute left-0 top-1.5 bottom-1.5 w-[3px] rounded-full bg-brand-gradient" />}
+        {isActive && <span aria-hidden className="absolute left-0 top-1.5 bottom-1.5 w-[3px] rounded-full bg-rail-gradient" />}
         <item.icon className="w-4 h-4 shrink-0" />
         <span className="truncate">{item.title}</span>
       </span>
@@ -84,19 +84,40 @@ function NavLink({ item, location, onNavigate }: { item: NavItem; location: stri
 
 /** Collapsible nav group with persisted open/closed state. */
 function NavGroupSection({
-  group, location, open, onToggle, onNavigate,
+  group, location, open, onToggle, onNavigate, divider,
 }: {
   group: NavGroup
   location: string
   open: boolean
   onToggle: (title: string, open: boolean) => void
   onNavigate?: () => void
+  /** Draw a hairline divider above this group (every group except the first). */
+  divider?: boolean
 }) {
   return (
-    <Collapsible open={open} onOpenChange={(o) => onToggle(group.title, o)}>
-      <CollapsibleTrigger className="group/nav flex w-full items-center justify-between px-3 py-1.5 rounded-lg text-[10px] uppercase font-bold tracking-widest text-sidebar-foreground/40 hover:text-sidebar-foreground/70 transition-colors">
+    <Collapsible
+      open={open}
+      onOpenChange={(o) => onToggle(group.title, o)}
+      className={cn(divider && "mt-1.5 border-t border-sidebar-border pt-1.5")}
+    >
+      {/* Heading hierarchy: the open group reads as a strong section label;
+          collapsed groups recede. The active-item gradient rail lives on the
+          item itself (NavLink), never on the heading. */}
+      <CollapsibleTrigger
+        className={cn(
+          "group/nav flex w-full items-center justify-between px-3 py-1.5 rounded-lg text-[11px] uppercase tracking-widest transition-colors",
+          open
+            ? "font-semibold text-sidebar-foreground/85"
+            : "font-medium text-sidebar-foreground/55 hover:text-sidebar-foreground/80",
+        )}
+      >
         <span>{group.title}</span>
-        <ChevronDown className={cn("w-3.5 h-3.5 transition-transform duration-200", open ? "" : "-rotate-90")} />
+        <ChevronDown
+          className={cn(
+            "w-3.5 h-3.5 transition-transform duration-200",
+            open ? "text-sidebar-foreground/70" : "-rotate-90 text-sidebar-foreground/40",
+          )}
+        />
       </CollapsibleTrigger>
       <CollapsibleContent className="overflow-hidden data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0">
         <div className="space-y-1 pt-1 pb-1">
@@ -196,7 +217,7 @@ function SidebarContent({
       </div>
       <div className="flex-1 overflow-y-auto py-3 scrollbar-thin">
         <nav className="px-3 space-y-1">
-          {filteredGroups.map((group) => (
+          {filteredGroups.map((group, i) => (
             <NavGroupSection
               key={group.title}
               group={group}
@@ -204,6 +225,7 @@ function SidebarContent({
               open={openGroup === group.title}
               onToggle={onToggleGroup}
               onNavigate={onNavigate}
+              divider={i > 0}
             />
           ))}
         </nav>
