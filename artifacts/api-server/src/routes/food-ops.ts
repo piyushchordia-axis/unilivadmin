@@ -100,6 +100,38 @@ async function resolveCutoff(brand: string, propertyId?: string): Promise<string
   return row?.cutoffTime ?? null;
 }
 
+/**
+ * Server-side enforcement of the order cut-off, shared by BOTH order-placement
+ * endpoints (POST /food/orders in food.ts and POST /food/order-batches here) so
+ * the cut-off can't be bypassed by calling the API directly. A single cut-off per
+ * brand/property applies to all meals on the service day. Rejects when:
+ *   1. the service day is already in the past, or
+ *   2. the resolved cut-off time for that service date has passed.
+ * Returns a user-facing error string (caller responds 422), or null if allowed.
+ */
+export async function checkOrderCutoff(
+  brand: string,
+  propertyId: string | undefined,
+  serviceDate: Date,
+): Promise<string | null> {
+  const now = new Date();
+  // 1) No ordering for a day that has already gone by.
+  const today = new Date(now); today.setHours(0, 0, 0, 0);
+  const serviceDay = new Date(serviceDate); serviceDay.setHours(0, 0, 0, 0);
+  if (serviceDay.getTime() < today.getTime()) {
+    return "Cannot place an order for a past date.";
+  }
+  // 2) Once the resolved cut-off for the service date passes, ordering is closed.
+  const cutoffTime = await resolveCutoff(brand, propertyId);
+  const cutoffAt = cutoffTime ? atTime(serviceDate, cutoffTime) : null;
+  if (cutoffAt && now > cutoffAt) {
+    const d = serviceDay;
+    const label = `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}/${d.getFullYear()}`;
+    return `Ordering for ${label} is closed — the ${cutoffTime} cut-off has passed.`;
+  }
+  return null;
+}
+
 /** Expected delivery time = serviceDate@serviceTime + leadTime (delay baseline). */
 async function expectedDeliveryAt(brand: string, mealType: string, serviceDate: Date, propertyId: string) {
   const w = await resolveWindow(brand, mealType, propertyId);
@@ -605,6 +637,10 @@ foodOpsRouter.post("/order-batches", authenticate, authorize("FOOD_PLACE_ORDER",
     if (!brand || !kitchenId) {
       res.status(422).json({ success: false, error: "This property is not configured for ordering (missing brand or kitchen). Ask an admin to assign them." }); return;
     }
+
+    // Enforce the order cut-off server-side (past date / past cut-off → 422).
+    const cutoffError = await checkOrderCutoff(brand, propertyId, sd);
+    if (cutoffError) { res.status(422).json({ success: false, error: cutoffError }); return; }
 
     const now = new Date();
     const batchNumber = await nextSeq(`BATCH-${now.getFullYear()}-`, foodOrderBatchesTable.batchNumber, foodOrderBatchesTable);

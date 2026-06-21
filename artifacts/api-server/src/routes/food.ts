@@ -60,6 +60,9 @@ import {
 } from "../lib/food-service.js";
 import { notifyOrderEvent } from "../lib/notification-service.js";
 import { toXls } from "../lib/export-service.js";
+// Shared order cut-off enforcement (single source of truth lives in food-ops.ts,
+// alongside resolveCutoff()/atTime()) so /orders and /order-batches stay consistent.
+import { checkOrderCutoff } from "./food-ops.js";
 
 export const foodRouter: Router = Router();
 
@@ -278,6 +281,10 @@ foodRouter.post("/orders", authenticate, authorize("FOOD_PLACE_ORDER", "create")
     // Brand + kitchen are inherited from the property.
     const { brand, kitchenId } = await getPropertyFoodConfig(propertyId);
     if (!brand || !kitchenId) { res.status(422).json({ success: false, error: "This property is not configured for ordering (missing brand or kitchen)." }); return; }
+
+    // Enforce the order cut-off server-side (past date / past cut-off → 422).
+    const cutoffError = await checkOrderCutoff(brand, propertyId, sd);
+    if (cutoffError) { res.status(422).json({ success: false, error: cutoffError }); return; }
 
     const residents = residentsCount != null ? Number(residentsCount) : qty;
     const computed = await computeOrderItems(kitchenId, brand, mealType, sd, qty);
