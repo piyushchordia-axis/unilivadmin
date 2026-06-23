@@ -1,9 +1,10 @@
 import * as React from "react";
 import { useLocation } from "wouter";
+import { useAppStore } from "@/lib/store";
 import { useQuery } from "@tanstack/react-query";
 import {
   Home, Building2, ChefHat, Users, Percent, Wallet, ListOrdered, FilePlus2,
-  Truck, AlertTriangle, Tag,
+  Truck, AlertTriangle, Tag, BedDouble,
 } from "lucide-react";
 import { PageHeader } from "@/components/page-header";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -15,19 +16,34 @@ import { withQuery } from "@/lib/nav-helpers";
 
 const inr = (n: number) => `₹${(n ?? 0).toLocaleString("en-IN")}`;
 
-function Stat({ icon: Icon, label, value }: { icon: typeof Users; label: string; value: React.ReactNode }) {
-  return (
-    <div className="flex flex-col gap-0.5">
+function Stat({
+  icon: Icon, label, value, onClick,
+}: { icon: typeof Users; label: string; value: React.ReactNode; onClick?: () => void }) {
+  const content = (
+    <>
       <span className="flex items-center gap-1 text-xs text-muted-foreground">
         <Icon className="h-3.5 w-3.5" /> {label}
       </span>
       <span className="text-sm font-semibold tabular-nums">{value}</span>
-    </div>
+    </>
+  );
+  if (!onClick) {
+    return <div className="flex flex-col gap-0.5">{content}</div>;
+  }
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="flex flex-col gap-0.5 rounded-md text-left transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring -m-1 p-1"
+    >
+      {content}
+    </button>
   );
 }
 
 export default function FoodMyProperties() {
   const [, setLocation] = useLocation();
+  const { setPropertyId: setGlobalProperty } = useAppStore();
 
   const { data: properties = [], isLoading } = useQuery<MyPropertyCard[]>({
     queryKey: foodKeys.myProperties(),
@@ -37,6 +53,13 @@ export default function FoodMyProperties() {
   // Carry the property into the destination page so it opens scoped to it.
   const go = (propertyId: string, path: string) => {
     setLocation(withQuery(path, { propertyId }));
+  };
+  // Occupancy / beds / collections live on the Unit-Lead Home dashboard (the
+  // food-accessible analytics view): scope the global selector to this property,
+  // then open Home. The unit-lead persona has no Properties/Payments module.
+  const goHomeScoped = (propertyId: string) => {
+    setGlobalProperty(propertyId);
+    setLocation("/home");
   };
 
   return (
@@ -93,10 +116,36 @@ export default function FoodMyProperties() {
 
               <CardContent className="flex flex-1 flex-col gap-4">
                 <div className="grid grid-cols-2 gap-3">
-                  <Stat icon={Users} label="Active guests" value={p.activeGuests} />
-                  <Stat icon={Percent} label="Occupancy" value={`${p.occupancyPct}%`} />
-                  <Stat icon={Wallet} label="Revenue (mo)" value={inr(p.monthlyRevenue)} />
-                  <Stat icon={ListOrdered} label="Active orders" value={p.activeOrders} />
+                  <Stat
+                    icon={Users}
+                    label="Active guests"
+                    value={p.activeGuests}
+                    onClick={() => go(p.id, "/food/guests")}
+                  />
+                  <Stat
+                    icon={Percent}
+                    label="Occupancy"
+                    value={`${p.occupancyPct}%`}
+                    onClick={() => goHomeScoped(p.id)}
+                  />
+                  <Stat
+                    icon={BedDouble}
+                    label="Vacant beds"
+                    value={Math.max(0, (p.totalBeds ?? 0) - (p.occupied ?? 0))}
+                    onClick={() => goHomeScoped(p.id)}
+                  />
+                  <Stat
+                    icon={Wallet}
+                    label="Revenue (month)"
+                    value={inr(p.monthlyRevenue)}
+                    onClick={() => goHomeScoped(p.id)}
+                  />
+                  <Stat
+                    icon={ListOrdered}
+                    label="Active orders"
+                    value={p.activeOrders}
+                    onClick={() => go(p.id, "/food/orders")}
+                  />
                 </div>
 
                 {!p.configured && (

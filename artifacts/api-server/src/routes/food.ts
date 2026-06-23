@@ -37,10 +37,11 @@ import {
   foodDispatchesTable,
   foodBrandsTable,
 } from "@workspace/db";
-import { and, eq, or, ilike, sql, desc, asc, gte, lte, inArray, isNull } from "drizzle-orm";
+import { and, eq, or, ilike, sql, desc, asc, gte, lte, inArray, isNull, isNotNull } from "drizzle-orm";
 import type { AnyColumn } from "drizzle-orm";
 import { authenticate } from "../middlewares/auth.js";
 import { authorize } from "../middlewares/authorize.js";
+import { can, type UserRole } from "../lib/permissions.js";
 import { getPagination, buildMeta } from "../lib/paginate.js";
 import { newId } from "../lib/id.js";
 import {
@@ -57,9 +58,10 @@ import {
   loadDishesForValidation,
   autoFillMenu,
   detectSharedIngredients,
+  getWasteEditWindowMs,
 } from "../lib/food-service.js";
 import { notifyOrderEvent } from "../lib/notification-service.js";
-import { toXls } from "../lib/export-service.js";
+import { toCsv, toPdf, fmtDate, fmtDateTime, fileDateStamp, sanitizeForFilename } from "../lib/export-service.js";
 // Shared order cut-off enforcement (single source of truth lives in food-ops.ts,
 // alongside resolveCutoff()/atTime()) so /orders and /order-batches stay consistent.
 import { checkOrderCutoff } from "./food-ops.js";
@@ -120,15 +122,15 @@ foodRouter.get("/dashboard", authenticate, authorize("FOOD_DASHBOARD", "view"), 
     const aggFor = async (lo: Date, hi: Date) => {
       const [row] = await db.select({
         total: sql<number>`count(*) filter (where ${foodOrdersTable.status} <> 'CANCELLED')::int`,
-        ordered: sql<number>`count(*) filter (where ${foodOrdersTable.status} = 'PLACED')::int`,
-        dispatched: sql<number>`count(*) filter (where ${foodOrdersTable.status} = 'DISPATCHED')::int`,
-        delivered: sql<number>`count(*) filter (where ${foodOrdersTable.status} = 'DELIVERED')::int`,
+        // "Active" = PLACED only (not PREPARING/DISPATCHED/etc.).
+        active: sql<number>`count(*) filter (where ${foodOrdersTable.status} = 'PLACED')::int`,
+        // "Awaiting Confirmation" = DISPATCHED (display-only top stat).
+        awaitingConfirmation: sql<number>`count(*) filter (where ${foodOrdersTable.status} = 'DISPATCHED')::int`,
       }).from(foodOrdersTable).where(baseConds(lo, hi));
       return {
         total: row?.total ?? 0,
-        ordered: row?.ordered ?? 0,
-        dispatched: row?.dispatched ?? 0,
-        delivered: row?.delivered ?? 0,
+        active: row?.active ?? 0,
+        awaitingConfirmation: row?.awaitingConfirmation ?? 0,
       };
     };
 
@@ -148,21 +150,51 @@ foodRouter.get("/dashboard", authenticate, authorize("FOOD_DASHBOARD", "view"), 
         sql`${col} >= ${lo} and ${col} <= ${hi}`;
       const [row] = await db.select({
         total: sql<number>`count(*) filter (where ${foodOrdersTable.status} <> 'CANCELLED' and ${inWindow(foodOrdersTable.serviceDate)})::int`,
-        ordered: sql<number>`count(*) filter (where ${inWindow(foodOrdersTable.createdAt)})::int`,
-        dispatched: sql<number>`count(*) filter (where ${foodOrdersTable.dispatchedAt} is not null and ${inWindow(foodOrdersTable.dispatchedAt)})::int`,
-        delivered: sql<number>`count(*) filter (where ${foodOrdersTable.deliveredAt} is not null and ${inWindow(foodOrdersTable.deliveredAt)})::int`,
+        active: sql<number>`count(*) filter (where ${inWindow(foodOrdersTable.createdAt)})::int`,
+        awaitingConfirmation: sql<number>`count(*) filter (where ${foodOrdersTable.dispatchedAt} is not null and ${inWindow(foodOrdersTable.dispatchedAt)})::int`,
       }).from(foodOrdersTable).where(scopeWhere);
       return {
         total: row?.total ?? 0,
-        ordered: row?.ordered ?? 0,
-        dispatched: row?.dispatched ?? 0,
-        delivered: row?.delivered ?? 0,
+        active: row?.active ?? 0,
+        awaitingConfirmation: row?.awaitingConfirmation ?? 0,
       };
     };
 
     const cur = await aggFor(from, to);
     const prev = await prevAggFor(prevFrom, prevTo);
     const pct = (c: number, p: number) => (p === 0 ? (c > 0 ? 100 : 0) : Math.round(((c - p) / p) * 1000) / 10);
+
+    // Variance: orders with a kg ordered-vs-received variance (>=1 item whose
+    // receivedQty IS NOT NULL and receivedQty <> orderedQty), counted by the
+    // order's deliveredAt within each period window. FY = current Apr–Mar.
+    const varScope = [] as ReturnType<typeof eq>[];
+    if (scope) varScope.push(scope);
+    if (propertyId) varScope.push(eq(foodOrdersTable.propertyId, propertyId));
+    if (brand) varScope.push(eq(foodOrdersTable.brand, brand as never));
+    const now = new Date();
+    const fyStart = new Date(now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1, 3, 1, 0, 0, 0, 0);
+    const varianceFrom = (months: number) => new Date(now.getTime() - months * 30 * 86400000);
+    const varianceCount = async (lo: Date) => {
+      const conds = [
+        isNotNull(foodOrdersTable.deliveredAt),
+        gte(foodOrdersTable.deliveredAt, lo),
+        lte(foodOrdersTable.deliveredAt, now),
+        isNotNull(foodOrderItemsTable.receivedQty),
+        sql`${foodOrderItemsTable.receivedQty} <> ${foodOrderItemsTable.orderedQty}`,
+        ...varScope,
+      ];
+      const [row] = await db.select({ c: sql<number>`count(distinct ${foodOrdersTable.id})::int` })
+        .from(foodOrdersTable)
+        .innerJoin(foodOrderItemsTable, eq(foodOrderItemsTable.orderId, foodOrdersTable.id))
+        .where(and(...conds));
+      return row?.c ?? 0;
+    };
+    const variance = {
+      m1: await varianceCount(varianceFrom(1)),
+      m3: await varianceCount(varianceFrom(3)),
+      m6: await varianceCount(varianceFrom(6)),
+      fy: await varianceCount(fyStart),
+    };
 
     // Pending actions (current scope, not time-bounded).
     const pendConds = [] as ReturnType<typeof eq>[];
@@ -173,7 +205,6 @@ foodRouter.get("/dashboard", authenticate, authorize("FOOD_DASHBOARD", "view"), 
 
     const [pendRow] = await db.select({
       awaitingDispatch: sql<number>`count(*) filter (where ${foodOrdersTable.status} = 'PREPARING')::int`,
-      awaitingConfirmation: sql<number>`count(*) filter (where ${foodOrdersTable.status} = 'DISPATCHED')::int`,
     }).from(foodOrdersTable).where(pendWhere);
 
     // Waste pending: DELIVERED, still within edit window, with any item missing wastedQty.
@@ -196,17 +227,64 @@ foodRouter.get("/dashboard", authenticate, authorize("FOOD_DASHBOARD", "view"), 
       data: {
         kpis: {
           totalOrders: { value: cur.total, changePct: pct(cur.total, prev.total) },
-          ordered: { value: cur.ordered, changePct: pct(cur.ordered, prev.ordered) },
-          dispatched: { value: cur.dispatched, changePct: pct(cur.dispatched, prev.dispatched) },
-          delivered: { value: cur.delivered, changePct: pct(cur.delivered, prev.delivered) },
+          active: { value: cur.active, changePct: pct(cur.active, prev.active) },
+          awaitingConfirmation: { value: cur.awaitingConfirmation, changePct: pct(cur.awaitingConfirmation, prev.awaitingConfirmation) },
+          variance,
         },
         pendingActions: {
           awaitingDispatch: pendRow?.awaitingDispatch ?? 0,
-          awaitingConfirmation: pendRow?.awaitingConfirmation ?? 0,
           wastePending: wasteRow?.c ?? 0,
         },
       },
     });
+  } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
+});
+
+/**
+ * Waste-pending rows for the dashboard table: DELIVERED orders still within the
+ * waste-edit window that have at least one item missing wastedQty. Scoped to the
+ * caller's accessible properties. Each row carries the absolute wasteEditableUntil
+ * so the client can render a live "NN min left" countdown.
+ */
+foodRouter.get("/waste-pending", authenticate, authorize("FOOD_DASHBOARD", "view"), async (req, res) => {
+  try {
+    const ids = await resolveAccessiblePropertyIds(req.user!);
+    const scope = scopeOrdersCondition(ids);
+    const propertyId = req.query["propertyId"] as string | undefined;
+    const brand = req.query["brand"] as string | undefined;
+
+    const conds = [
+      eq(foodOrdersTable.status, "DELIVERED"),
+      gte(foodOrdersTable.wasteEditableUntil, new Date()),
+      isNull(foodOrderItemsTable.wastedQty),
+    ];
+    if (scope) conds.push(scope);
+    if (propertyId) conds.push(eq(foodOrdersTable.propertyId, propertyId));
+    if (brand) conds.push(eq(foodOrdersTable.brand, brand as never));
+
+    const rows = await db.select({
+      orderId: foodOrdersTable.id,
+      orderNumber: foodOrdersTable.orderNumber,
+      propertyName: propertiesTable.name,
+      mealType: foodOrdersTable.mealType,
+      deliveredAt: foodOrdersTable.deliveredAt,
+      wasteEditableUntil: foodOrdersTable.wasteEditableUntil,
+    }).from(foodOrdersTable)
+      .innerJoin(foodOrderItemsTable, eq(foodOrderItemsTable.orderId, foodOrdersTable.id))
+      .leftJoin(propertiesTable, eq(foodOrdersTable.propertyId, propertiesTable.id))
+      .where(and(...conds))
+      .groupBy(
+        foodOrdersTable.id,
+        foodOrdersTable.orderNumber,
+        propertiesTable.name,
+        foodOrdersTable.mealType,
+        foodOrdersTable.deliveredAt,
+        foodOrdersTable.wasteEditableUntil,
+      )
+      .orderBy(asc(foodOrdersTable.wasteEditableUntil))
+      .limit(100);
+
+    res.json({ success: true, data: rows });
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
@@ -394,6 +472,83 @@ foodRouter.post("/orders/dispatch/bulk", authenticate, authorize("FOOD_DISPATCH"
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
+/**
+ * Standalone order-tracking lookup (WS9). Resolve an order by its human order
+ * number (e.g. ORD-2026-000001) OR raw id, returning the same detail payload as
+ * GET /orders/:id. Scoped to the caller's accessible properties, so a user can
+ * only track orders in properties they can see. Used by the /food/track page.
+ */
+foodRouter.get("/orders/track", authenticate, authorize("FOOD_ALL_ORDERS", "view"), async (req, res) => {
+  try {
+    const orderNumber = String(req.query["orderNumber"] ?? "").trim();
+    const rawId = String(req.query["id"] ?? "").trim();
+    const term = orderNumber || rawId;
+    if (!term) { res.status(400).json({ success: false, error: "orderNumber or id required" }); return; }
+
+    const [match] = await db.select({ id: foodOrdersTable.id, propertyId: foodOrdersTable.propertyId })
+      .from(foodOrdersTable)
+      .where(or(
+        eq(foodOrdersTable.id, term),
+        ilike(foodOrdersTable.orderNumber, term),
+      ))
+      .limit(1);
+    if (!match) { res.status(404).json({ success: false, error: "No order found for that number." }); return; }
+
+    const ids = await resolveAccessiblePropertyIds(req.user!);
+    if (!isAccessible(match.propertyId, ids)) { res.status(403).json({ success: false, error: "Order not accessible" }); return; }
+
+    const [row] = await db.select({
+      o: foodOrdersTable,
+      propertyName: propertiesTable.name,
+      unitLeadName: usersTable.name,
+      deliveryPartnerName: agenciesTable.name,
+      kitchen: kitchensTable,
+      dispatch: foodDispatchesTable,
+    }).from(foodOrdersTable)
+      .leftJoin(propertiesTable, eq(foodOrdersTable.propertyId, propertiesTable.id))
+      .leftJoin(usersTable, eq(foodOrdersTable.unitLeadId, usersTable.id))
+      .leftJoin(agenciesTable, eq(foodOrdersTable.deliveryPartnerId, agenciesTable.id))
+      .leftJoin(kitchensTable, eq(foodOrdersTable.kitchenId, kitchensTable.id))
+      .leftJoin(foodDispatchesTable, eq(foodOrdersTable.dispatchId, foodDispatchesTable.id))
+      .where(eq(foodOrdersTable.id, match.id));
+
+    const items = await db.select({
+      it: foodOrderItemsTable,
+      dishName: dishesTable.name,
+      component: dishesTable.component,
+    }).from(foodOrderItemsTable)
+      .leftJoin(dishesTable, eq(foodOrderItemsTable.dishId, dishesTable.id))
+      .where(eq(foodOrderItemsTable.orderId, match.id));
+
+    const events = await db.select().from(foodOrderEventsTable)
+      .where(eq(foodOrderEventsTable.orderId, match.id))
+      .orderBy(asc(foodOrderEventsTable.createdAt));
+
+    res.json({
+      success: true,
+      data: {
+        ...row!.o,
+        totalQuantity: row!.o.totalQuantity != null ? Number(row!.o.totalQuantity) : null,
+        propertyName: row!.propertyName,
+        unitLeadName: row!.unitLeadName,
+        deliveryPartnerName: row!.deliveryPartnerName,
+        kitchen: row!.kitchen ?? null,
+        dispatch: row!.dispatch ?? null,
+        items: items.map((r) => ({
+          ...r.it,
+          dishName: r.dishName,
+          component: r.component,
+          orderedQty: r.it.orderedQty != null ? Number(r.it.orderedQty) : null,
+          preparedQty: r.it.preparedQty != null ? Number(r.it.preparedQty) : null,
+          receivedQty: r.it.receivedQty != null ? Number(r.it.receivedQty) : null,
+          wastedQty: r.it.wastedQty != null ? Number(r.it.wastedQty) : null,
+        })),
+        events,
+      },
+    });
+  } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
+});
+
 foodRouter.get("/orders/:id", authenticate, authorize("FOOD_ALL_ORDERS", "view"), async (req, res) => {
   try {
     const id = req.params["id"]!;
@@ -512,15 +667,23 @@ foodRouter.put("/orders/:id", authenticate, authorize("FOOD_PLACE_ORDER", "edit"
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-foodRouter.post("/orders/:id/cancel", authenticate, authorize("FOOD_PLACE_ORDER", "edit"), async (req, res) => {
+// Cancel is allowed for the ordering side (UNIT_LEAD via FOOD_PLACE_ORDER) AND the
+// kitchen side (FnB via FOOD_KITCHEN_SUMMARY) — FnB is intentionally NOT granted
+// FOOD_PLACE_ORDER, so we gate inline on either edit permission rather than a single
+// authorize() call. Cancel is only valid while the order is still pre-dispatch.
+foodRouter.post("/orders/:id/cancel", authenticate, async (req, res) => {
   try {
+    const role = req.user?.role as UserRole | undefined;
+    const canCancel = can(role, "FOOD_PLACE_ORDER", "edit") || can(role, "FOOD_KITCHEN_SUMMARY", "edit");
+    if (!canCancel) { res.status(403).json({ success: false, error: "Forbidden — insufficient permissions" }); return; }
     const id = req.params["id"]!;
     const [order] = await db.select().from(foodOrdersTable).where(eq(foodOrdersTable.id, id));
     if (!order) { res.status(404).json({ success: false, error: "Not found" }); return; }
     const ids = await resolveAccessiblePropertyIds(req.user!);
     if (!isAccessible(order.propertyId, ids)) { res.status(403).json({ success: false, error: "Order not accessible" }); return; }
-    if (order.status !== "PLACED" && order.status !== "PREPARING") {
-      res.status(422).json({ success: false, error: "Only PLACED or PREPARING orders can be cancelled" });
+    // Cancel allowed only while pre-dispatch (PLACED, ACCEPTED, PREPARING).
+    if (order.status === "DISPATCHED" || order.status === "DELIVERED" || order.status === "CANCELLED" || order.status === "REJECTED") {
+      res.status(422).json({ success: false, error: "Only orders that are not yet dispatched can be cancelled" });
       return;
     }
     const reason = req.body?.reason ?? null;
@@ -646,10 +809,11 @@ foodRouter.post("/orders/:id/confirm-delivery", authenticate, authorize("FOOD_CO
     for (const inp of items) {
       await db.update(foodOrderItemsTable).set({ receivedQty: String(Number(inp.receivedQty)), updatedAt: now }).where(eq(foodOrderItemsTable.id, inp.itemId));
     }
+    const wasteWindowMs = await getWasteEditWindowMs();
     const [updated] = await db.update(foodOrdersTable).set({
       status: "DELIVERED",
       deliveredAt: now,
-      wasteEditableUntil: new Date(now.getTime() + 3600000),
+      wasteEditableUntil: new Date(now.getTime() + wasteWindowMs),
       confirmedById: req.user!.id,
       deliveryRemarks: b.remarks ?? null,
       updatedAt: now,
@@ -845,45 +1009,77 @@ foodRouter.get("/reports", authenticate, authorize("FOOD_REPORTS", "view"), asyn
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-foodRouter.get("/reports/export", authenticate, authorize("FOOD_REPORTS", "view"), async (req, res) => {
+const REPORT_ORDER_HEADERS = ["Order ID", "Property", "Unit Lead", "Brand", "Meal", "Residents", "Quantity", "Status", "Service Date", "Delivered At"];
+
+/**
+ * Resolves filtered order rows for the reports export + metadata (property name,
+ * date-range) used in the file header/filename. propertyName is set only when a
+ * single property is in scope; otherwise null (generic multi-property export).
+ */
+async function fetchReportOrdersForExport(req: any): Promise<{
+  rows: (string | number | null | undefined)[][];
+  propertyName: string | null;
+  dateRange: string | null;
+}> {
+  const ids = await resolveAccessiblePropertyIds(req.user!);
+  const scope = scopeOrdersCondition(ids);
+  const where = reportConds(scope, req.query as Record<string, unknown>);
+
+  const rows = await db.select({
+    o: foodOrdersTable,
+    propertyName: propertiesTable.name,
+    unitLeadName: usersTable.name,
+  }).from(foodOrdersTable)
+    .leftJoin(propertiesTable, eq(foodOrdersTable.propertyId, propertiesTable.id))
+    .leftJoin(usersTable, eq(foodOrdersTable.unitLeadId, usersTable.id))
+    .where(where)
+    .orderBy(desc(foodOrdersTable.serviceDate));
+
+  const explicitProperty = req.query["propertyId"] as string | undefined;
+  let propertyName: string | null = null;
+  if (explicitProperty) {
+    propertyName = rows.find((r) => r.propertyName)?.propertyName ?? null;
+  } else {
+    const names = new Set(rows.map((r) => r.propertyName ?? "").filter(Boolean));
+    if (names.size === 1) propertyName = [...names][0];
+  }
+  const from = parseDate(req.query["from"]); const to = parseDate(req.query["to"]);
+  const dateRange = from || to ? `${from ? fmtDate(from) : "…"} → ${to ? fmtDate(to) : "…"}` : null;
+
+  const mapped = rows.map((r) => [
+    r.o.orderNumber, r.propertyName ?? "", r.unitLeadName ?? "", r.o.brand, r.o.mealType,
+    r.o.residentsCount, r.o.totalQuantity != null ? Number(r.o.totalQuantity) : "", r.o.status,
+    fmtDate(r.o.serviceDate), fmtDateTime(r.o.deliveredAt),
+  ]);
+  return { rows: mapped, propertyName, dateRange };
+}
+
+function reportOrdersFilename(propertyName: string | null, ext: string): string {
+  const prop = propertyName ? `-${sanitizeForFilename(propertyName)}` : "";
+  return `food-orders${prop}-${fileDateStamp()}.${ext}`;
+}
+
+// CSV report export. /reports/export kept as an alias of /reports/export.csv
+// for backward compatibility with existing clients.
+async function reportsCsvHandler(req: any, res: any) {
   try {
-    const ids = await resolveAccessiblePropertyIds(req.user!);
-    const scope = scopeOrdersCondition(ids);
-    const where = reportConds(scope, req.query as Record<string, unknown>);
+    const { rows, propertyName, dateRange } = await fetchReportOrdersForExport(req);
+    const csv = toCsv({ title: "Food Orders Report", headers: REPORT_ORDER_HEADERS, rows, propertyName, dateRange });
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename=${reportOrdersFilename(propertyName, "csv")}`);
+    res.send(csv);
+  } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
+}
+foodRouter.get("/reports/export", authenticate, authorize("FOOD_REPORTS", "view"), reportsCsvHandler);
+foodRouter.get("/reports/export.csv", authenticate, authorize("FOOD_REPORTS", "view"), reportsCsvHandler);
 
-    const rows = await db.select({
-      o: foodOrdersTable,
-      propertyName: propertiesTable.name,
-      unitLeadName: usersTable.name,
-    }).from(foodOrdersTable)
-      .leftJoin(propertiesTable, eq(foodOrdersTable.propertyId, propertiesTable.id))
-      .leftJoin(usersTable, eq(foodOrdersTable.unitLeadId, usersTable.id))
-      .where(where)
-      .orderBy(desc(foodOrdersTable.serviceDate));
-
-    const esc = (v: unknown) => {
-      const s = v == null ? "" : String(v);
-      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-    };
-    const header = ["Order ID", "Property", "Unit Lead", "Brand", "Meal", "Residents", "Quantity", "Status", "Service Date", "Delivered At"];
-    const lines = [header.join(",")];
-    for (const r of rows) {
-      lines.push([
-        esc(r.o.orderNumber),
-        esc(r.propertyName),
-        esc(r.unitLeadName),
-        esc(r.o.brand),
-        esc(r.o.mealType),
-        esc(r.o.residentsCount),
-        esc(r.o.totalQuantity != null ? Number(r.o.totalQuantity) : ""),
-        esc(r.o.status),
-        esc(r.o.serviceDate ? new Date(r.o.serviceDate).toISOString().slice(0, 10) : ""),
-        esc(r.o.deliveredAt ? new Date(r.o.deliveredAt).toISOString() : ""),
-      ].join(","));
-    }
-    res.setHeader("Content-Type", "text/csv");
-    res.setHeader("Content-Disposition", "attachment; filename=food-orders.csv");
-    res.send(lines.join("\n"));
+foodRouter.get("/reports/export.pdf", authenticate, authorize("FOOD_REPORTS", "view"), async (req, res) => {
+  try {
+    const { rows, propertyName, dateRange } = await fetchReportOrdersForExport(req);
+    const pdf = await toPdf({ title: "Food Orders Report", headers: REPORT_ORDER_HEADERS, rows, propertyName, dateRange });
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename=${reportOrdersFilename(propertyName, "pdf")}`);
+    res.send(Buffer.from(pdf));
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
@@ -1109,40 +1305,76 @@ foodRouter.get("/menu-rotation", authenticate, async (req, res) => {
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-// Export the current menu rotation (honours the same filters as the list) as .xls.
-foodRouter.get("/menu-rotation/export.xlsx", authenticate, async (req, res) => {
+const ROTATION_HEADERS = ["Kitchen", "Brand", "Week", "Day", "Meal", "Dish", "Slot", "Order"];
+
+/**
+ * Resolves menu-rotation export rows + metadata (kitchen name used as the
+ * "property"-equivalent label, plus a filename hint built from brand/kitchen).
+ */
+async function fetchRotationForExport(req: any): Promise<{
+  rows: (string | number | null | undefined)[][];
+  kitchenName: string | null;
+  brand: string | null;
+}> {
+  const brand = req.query["brand"] as string | undefined;
+  const kitchenId = req.query["kitchenId"] as string | undefined;
+  const rotationWeek = req.query["rotationWeek"] as string | undefined;
+  const dayOfWeek = req.query["dayOfWeek"] as string | undefined;
+  const mealType = req.query["mealType"] as string | undefined;
+  const conds = [] as ReturnType<typeof eq>[];
+  if (brand) conds.push(eq(foodMenuRotationTable.brand, brand as never));
+  if (kitchenId) conds.push(eq(foodMenuRotationTable.kitchenId, kitchenId));
+  if (rotationWeek) conds.push(eq(foodMenuRotationTable.rotationWeek, Number(rotationWeek)));
+  if (dayOfWeek) conds.push(eq(foodMenuRotationTable.dayOfWeek, Number(dayOfWeek)));
+  if (mealType) conds.push(eq(foodMenuRotationTable.mealType, mealType as never));
+  const where = conds.length ? and(...conds) : undefined;
+  const rows = await db.select({
+    kitchenName: kitchensTable.name, brand: foodMenuRotationTable.brand,
+    rotationWeek: foodMenuRotationTable.rotationWeek, dayOfWeek: foodMenuRotationTable.dayOfWeek,
+    mealType: foodMenuRotationTable.mealType, dishName: dishesTable.name,
+    slotLabel: foodMenuRotationTable.slotLabel, sortOrder: foodMenuRotationTable.sortOrder,
+  }).from(foodMenuRotationTable)
+    .leftJoin(dishesTable, eq(foodMenuRotationTable.dishId, dishesTable.id))
+    .leftJoin(kitchensTable, eq(foodMenuRotationTable.kitchenId, kitchensTable.id))
+    .where(where)
+    .orderBy(kitchensTable.name, foodMenuRotationTable.brand, foodMenuRotationTable.rotationWeek, foodMenuRotationTable.dayOfWeek, foodMenuRotationTable.sortOrder);
+  const DAYS = ["", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+  const mapped = rows.map((r) => [
+    r.kitchenName ?? "—", r.brand, `W${r.rotationWeek}`, DAYS[r.dayOfWeek] ?? r.dayOfWeek,
+    r.mealType, r.dishName ?? "—", r.slotLabel ?? "", r.sortOrder,
+  ]);
+  const kitchenNames = new Set(rows.map((r) => r.kitchenName ?? "").filter(Boolean));
+  const kitchenName = kitchenId && kitchenNames.size ? [...kitchenNames][0] : (kitchenNames.size === 1 ? [...kitchenNames][0] : null);
+  return { rows: mapped, kitchenName, brand: brand ?? null };
+}
+
+function rotationFilename(kitchenName: string | null, brand: string | null, ext: string): string {
+  const parts = ["menu-rotation"];
+  if (brand) parts.push(sanitizeForFilename(brand));
+  if (kitchenName) parts.push(sanitizeForFilename(kitchenName));
+  parts.push(fileDateStamp());
+  return `${parts.join("-")}.${ext}`;
+}
+
+// Export the current menu rotation (honours the same filters as the list) as CSV.
+foodRouter.get("/menu-rotation/export.csv", authenticate, async (req, res) => {
   try {
-    const brand = req.query["brand"] as string | undefined;
-    const kitchenId = req.query["kitchenId"] as string | undefined;
-    const rotationWeek = req.query["rotationWeek"] as string | undefined;
-    const dayOfWeek = req.query["dayOfWeek"] as string | undefined;
-    const mealType = req.query["mealType"] as string | undefined;
-    const conds = [] as ReturnType<typeof eq>[];
-    if (brand) conds.push(eq(foodMenuRotationTable.brand, brand as never));
-    if (kitchenId) conds.push(eq(foodMenuRotationTable.kitchenId, kitchenId));
-    if (rotationWeek) conds.push(eq(foodMenuRotationTable.rotationWeek, Number(rotationWeek)));
-    if (dayOfWeek) conds.push(eq(foodMenuRotationTable.dayOfWeek, Number(dayOfWeek)));
-    if (mealType) conds.push(eq(foodMenuRotationTable.mealType, mealType as never));
-    const where = conds.length ? and(...conds) : undefined;
-    const rows = await db.select({
-      kitchenName: kitchensTable.name, brand: foodMenuRotationTable.brand,
-      rotationWeek: foodMenuRotationTable.rotationWeek, dayOfWeek: foodMenuRotationTable.dayOfWeek,
-      mealType: foodMenuRotationTable.mealType, dishName: dishesTable.name,
-      slotLabel: foodMenuRotationTable.slotLabel, sortOrder: foodMenuRotationTable.sortOrder,
-    }).from(foodMenuRotationTable)
-      .leftJoin(dishesTable, eq(foodMenuRotationTable.dishId, dishesTable.id))
-      .leftJoin(kitchensTable, eq(foodMenuRotationTable.kitchenId, kitchensTable.id))
-      .where(where)
-      .orderBy(kitchensTable.name, foodMenuRotationTable.brand, foodMenuRotationTable.rotationWeek, foodMenuRotationTable.dayOfWeek, foodMenuRotationTable.sortOrder);
-    const DAYS = ["", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
-    const xls = toXls({
-      title: "Menu Rotation",
-      headers: ["Kitchen", "Brand", "Week", "Day", "Meal", "Dish", "Slot", "Order"],
-      rows: rows.map((r) => [r.kitchenName ?? "—", r.brand, `W${r.rotationWeek}`, DAYS[r.dayOfWeek] ?? r.dayOfWeek, r.mealType, r.dishName ?? "—", r.slotLabel ?? "", r.sortOrder]),
-    });
-    res.setHeader("Content-Type", "application/vnd.ms-excel");
-    res.setHeader("Content-Disposition", "attachment; filename=menu-rotation.xls");
-    res.send(xls);
+    const { rows, kitchenName, brand } = await fetchRotationForExport(req);
+    const csv = toCsv({ title: "Menu Rotation", headers: ROTATION_HEADERS, rows, propertyName: kitchenName });
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename=${rotationFilename(kitchenName, brand, "csv")}`);
+    res.send(csv);
+  } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
+});
+
+// Export the current menu rotation as PDF.
+foodRouter.get("/menu-rotation/export.pdf", authenticate, async (req, res) => {
+  try {
+    const { rows, kitchenName, brand } = await fetchRotationForExport(req);
+    const pdf = await toPdf({ title: "Menu Rotation", headers: ROTATION_HEADERS, rows, propertyName: kitchenName });
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename=${rotationFilename(kitchenName, brand, "pdf")}`);
+    res.send(Buffer.from(pdf));
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 

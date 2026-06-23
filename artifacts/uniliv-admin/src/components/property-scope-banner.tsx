@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Building2, X } from "lucide-react";
+import { Building2, LayoutGrid } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useAppStore } from "@/lib/store";
@@ -20,7 +20,7 @@ export function PropertyScopeBanner({
   propertyName,
   subtitle,
   onClear,
-  clearLabel = "View all properties",
+  clearLabel = "Show all properties",
   note = "Everything on this page is filtered to this property.",
   className,
 }: {
@@ -61,7 +61,7 @@ export function PropertyScopeBanner({
           onClick={onClear}
           className="shrink-0 gap-1.5 border-accent/30 bg-card text-foreground hover:bg-accent/10"
         >
-          <X className="h-3.5 w-3.5" />
+          <LayoutGrid className="h-3.5 w-3.5" />
           {clearLabel}
         </Button>
       )}
@@ -72,7 +72,7 @@ export function PropertyScopeBanner({
 /**
  * Drop-in banner driven by the GLOBAL property selector (sidebar). Renders nothing
  * unless a property is selected app-wide; otherwise names it and offers a one-click
- * "View all properties" that resets the global scope. Use on any page that filters
+ * "Show all properties" that resets the global scope. Use on any page that filters
  * by the global property so the active scope is echoed on the page itself, not only
  * in the sidebar.
  *

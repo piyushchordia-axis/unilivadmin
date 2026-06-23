@@ -10,6 +10,8 @@ import {
   propertiesTable,
   citiesTable,
   kitchensTable,
+  kitchenPincodesTable,
+  foodBrandsTable,
   userScopesTable,
   dishesTable,
   foodMenuRotationTable,
@@ -20,9 +22,43 @@ import {
   menuCompositionSlotTable,
   dishIngredientsTable,
   rawMaterialsTable,
+  systemConfigTable,
 } from "@workspace/db";
 import { and, eq, or, isNull, lte, gte, sql, inArray, desc } from "drizzle-orm";
 import type { AuthUser } from "../middlewares/auth.js";
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * Admin-tunable global config (system_config). SUPER_ADMIN configures these; the
+ * food module reads them at runtime with safe fallbacks if a row is missing.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/** Default order cut-off time (HH:MM, 24h) when no brand/property cut-off is set. */
+export const FOOD_DEFAULT_CUTOFF_KEY = "food_default_cutoff";
+/** Minutes after delivery during which waste can still be recorded. */
+export const FOOD_WASTE_WINDOW_KEY = "food_waste_edit_window_minutes";
+
+/** Read a JSON scalar from system_config by key; returns `fallback` if missing/malformed. */
+export async function getSystemConfigValue<T>(key: string, fallback: T): Promise<T> {
+  try {
+    const [row] = await db.select().from(systemConfigTable).where(eq(systemConfigTable.key, key)).limit(1);
+    if (!row || row.value === null || row.value === undefined) return fallback;
+    return row.value as T;
+  } catch {
+    return fallback;
+  }
+}
+
+/** Waste-edit window in milliseconds (default 60 min). Replaces the old hardcoded 3600000. */
+export async function getWasteEditWindowMs(): Promise<number> {
+  const minutes = Number(await getSystemConfigValue<number>(FOOD_WASTE_WINDOW_KEY, 60));
+  return (Number.isFinite(minutes) && minutes > 0 ? minutes : 60) * 60000;
+}
+
+/** Global default cut-off time "HH:MM" (default "09:00"), used by resolveCutoff as last resort. */
+export async function getDefaultCutoffTime(): Promise<string> {
+  const v = await getSystemConfigValue<string>(FOOD_DEFAULT_CUTOFF_KEY, "09:00");
+  return typeof v === "string" && /^\d{1,2}:\d{2}$/.test(v) ? v : "09:00";
+}
 
 /** Roles that always see every property regardless of scope rows. */
 const ALWAYS_GLOBAL = new Set([
@@ -140,6 +176,40 @@ export async function getPropertyFoodConfig(
     .from(propertiesTable)
     .where(eq(propertiesTable.id, propertyId));
   return { brand: p?.brand ?? null, kitchenId: p?.kitchenId ?? null };
+}
+
+/**
+ * Resolve the kitchen that serves a pincode via the kitchen_pincodes master map.
+ * Pincode is globally unique so at most one ACTIVE kitchen maps to it; returns
+ * null when no active mapping exists. Server-side source of truth for property
+ * kitchen derivation (never trust a client-supplied kitchenId).
+ */
+export async function resolveKitchenForPincode(
+  pincode: string,
+): Promise<{ id: string; name: string; code: string } | null> {
+  const pc = String(pincode ?? "").trim();
+  if (!/^\d{6}$/.test(pc)) return null;
+  const [row] = await db
+    .select({ id: kitchensTable.id, name: kitchensTable.name, code: kitchensTable.code })
+    .from(kitchenPincodesTable)
+    .innerJoin(kitchensTable, eq(kitchenPincodesTable.kitchenId, kitchensTable.id))
+    .where(and(
+      eq(kitchenPincodesTable.pincode, pc),
+      eq(kitchenPincodesTable.isActive, true),
+      eq(kitchensTable.isActive, true),
+    ));
+  return row ?? null;
+}
+
+/** True if `brand` is a non-empty code of an ACTIVE brand in the food_brands master. */
+export async function isActiveBrand(brand: string | null | undefined): Promise<boolean> {
+  const code = String(brand ?? "").trim();
+  if (!code) return false;
+  const [row] = await db
+    .select({ id: foodBrandsTable.id })
+    .from(foodBrandsTable)
+    .where(and(eq(foodBrandsTable.code, code), eq(foodBrandsTable.isActive, true)));
+  return !!row;
 }
 
 /**

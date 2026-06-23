@@ -1,7 +1,10 @@
 /**
- * Tabular export helpers — produce real .xls (SpreadsheetML 2003, opens in
- * Excel/Sheets, no third-party dependency) and PDF (via pdf-lib, already a
+ * Tabular export helpers — produce CSV and PDF (via pdf-lib, already a
  * dependency). Used by report and guest-list exports (Persona st.34, st.47).
+ *
+ * WS11: standardised on CSV + PDF only — the legacy .xls (SpreadsheetML 2003)
+ * output has been removed. Every export carries a human-readable document
+ * header showing the property name and the export date.
  */
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 
@@ -9,47 +12,81 @@ export interface ExportTable {
   title: string;
   headers: string[];
   rows: (string | number | null | undefined)[][];
+  /** Optional property name rendered in the document/header line. */
+  propertyName?: string | null;
+  /** Optional data date-range label rendered in the header (e.g. "01/06/2026 → 23/06/2026"). */
+  dateRange?: string | null;
+  /** Timestamp the file was generated. Defaults to "now" at render time. */
+  exportDate?: Date;
 }
 
-const xmlEsc = (v: unknown) =>
-  String(v ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+/* ── Date formatting ──────────────────────────────────────────────────────────
+ * Centralised human-readable formatters. All exports go through these so that
+ * dates never leak out as raw ISO/epoch strings. */
 
-const isNum = (v: unknown) =>
-  v !== null && v !== undefined && v !== "" && typeof v !== "boolean" && !isNaN(Number(v));
+const pad = (n: number) => String(n).padStart(2, "0");
 
-/** Builds a SpreadsheetML 2003 (.xls) document for one table. */
-export function toXls(table: ExportTable): string {
-  const cell = (v: unknown) =>
-    isNum(v)
-      ? `<Cell><Data ss:Type="Number">${xmlEsc(v)}</Data></Cell>`
-      : `<Cell><Data ss:Type="String">${xmlEsc(v)}</Data></Cell>`;
-
-  const headerRow = `<Row>${table.headers
-    .map((h) => `<Cell ss:StyleID="hdr"><Data ss:Type="String">${xmlEsc(h)}</Data></Cell>`)
-    .join("")}</Row>`;
-  const bodyRows = table.rows.map((r) => `<Row>${r.map(cell).join("")}</Row>`).join("");
-
-  const sheetName = table.title.replace(/[\\/?*[\]:]/g, "").slice(0, 31) || "Sheet1";
-
-  return `<?xml version="1.0"?>
-<?mso-application progid="Excel.Sheet"?>
-<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
- xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">
- <Styles>
-  <Style ss:ID="hdr"><Font ss:Bold="1"/><Interior ss:Color="#0F172A" ss:Pattern="Solid"/><Font ss:Color="#FFFFFF" ss:Bold="1"/></Style>
- </Styles>
- <Worksheet ss:Name="${xmlEsc(sheetName)}">
-  <Table>
-   ${headerRow}
-   ${bodyRows}
-  </Table>
- </Worksheet>
-</Workbook>`;
+/** dd/MM/yyyy — for a calendar date (e.g. service date). */
+export function fmtDate(value: Date | string | number | null | undefined): string {
+  if (value == null || value === "") return "";
+  const d = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(d.getTime())) return "";
+  return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()}`;
 }
+
+/** dd/MM/yyyy HH:mm — for a datetime (e.g. delivered-at). */
+export function fmtDateTime(value: Date | string | number | null | undefined): string {
+  if (value == null || value === "") return "";
+  const d = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(d.getTime())) return "";
+  return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/** yyyy-MM-dd — unambiguous date stamp for filenames. */
+export function fileDateStamp(value: Date = new Date()): string {
+  return `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())}`;
+}
+
+/** Strip filesystem-unsafe characters from a label so it can go in a filename. */
+export function sanitizeForFilename(label: string | null | undefined): string {
+  return String(label ?? "")
+    .replace(/[\\/:*?"<>|]+/g, "")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 60);
+}
+
+/* ── CSV ──────────────────────────────────────────────────────────────────── */
+
+const csvEsc = (v: unknown) => {
+  const s = v == null ? "" : String(v);
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+};
+
+/**
+ * Builds a CSV document for one table. Prepends a metadata block (title,
+ * property, date-range, export date) above the column header so the file is
+ * self-describing, mirroring the PDF header.
+ */
+export function toCsv(table: ExportTable): string {
+  const exportDate = table.exportDate ?? new Date();
+  const meta: string[] = [csvEsc(table.title)];
+  if (table.propertyName) meta.push(`Property: ${table.propertyName}`);
+  if (table.dateRange) meta.push(`Range: ${table.dateRange}`);
+  meta.push(`Exported: ${fmtDateTime(exportDate)}`);
+
+  const lines: string[] = [];
+  // One metadata cell per line keeps the header readable in a spreadsheet.
+  for (const m of meta) lines.push(csvEsc(m));
+  lines.push(""); // blank separator row
+  lines.push(table.headers.map(csvEsc).join(","));
+  for (const r of table.rows) lines.push(r.map(csvEsc).join(","));
+  // BOM so Excel reads UTF-8 correctly.
+  return "﻿" + lines.join("\n");
+}
+
+/* ── PDF ──────────────────────────────────────────────────────────────────── */
 
 /** Builds a landscape A4 PDF table; paginates rows automatically. */
 export async function toPdf(table: ExportTable): Promise<Uint8Array> {
@@ -62,6 +99,7 @@ export async function toPdf(table: ExportTable): Promise<Uint8Array> {
   const margin = 36;
   const navy = rgb(0.06, 0.09, 0.16);
   const orange = rgb(0.98, 0.45, 0.09);
+  const grey = rgb(0.42, 0.45, 0.5);
   const lightRow = rgb(0.96, 0.98, 0.99);
 
   const cols = table.headers.length;
@@ -79,10 +117,20 @@ export async function toPdf(table: ExportTable): Promise<Uint8Array> {
   let page = doc.addPage([pageW, pageH]);
   let y = pageH - margin;
 
+  const exportDate = table.exportDate ?? new Date();
+  // Metadata line below the title: property + date-range + export timestamp.
+  const metaParts: string[] = [];
+  if (table.propertyName) metaParts.push(`Property: ${table.propertyName}`);
+  if (table.dateRange) metaParts.push(`Range: ${table.dateRange}`);
+  metaParts.push(`Exported: ${fmtDateTime(exportDate)}`);
+  const metaLine = metaParts.join("    ");
+
   const drawTitle = () => {
     page.drawText(table.title, { x: margin, y: y - 4, size: 14, font: bold, color: navy });
     page.drawRectangle({ x: margin, y: y - 12, width: 48, height: 3, color: orange });
-    y -= 34;
+    y -= 26;
+    page.drawText(metaLine, { x: margin, y: y - 4, size: 8, font, color: grey });
+    y -= 18;
   };
   const drawHeader = () => {
     page.drawRectangle({ x: margin, y: y - rowH + 4, width: usableW, height: rowH, color: navy });
@@ -123,4 +171,13 @@ export async function toPdf(table: ExportTable): Promise<Uint8Array> {
   });
 
   return doc.save();
+}
+
+/**
+ * @deprecated WS11 removed SpreadsheetML (.xls) exports. This stub remains only
+ * so any stale import resolves; it throws to surface accidental use. Use toCsv
+ * or toPdf instead. No endpoint emits .xls anymore.
+ */
+export function toXls(_table: ExportTable): string {
+  throw new Error("toXls is deprecated and removed (WS11). Use toCsv or toPdf.");
 }

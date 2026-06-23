@@ -16,11 +16,15 @@ export type NavGroup = { title: string; items: NavItem[] }
 
 export const navGroups: NavGroup[] = [
   { title: "Overview", items: [
+    { title: "Home", href: "/home", icon: Home, module: "FOOD_DASHBOARD" },
     { title: "Dashboard", href: "/", icon: LayoutDashboard, module: "DASHBOARD" },
     { title: "Executive", href: "/dashboard/executive", icon: BarChart3, module: "EXECUTIVE_DASHBOARD" },
   ]},
-  { title: "Operations", items: [
+  { title: "Properties", items: [
+    { title: "My Properties", href: "/food/my-properties", icon: Home, module: "FOOD_DASHBOARD" },
     { title: "Properties", href: "/properties", icon: Building2, module: "PROPERTIES" },
+  ]},
+  { title: "Operations", items: [
     { title: "Rooms", href: "/rooms", icon: DoorOpen, module: "PROPERTIES" },
     { title: "Residents", href: "/residents", icon: Users, module: "RESIDENTS" },
     { title: "Complaints", href: "/complaints", icon: AlertCircle, module: "COMPLAINTS" },
@@ -51,7 +55,6 @@ export const navGroups: NavGroup[] = [
   ]},
   { title: "Food Ordering", items: [
     { title: "Food Overview", href: "/food/dashboard", icon: UtensilsCrossed, module: "FOOD_DASHBOARD" },
-    { title: "My Properties", href: "/food/my-properties", icon: Home, module: "FOOD_DASHBOARD" },
     { title: "Organization", href: "/food/organization", icon: Network, module: "FOOD_ORG" },
     { title: "All Orders", href: "/food/orders", icon: ListOrdered, module: "FOOD_ALL_ORDERS" },
     { title: "Place Order", href: "/food/place-order", icon: FilePlus2, module: "FOOD_PLACE_ORDER" },

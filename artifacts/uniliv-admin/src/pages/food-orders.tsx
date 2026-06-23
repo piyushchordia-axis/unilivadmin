@@ -229,6 +229,10 @@ export default function FoodOrders() {
         data={orders}
         isLoading={isLoading}
         onRowClick={(row: any) => setDetailId(row.id)}
+        exportFilename="food-orders"
+        exportTitle="Food Orders"
+        exportFormats="csv+pdf"
+        exportPropertyName={scopedPropertyName}
       />
 
       <OrderDetailSheet id={detailId} onClose={() => setDetailId(null)} propName={propName} />

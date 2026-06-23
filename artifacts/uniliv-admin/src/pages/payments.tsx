@@ -6,10 +6,15 @@ import { useGetResidents, getGetResidentsQueryKey, useGetResidentPayments, getGe
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet"
 import { format } from "date-fns"
 import { Skeleton } from "@/components/ui/skeleton"
+import { useQueryParam } from "@/lib/nav-helpers"
 
 export default function Payments() {
-  const { data: res, isLoading } = useGetResidents({} as any, { query: { queryKey: getGetResidentsQueryKey({} as any) } })
+  // Optional ?propertyId= scopes the page to one property (e.g. from My Properties → Revenue).
+  const propertyId = useQueryParam("propertyId") || undefined
+  const params = (propertyId ? { propertyId } : {}) as any
+  const { data: res, isLoading } = useGetResidents(params, { query: { queryKey: getGetResidentsQueryKey(params) } })
   const residents = res?.data || []
+  const scopedName = propertyId ? (residents[0] as any)?.propertyName ?? null : null
   
   const [selectedId, setSelectedId] = React.useState<string | null>(null)
   
@@ -33,9 +38,9 @@ export default function Payments() {
 
   return (
     <div className="space-y-6">
-      <PageHeader 
-        title="Payments" 
-        subtitle="Track payment receipts across the portfolio"
+      <PageHeader
+        title="Payments"
+        subtitle={scopedName ? `Collections — ${scopedName}` : "Track payment receipts across the portfolio"}
       />
 
       <DataTable 

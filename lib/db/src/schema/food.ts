@@ -429,6 +429,24 @@ export const kitchensTable = pgTable("kitchens", {
 });
 
 /**
+ * Master map of pincode → kitchen, used to AUTO-DERIVE a property's kitchen from
+ * its pincode on the Add/Edit Property form (admin requirement). A kitchen serves
+ * MANY pincodes, but each pincode maps to exactly ONE kitchen (pincode is globally
+ * unique) so derivation is deterministic and the form can show a read-only kitchen.
+ */
+export const kitchenPincodesTable = pgTable("kitchen_pincodes", {
+  id: text("id").primaryKey(),
+  kitchenId: text("kitchen_id").notNull().references(() => kitchensTable.id),
+  pincode: text("pincode").notNull().unique(),
+  isActive: boolean("is_active").default(true).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => ({ kitchenIdx: index("idx_kitchen_pincodes_kitchen").on(t.kitchenId) }));
+
+export type KitchenPincode = typeof kitchenPincodesTable.$inferSelect;
+export type NewKitchenPincode = typeof kitchenPincodesTable.$inferInsert;
+
+/**
  * Display/visibility overlay on the meal-type enum (Persona st.27 "configurable
  * order types"). Lets ops relabel SNACKS → "High Tea / Evening Snacks" and
  * enable/disable meals without an invasive enum→FK migration.

@@ -205,6 +205,8 @@ export const GetPropertiesResponse = zod.object({
       phone: zod.string().nullish(),
       email: zod.string().nullish(),
       amenities: zod.array(zod.string()),
+      brand: zod.string().nullish(),
+      kitchenId: zod.string().nullish(),
       occupiedBeds: zod.number(),
       createdAt: zod.string(),
       updatedAt: zod.string(),
@@ -261,6 +263,8 @@ export const CreatePropertyBody = zod.object({
   phone: zod.string().optional(),
   email: zod.string().optional(),
   amenities: zod.array(zod.string()).optional(),
+  brand: zod.string().optional(),
+  kitchenId: zod.string().optional(),
 });
 
 /**
@@ -309,6 +313,8 @@ export const GetPropertyResponse = zod.object({
     phone: zod.string().nullish(),
     email: zod.string().nullish(),
     amenities: zod.array(zod.string()),
+    brand: zod.string().nullish(),
+    kitchenId: zod.string().nullish(),
     occupiedBeds: zod.number(),
     createdAt: zod.string(),
     updatedAt: zod.string(),
@@ -362,6 +368,8 @@ export const UpdatePropertyBody = zod.object({
   phone: zod.string().optional(),
   email: zod.string().optional(),
   amenities: zod.array(zod.string()).optional(),
+  brand: zod.string().optional(),
+  kitchenId: zod.string().optional(),
 });
 
 export const UpdatePropertyResponse = zod.object({
@@ -403,6 +411,8 @@ export const UpdatePropertyResponse = zod.object({
     phone: zod.string().nullish(),
     email: zod.string().nullish(),
     amenities: zod.array(zod.string()),
+    brand: zod.string().nullish(),
+    kitchenId: zod.string().nullish(),
     occupiedBeds: zod.number(),
     createdAt: zod.string(),
     updatedAt: zod.string(),

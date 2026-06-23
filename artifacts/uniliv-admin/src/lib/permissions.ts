@@ -60,7 +60,7 @@ export const ROLE_PERMISSIONS: Record<UserRole, Partial<Record<Module, Partial<R
   // ── Food Ordering & Kitchen Operations roles (PRD §5 authoritative matrix) ──
   UNIT_LEAD: {
     FOOD_RECEIVE_UPDATE: FULL, FOOD_DELIVERY_TRACKING: FULL, FOOD_DASHBOARD: VIEW,
-    FOOD_ALL_ORDERS: VIEW, FOOD_PLACE_ORDER: FULL, FOOD_DISPATCH: VIEW,
+    FOOD_ALL_ORDERS: VIEW, FOOD_PLACE_ORDER: FULL,
     FOOD_CONFIRM_DELIVERY: FULL, FOOD_WASTE_TRACKING: FULL, FOOD_REPORTS: VIEW,
   },
   CLUSTER_MANAGER: {
@@ -122,7 +122,7 @@ export function homeForRole(role: UserRole | undefined): string {
     PROPERTY_ACQUISITION: "/property-leads",
     FINANCE: "/dashboard/executive",
     SALES_EXECUTIVE: "/leads",
-    UNIT_LEAD: "/food/dashboard",
+    UNIT_LEAD: "/home",
     CLUSTER_MANAGER: "/food/dashboard",
     CITY_HEAD: "/food/dashboard",
     ZONAL_HEAD: "/food/dashboard",
@@ -140,6 +140,8 @@ export function homeForRole(role: UserRole | undefined): string {
 
 export const PATH_TO_MODULE: Array<[RegExp, Module]> = [
   [/^\/$/, "DASHBOARD"],
+  // Unit-Lead Home dashboard (WS7) — top-level, gated on the food module.
+  [/^\/home/, "FOOD_DASHBOARD"],
   [/^\/dashboard\/executive/, "EXECUTIVE_DASHBOARD"],
   [/^\/properties/, "PROPERTIES"],
   [/^\/residents/, "RESIDENTS"],

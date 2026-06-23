@@ -82,6 +82,8 @@ import { formatDistanceToNow } from "date-fns";
 import { Wifi, WifiOff, Zap as ZapIcon } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { usePermissions } from "@/lib/use-permissions";
+import { foodApi, foodKeys } from "@/lib/food-api";
+import { UtensilsCrossed, ChefHat } from "lucide-react";
 
 function bookingColumns({
   onEdit,
@@ -437,7 +439,15 @@ export default function PropertyDetail() {
     { query: { queryKey: getGetComplaintsQueryKey({ propertyId: id }), enabled: !!id } }
   );
 
+  const { data: kitchens = [] } = useQuery({
+    queryKey: foodKeys.kitchens({ active: true }),
+    queryFn: () => foodApi.listKitchens({ active: true }),
+  });
+
   const property = propertyRes?.data;
+  const propertyKitchenName = property?.kitchenId
+    ? kitchens.find((k) => k.id === property.kitchenId)?.name ?? null
+    : null;
   const rooms = roomsRes?.data || [];
   const residents = residentsRes?.data || [];
   const complaints = complaintsRes?.data || [];
@@ -683,6 +693,21 @@ export default function PropertyDetail() {
                 <CardContent className="p-4">
                   <h3 className="font-display font-semibold text-primary mb-3 flex items-center gap-2"><UserCog className="w-4 h-4" /> Warden</h3>
                   <p className="text-sm text-muted-foreground">{property.wardenId ? `Warden ID: ${property.wardenId}` : "No warden assigned"}</p>
+                </CardContent>
+              </Card>
+              <Card className="sm:col-span-2" data-testid="card-food-config">
+                <CardContent className="p-4">
+                  <h3 className="font-display font-semibold text-primary mb-3 flex items-center gap-2"><UtensilsCrossed className="w-4 h-4" /> Food Configuration</h3>
+                  <dl className="grid grid-cols-2 gap-y-2 gap-x-3 text-sm">
+                    <dt className="text-muted-foreground text-xs uppercase tracking-wide flex items-center gap-1"><Tag className="w-3 h-3" /> Brand</dt>
+                    <dd className="text-primary font-medium" data-testid="text-property-brand">
+                      {property.brand ? <Badge variant="secondary">{property.brand}</Badge> : <span className="text-muted-foreground">Not assigned</span>}
+                    </dd>
+                    <dt className="text-muted-foreground text-xs uppercase tracking-wide flex items-center gap-1"><ChefHat className="w-3 h-3" /> Kitchen</dt>
+                    <dd className="text-primary font-medium" data-testid="text-property-kitchen">
+                      {propertyKitchenName ?? (property.kitchenId ? property.kitchenId : <span className="text-muted-foreground">Not assigned</span>)}
+                    </dd>
+                  </dl>
                 </CardContent>
               </Card>
             </div>

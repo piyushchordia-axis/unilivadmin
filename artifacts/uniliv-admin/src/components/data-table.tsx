@@ -1,13 +1,17 @@
 import * as React from "react"
-import { Search, Download, Settings2, PackageX } from "lucide-react"
+import { Search, Download, Settings2, PackageX, FileText, FileDown, ChevronDown } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import { jsPDF } from "jspdf"
 import {
   Table,
   TableBody,
@@ -41,10 +45,20 @@ interface DataTableProps<TData, TValue> {
   isLoading?: boolean
   onRowClick?: (row: TData) => void
   toolbarActions?: React.ReactNode
-  /** Filename (without extension) for the built-in CSV export. */
+  /** Filename (without extension) for the built-in CSV/PDF export. */
   exportFilename?: string
   /** Hide the built-in Export button. */
   hideExport?: boolean
+  /**
+   * WS11: opt into offering both CSV and PDF from the built-in Export control.
+   * Default "csv" keeps the legacy single-button (CSV-only) behaviour so
+   * existing tables are unaffected; "csv+pdf" turns it into a dropdown.
+   */
+  exportFormats?: "csv" | "csv+pdf"
+  /** Title rendered at the top of the exported PDF (defaults to exportFilename). */
+  exportTitle?: string
+  /** Property name embedded in the PDF/CSV header + the dated filename. */
+  exportPropertyName?: string | null
   /**
    * Caps the height of the scrollable table body so pages stop long-scrolling.
    * The toolbar stays pinned above and the pagination footer stays pinned below;
@@ -65,6 +79,9 @@ export function DataTable<TData, TValue>({
   toolbarActions,
   exportFilename = "export",
   hideExport = false,
+  exportFormats = "csv",
+  exportTitle,
+  exportPropertyName = null,
   maxBodyHeight = "58vh",
 }: DataTableProps<TData, TValue>) {
   const [sorting, setSorting] = React.useState<SortingState>([])
@@ -91,9 +108,16 @@ export function DataTable<TData, TValue>({
     },
   })
 
-  // Client-side CSV export of the currently filtered rows + visible data columns.
-  const exportCsv = React.useCallback(() => {
-    // Only accessor columns (skip display/action columns, which have no value).
+  // Build the export matrix (headers + display-text rows) from the currently
+  // filtered rows and visible data columns.
+  //
+  // WS11 bug fix: previously the CSV used `row.getValue(col.id)`, which returns
+  // the RAW accessor value — so a column keyed on `propertyId` (but rendered via
+  // a `cell` that looks up the property name) exported the id, not the name. We
+  // now render each column's `cell` and extract its display text, falling back
+  // to the raw value only when there is no custom renderer. This resolves any
+  // id-like column to whatever the table actually shows on screen.
+  const buildMatrix = React.useCallback((): { headers: string[]; rows: string[][] } => {
     const cols = table.getVisibleLeafColumns().filter((c) => {
       const def = c.columnDef as { accessorKey?: unknown; accessorFn?: unknown }
       return (def.accessorKey != null || def.accessorFn != null) && c.id !== "select"
@@ -102,28 +126,52 @@ export function DataTable<TData, TValue>({
       const h = c.columnDef.header
       return typeof h === "string" ? h : c.id
     }
-    const cellText = (v: unknown): string => {
-      if (v === null || v === undefined) return ""
-      if (Array.isArray(v)) return v.join("; ")
-      if (typeof v === "object") return JSON.stringify(v)
-      return String(v)
-    }
-    const escape = (s: string) => (/[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s)
     const rows = table.getFilteredRowModel().rows
+    const matrix = rows.map((r) =>
+      r.getVisibleCells()
+        .filter((cell) => cols.some((c) => c.id === cell.column.id))
+        .map((cell) => {
+          const def = cell.column.columnDef as { cell?: unknown }
+          // Prefer the rendered cell's display text (resolves id→name, formatted
+          // dates, badge labels). Fall back to the raw accessor value.
+          if (typeof def.cell === "function") {
+            const rendered = (def.cell as (ctx: unknown) => React.ReactNode)(cell.getContext())
+            const text = reactToText(rendered).trim()
+            if (text) return text
+          }
+          return rawToText(cell.getValue())
+        }),
+    )
+    return { headers: cols.map(headerText), rows: matrix }
+  }, [table])
+
+  const exportCsv = React.useCallback(() => {
+    const { headers, rows } = buildMatrix()
+    const escape = (s: string) => (/[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s)
+    const exportDate = new Date()
+    const title = exportTitle ?? exportFilename
+    const meta: string[] = [title]
+    if (exportPropertyName) meta.push(`Property: ${exportPropertyName}`)
+    meta.push(`Exported: ${fmtDateTime(exportDate)}`)
     const lines = [
-      cols.map((c) => escape(headerText(c))).join(","),
-      ...rows.map((r) => cols.map((c) => escape(cellText(r.getValue(c.id)))).join(",")),
+      ...meta.map(escape),
+      "",
+      headers.map(escape).join(","),
+      ...rows.map((r) => r.map(escape).join(",")),
     ]
-    const blob = new Blob(["﻿" + lines.join("\n")], { type: "text/csv;charset=utf-8" })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement("a")
-    a.href = url
-    a.download = `${exportFilename}.csv`
-    document.body.appendChild(a)
-    a.click()
-    a.remove()
-    URL.revokeObjectURL(url)
-  }, [table, exportFilename])
+    downloadBlob(
+      new Blob(["﻿" + lines.join("\n")], { type: "text/csv;charset=utf-8" }),
+      `${exportFilename}-${fileDateStamp(exportDate)}.csv`,
+    )
+  }, [buildMatrix, exportFilename, exportTitle, exportPropertyName])
+
+  const exportPdf = React.useCallback(() => {
+    const { headers, rows } = buildMatrix()
+    const exportDate = new Date()
+    const title = exportTitle ?? exportFilename
+    const pdf = renderPdf({ title, headers, rows, propertyName: exportPropertyName, exportDate })
+    downloadBlob(pdf, `${exportFilename}-${fileDateStamp(exportDate)}.pdf`)
+  }, [buildMatrix, exportFilename, exportTitle, exportPropertyName])
 
   return (
     <div className="space-y-4">
@@ -145,12 +193,32 @@ export function DataTable<TData, TValue>({
           {toolbarActions}
         </div>
         <div className="flex items-center space-x-2">
-          {!hideExport && (
+          {!hideExport && exportFormats === "csv+pdf" ? (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="sm" className="hidden lg:flex" disabled={isLoading || data.length === 0}>
+                  <Download className="mr-2 h-4 w-4" />
+                  Export
+                  <ChevronDown className="ml-2 h-4 w-4 opacity-70" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-40">
+                <DropdownMenuLabel>Export</DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={exportCsv}>
+                  <FileDown className="mr-2 h-4 w-4 text-muted-foreground" /> CSV
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={exportPdf}>
+                  <FileText className="mr-2 h-4 w-4 text-destructive" /> PDF
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ) : !hideExport ? (
             <Button variant="outline" size="sm" className="hidden lg:flex" onClick={exportCsv} disabled={isLoading || data.length === 0}>
               <Download className="mr-2 h-4 w-4" />
               Export
             </Button>
-          )}
+          ) : null}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="outline" size="sm">
@@ -320,4 +388,145 @@ export function DataTable<TData, TValue>({
       </div>
     </div>
   )
+}
+
+/* ── Export helpers (WS11) ──────────────────────────────────────────────────── */
+
+const pad = (n: number) => String(n).padStart(2, "0")
+
+/** yyyy-MM-dd stamp for filenames. */
+function fileDateStamp(d: Date = new Date()): string {
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+}
+
+/** dd/MM/yyyy HH:mm — human-readable timestamp for the document header. */
+function fmtDateTime(d: Date): string {
+  return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+/** Convert a raw accessor value to display text. */
+function rawToText(v: unknown): string {
+  if (v === null || v === undefined) return ""
+  if (Array.isArray(v)) return v.join("; ")
+  if (typeof v === "object") return JSON.stringify(v)
+  return String(v)
+}
+
+/**
+ * Recursively extract visible text from a rendered React node. Used so exports
+ * mirror what the table displays (e.g. a property NAME rendered from a
+ * propertyId accessor, a formatted date, or a status-badge label).
+ */
+function reactToText(node: React.ReactNode): string {
+  if (node === null || node === undefined || typeof node === "boolean") return ""
+  if (typeof node === "string" || typeof node === "number") return String(node)
+  if (Array.isArray(node)) return node.map(reactToText).join("")
+  if (React.isValidElement(node)) {
+    const props = node.props as { children?: React.ReactNode; status?: unknown; value?: unknown; label?: unknown }
+    const childText = reactToText(props.children)
+    if (childText) return childText
+    // Leaf components that carry their text in a prop rather than children
+    // (e.g. <StatusBadge status="DELIVERED" />).
+    if (props.status != null) return String(props.status)
+    if (props.value != null) return rawToText(props.value)
+    if (props.label != null) return String(props.label)
+    return ""
+  }
+  return ""
+}
+
+function downloadBlob(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement("a")
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+}
+
+/** Minimal client-side PDF table via jsPDF (no autotable dependency). */
+function renderPdf(opts: {
+  title: string
+  headers: string[]
+  rows: string[][]
+  propertyName?: string | null
+  exportDate: Date
+}): Blob {
+  const { title, headers, rows, propertyName, exportDate } = opts
+  const doc = new jsPDF({ orientation: "landscape", unit: "pt", format: "a4" })
+  const pageW = doc.internal.pageSize.getWidth()
+  const pageH = doc.internal.pageSize.getHeight()
+  const margin = 36
+  const usableW = pageW - margin * 2
+  const cols = Math.max(1, headers.length)
+  const colW = usableW / cols
+  const rowH = 18
+  const fontSize = 8
+
+  const fit = (text: string, width: number): string => {
+    let s = text ?? ""
+    while (s.length > 0 && doc.getTextWidth(s) > width - 6) s = s.slice(0, -1)
+    return s.length < (text ?? "").length ? s.slice(0, -1) + "…" : s
+  }
+
+  let y = margin
+
+  const drawTitle = () => {
+    doc.setFont("helvetica", "bold")
+    doc.setFontSize(14)
+    doc.setTextColor(15, 23, 42)
+    doc.text(title, margin, y + 10)
+    doc.setDrawColor(250, 115, 22)
+    doc.setLineWidth(3)
+    doc.line(margin, y + 16, margin + 48, y + 16)
+    y += 28
+    const metaParts: string[] = []
+    if (propertyName) metaParts.push(`Property: ${propertyName}`)
+    metaParts.push(`Exported: ${fmtDateTime(exportDate)}`)
+    doc.setFont("helvetica", "normal")
+    doc.setFontSize(8)
+    doc.setTextColor(107, 114, 128)
+    doc.text(metaParts.join("    "), margin, y + 4)
+    y += 18
+  }
+
+  const drawHeader = () => {
+    doc.setFillColor(15, 23, 42)
+    doc.rect(margin, y, usableW, rowH, "F")
+    doc.setFont("helvetica", "bold")
+    doc.setFontSize(fontSize)
+    doc.setTextColor(255, 255, 255)
+    headers.forEach((h, i) => {
+      doc.text(fit(h, colW), margin + i * colW + 4, y + 12)
+    })
+    y += rowH
+  }
+
+  doc.setFontSize(fontSize)
+  drawTitle()
+  drawHeader()
+
+  doc.setFont("helvetica", "normal")
+  rows.forEach((row, idx) => {
+    if (y + rowH > pageH - margin) {
+      doc.addPage()
+      y = margin
+      drawHeader()
+      doc.setFont("helvetica", "normal")
+    }
+    if (idx % 2 === 0) {
+      doc.setFillColor(245, 250, 252)
+      doc.rect(margin, y, usableW, rowH, "F")
+    }
+    doc.setFontSize(fontSize)
+    doc.setTextColor(26, 31, 41)
+    row.forEach((cell, i) => {
+      doc.text(fit(cell ?? "", colW), margin + i * colW + 4, y + 12)
+    })
+    y += rowH
+  })
+
+  return doc.output("blob")
 }

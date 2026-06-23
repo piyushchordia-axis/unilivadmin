@@ -24,4 +24,6 @@ export interface CreatePropertyBody {
   phone?: string;
   email?: string;
   amenities?: string[];
+  brand?: string;
+  kitchenId?: string;
 }

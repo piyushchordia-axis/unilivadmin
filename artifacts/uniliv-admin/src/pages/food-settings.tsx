@@ -24,15 +24,20 @@ import { TimePicker } from "@/components/ui/time-picker";
 import { NumberStepper } from "@/components/ui/number-stepper";
 import { useToast } from "@/hooks/use-toast";
 import { apiDownload } from "@/lib/api-fetch";
-import { Download } from "lucide-react";
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
+  DropdownMenuSeparator, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Download, FileDown, FileText, ChevronDown } from "lucide-react";
 import {
   foodApi, foodKeys, MEAL_TYPES, BRANDS, MEAL_LABEL, DAY_LABEL, fmtQty, PREPARATIONS, PREPARATION_LABEL,
   type Dish, type MenuRotationRow, type PerResidentRule,
   type Agency, type AgencyVehicle, type AgencyLocation,
   type Zone, type City, type Cluster, type UserScope, type FoodUser, type FoodLookups,
   type FoodBrand, type MealType, type Kitchen, type MealConfig, type MealWindow, type FoodCutoffConfig,
-  type RawMaterial, type CompositionRule,
+  type RawMaterial, type CompositionRule, type FoodDefaults,
 } from "@/lib/food-api";
+import { usePermissions } from "@/lib/use-permissions";
 
 // ─── Enums (from spec) ────────────────────────────────────────────────────────
 const DISH_COMPONENTS = [
@@ -91,6 +96,8 @@ export default function FoodSettings() {
   const properties = lookups?.properties ?? [];
   const propName = (id?: string | null) =>
     id ? (properties.find((p) => p.id === id)?.name ?? "—") : "—";
+  const { role } = usePermissions();
+  const isSuperAdmin = role === "SUPER_ADMIN";
 
   return (
     <div className="space-y-6">
@@ -113,6 +120,9 @@ export default function FoodSettings() {
             <TabsTrigger value="cutoffs" className="shrink-0 whitespace-nowrap"><Clock className="h-4 w-4 mr-2" /> Cut-offs & Service</TabsTrigger>
             <TabsTrigger value="hierarchy" className="shrink-0 whitespace-nowrap"><Network className="h-4 w-4 mr-2" /> Hierarchy</TabsTrigger>
             <TabsTrigger value="users" className="shrink-0 whitespace-nowrap"><ShieldCheck className="h-4 w-4 mr-2" /> Users & Scopes</TabsTrigger>
+            {isSuperAdmin && (
+              <TabsTrigger value="food-defaults" className="shrink-0 whitespace-nowrap"><Globe className="h-4 w-4 mr-2" /> Food Defaults</TabsTrigger>
+            )}
           </TabsList>
         </div>
 
@@ -127,6 +137,9 @@ export default function FoodSettings() {
         <TabsContent value="cutoffs"><CutoffWindowsTab properties={properties} propName={propName} /></TabsContent>
         <TabsContent value="hierarchy"><HierarchyTab properties={properties} /></TabsContent>
         <TabsContent value="users"><UsersTab properties={properties} propName={propName} /></TabsContent>
+        {isSuperAdmin && (
+          <TabsContent value="food-defaults"><FoodDefaultsTab /></TabsContent>
+        )}
       </Tabs>
     </div>
   );
@@ -514,10 +527,42 @@ function RotationTab() {
         title="Menu Rotation" description="Weekly per-brand rotation that drives auto-suggested menus."
         action={
           <div className="flex items-center gap-2">
-            <Button variant="outline" onClick={async () => {
-              try { await apiDownload(foodApi.rotationExportXlsxUrl({ kitchenId: kitchen, brand, rotationWeek: week, dayOfWeek: day, mealType: meal }), "menu-rotation.xls"); toast({ title: "Export ready", description: "menu-rotation.xls" }); }
-              catch (e: any) { toast({ title: e?.message || "Export failed", variant: "destructive" }); }
-            }}><Download className="h-4 w-4 mr-2" /> Export</Button>
+            {(() => {
+              // Drop "ALL" sentinels so the server receives only real filters.
+              const exportParams: Record<string, string> = {};
+              if (kitchen !== "ALL") exportParams.kitchenId = kitchen;
+              if (brand !== "ALL") exportParams.brand = brand;
+              if (week !== "ALL") exportParams.rotationWeek = week;
+              if (day !== "ALL") exportParams.dayOfWeek = day;
+              if (meal !== "ALL") exportParams.mealType = meal;
+              const fileName = (ext: string) => {
+                const parts = ["menu-rotation"];
+                if (brand !== "ALL") parts.push(brand);
+                if (kitchen !== "ALL") parts.push(kitchenName(kitchen).replace(/[\\/:*?"<>|]+/g, "").replace(/\s+/g, "-"));
+                parts.push(new Date().toISOString().slice(0, 10));
+                return `${parts.join("-")}.${ext}`;
+              };
+              const run = async (fmt: "csv" | "pdf") => {
+                try {
+                  const url = fmt === "pdf" ? foodApi.rotationExportPdfUrl(exportParams) : foodApi.rotationExportCsvUrl(exportParams);
+                  await apiDownload(url, fileName(fmt));
+                  toast({ title: "Export ready", description: fileName(fmt) });
+                } catch (e: any) { toast({ title: e?.message || "Export failed", variant: "destructive" }); }
+              };
+              return (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="outline"><Download className="h-4 w-4 mr-2" /> Export <ChevronDown className="h-4 w-4 ml-2 opacity-70" /></Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-40">
+                    <DropdownMenuLabel>Export rotation</DropdownMenuLabel>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem onClick={() => run("csv")}><FileDown className="h-4 w-4 mr-2 text-muted-foreground" /> CSV</DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => run("pdf")}><FileText className="h-4 w-4 mr-2 text-destructive" /> PDF</DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              );
+            })()}
             <Button className="bg-accent hover:bg-accent/90 text-white" onClick={openCreate}><Plus className="h-4 w-4 mr-2" /> Add Entry</Button>
           </div>
         }
@@ -2013,5 +2058,71 @@ function SectionHeader({ title, description, action }: { title: string; descript
       </div>
       {action}
     </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Food Defaults (SUPER_ADMIN only) — org-wide fallback cut-off time + waste-edit
+// window, stored in system_config. These apply when no brand/property cut-off is
+// configured and as the global waste-recording window.
+// ════════════════════════════════════════════════════════════════════════════
+function FoodDefaultsTab() {
+  const { toast } = useToast();
+  const qc = useQueryClient();
+  const { data, isLoading } = useQuery<FoodDefaults>({
+    queryKey: ["food", "system-config", "food-defaults"],
+    queryFn: () => foodApi.foodDefaults(),
+  });
+
+  const [defaultCutoff, setDefaultCutoff] = React.useState("09:00");
+  const [wasteWindowMinutes, setWasteWindowMinutes] = React.useState(60);
+
+  React.useEffect(() => {
+    if (data) {
+      setDefaultCutoff(data.defaultCutoff ?? "09:00");
+      setWasteWindowMinutes(data.wasteWindowMinutes ?? 60);
+    }
+  }, [data]);
+
+  const save = useMutation({
+    mutationFn: () => foodApi.updateFoodDefaults({ defaultCutoff: defaultCutoff.trim(), wasteWindowMinutes }),
+    onSuccess: () => {
+      toast({ title: "Food defaults saved" });
+      qc.invalidateQueries({ queryKey: ["food", "system-config", "food-defaults"] });
+    },
+    onError: (e: any) => toast({ title: e?.message || "Failed to save", variant: "destructive" }),
+  });
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base flex items-center gap-2"><Globe className="h-4 w-4" /> Global Food Defaults</CardTitle>
+        <CardDescription className="text-xs">
+          Organisation-wide fallbacks used when no brand/property cut-off is configured.
+          The waste-edit window controls how long after delivery waste can still be recorded. SUPER_ADMIN only.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {isLoading ? (
+          <p className="py-4 text-sm text-muted-foreground">Loading…</p>
+        ) : (
+          <div className="space-y-5 max-w-md">
+            <div>
+              <Label>Default Cut-off Time (HH:MM)</Label>
+              <TimePicker value={defaultCutoff} onChange={setDefaultCutoff} stepMinutes={15} placeholder="Select cut-off" />
+              <p className="mt-1 text-xs text-muted-foreground">Applied the day before the service date when no brand/property cut-off exists.</p>
+            </div>
+            <div>
+              <Label>Waste-edit Window (minutes)</Label>
+              <NumberStepper value={wasteWindowMinutes} onChange={setWasteWindowMinutes} min={1} max={1440} step={5} />
+              <p className="mt-1 text-xs text-muted-foreground">Minutes after delivery during which waste can still be recorded.</p>
+            </div>
+            <Button onClick={() => { if (!/^\d{1,2}:\d{2}$/.test(defaultCutoff.trim())) { toast({ title: "Cut-off must be HH:MM", variant: "destructive" }); return; } save.mutate(); }} disabled={save.isPending}>
+              {save.isPending ? "Saving…" : "Save defaults"}
+            </Button>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }

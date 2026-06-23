@@ -5,7 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { format, subDays } from "date-fns";
 import {
   Download, CalendarRange, ClipboardList, UtensilsCrossed, Users, PieChart as PieChartIcon, BarChart3,
-  FileSpreadsheet, FileText, FileDown, Trash2, Clock, TrendingDown, ChevronDown,
+  FileText, FileDown, Trash2, Clock, TrendingDown, ChevronDown,
 } from "lucide-react";
 import {
   ResponsiveContainer, AreaChart, Area, LineChart, Line, BarChart, Bar, PieChart, Pie, Cell,
@@ -193,17 +193,24 @@ export default function FoodReports() {
     if (v && v !== "ALL") exportParams[k] = v;
   }
 
-  const runExport = async (fmt: "xls" | "pdf" | "csv") => {
+  // Property name embedded in the export filename when a single property is in scope.
+  const scopedExportPropName = propertyId !== "ALL" ? propName(propertyId) : null;
+  const exportFilename = (ext: string) => {
+    const prop = scopedExportPropName && scopedExportPropName !== "—"
+      ? `-${scopedExportPropName.replace(/[\\/:*?"<>|]+/g, "").replace(/\s+/g, "-")}`
+      : "";
+    return `food-orders${prop}-${format(new Date(), "yyyy-MM-dd")}.${ext}`;
+  };
+
+  const runExport = async (fmt: "pdf" | "csv") => {
     setDownloading(true);
     try {
-      if (fmt === "xls") {
-        await apiDownload(foodApi.reportsExportXlsxUrl(exportParams), "food-orders.xls");
-      } else if (fmt === "pdf") {
-        await apiDownload(foodApi.reportsExportPdfUrl(exportParams), "food-orders.pdf");
+      if (fmt === "pdf") {
+        await apiDownload(foodApi.reportsExportPdfUrl(exportParams), exportFilename("pdf"));
       } else {
-        await apiDownload(foodApi.reportsExportUrl(exportParams), "food-orders.csv");
+        await apiDownload(foodApi.reportsExportCsvUrl(exportParams), exportFilename("csv"));
       }
-      toast({ title: "Export ready", description: `food-orders.${fmt}` });
+      toast({ title: "Export ready", description: exportFilename(fmt) });
     } catch (e: any) {
       toast({ title: e?.message || "Download failed", variant: "destructive" });
     } finally {
@@ -228,14 +235,11 @@ export default function FoodReports() {
             <DropdownMenuContent align="end" className="w-48">
               <DropdownMenuLabel>Download report</DropdownMenuLabel>
               <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={() => runExport("xls")}>
-                <FileSpreadsheet className="w-4 h-4 mr-2 text-success" /> Excel (.xls)
+              <DropdownMenuItem onClick={() => runExport("csv")}>
+                <FileDown className="w-4 h-4 mr-2 text-muted-foreground" /> CSV
               </DropdownMenuItem>
               <DropdownMenuItem onClick={() => runExport("pdf")}>
                 <FileText className="w-4 h-4 mr-2 text-destructive" /> PDF
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => runExport("csv")}>
-                <FileDown className="w-4 h-4 mr-2 text-muted-foreground" /> CSV
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>

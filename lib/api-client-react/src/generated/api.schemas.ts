@@ -187,6 +187,8 @@ export interface PropertyDto {
   phone?: string | null;
   email?: string | null;
   amenities: string[];
+  brand?: string | null;
+  kitchenId?: string | null;
   occupiedBeds: number;
   createdAt: string;
   updatedAt: string;
@@ -219,6 +221,8 @@ export interface CreatePropertyBody {
   phone?: string;
   email?: string;
   amenities?: string[];
+  brand?: string;
+  kitchenId?: string;
 }
 
 export interface RoomDto {

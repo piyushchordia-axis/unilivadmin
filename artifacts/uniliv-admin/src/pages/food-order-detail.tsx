@@ -20,6 +20,8 @@ import {
   Hash,
   AlertTriangle,
   ListChecks,
+  Ban,
+  Check,
 } from "lucide-react";
 import { PageHeader } from "@/components/page-header";
 import { StatusBadge } from "@/components/status-badge";
@@ -55,6 +57,8 @@ import {
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { usePermissions } from "@/lib/use-permissions";
+import { OrderTimeline } from "@/components/order-timeline";
+import { cn } from "@/lib/utils";
 import {
   foodApi,
   foodKeys,
@@ -64,37 +68,12 @@ import {
   type FoodOrderEvent,
 } from "@/lib/food-api";
 
-const titleize = (s: string) =>
-  s
-    .toLowerCase()
-    .split("_")
-    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-    .join(" ");
-
 const fmtDate = (s?: string | null) =>
   s ? format(new Date(s), "dd MMM yyyy") : "—";
 const fmtTime = (s?: string | null) => (s ? format(new Date(s), "HH:mm") : "—");
 const fmtDateTime = (s?: string | null) =>
   s ? format(new Date(s), "dd MMM, HH:mm") : "—";
 
-/** Status → timeline dot color (semantic tokens only). */
-function dotColor(status: OrderStatus): string {
-  switch (status) {
-    case "ACCEPTED":
-    case "PREPARING":
-      return "bg-info";
-    case "DISPATCHED":
-      return "bg-warning";
-    case "DELIVERED":
-      return "bg-success";
-    case "CANCELLED":
-    case "REJECTED":
-      return "bg-destructive";
-    case "PLACED":
-    default:
-      return "bg-muted-foreground";
-  }
-}
 
 /** ACCEPTED → green Badge, REJECTED → destructive Badge, else StatusBadge. */
 function OrderStatusBadge({ status }: { status: OrderStatus }) {
@@ -163,6 +142,8 @@ export default function FoodOrderDetail() {
 
   const [rejectOpen, setRejectOpen] = React.useState(false);
   const [rejectReason, setRejectReason] = React.useState("");
+  const [cancelOpen, setCancelOpen] = React.useState(false);
+  const [cancelReason, setCancelReason] = React.useState("");
 
   const {
     data: order,
@@ -199,6 +180,18 @@ export default function FoodOrderDetail() {
     },
     onError: (e: any) =>
       toast({ title: e?.message || "Failed to reject", variant: "destructive" }),
+  });
+
+  const cancelMut = useMutation({
+    mutationFn: () => foodApi.cancelOrder(id, cancelReason.trim() || undefined),
+    onSuccess: () => {
+      invalidate();
+      toast({ title: "Order cancelled" });
+      setCancelOpen(false);
+      setCancelReason("");
+    },
+    onError: (e: any) =>
+      toast({ title: e?.message || "Failed to cancel", variant: "destructive" }),
   });
 
   // Delivery punctuality.
@@ -280,6 +273,13 @@ export default function FoodOrderDetail() {
   const kitchen = order.kitchen;
   const canAck =
     can("FOOD_KITCHEN_SUMMARY", "edit") && order.status === "PLACED";
+  const isPreDispatch =
+    order.status === "PLACED" ||
+    order.status === "ACCEPTED" ||
+    order.status === "PREPARING";
+  const canCancel =
+    isPreDispatch &&
+    (can("FOOD_PLACE_ORDER", "edit") || can("FOOD_KITCHEN_SUMMARY", "edit"));
 
   return (
     <div className="space-y-6">
@@ -312,6 +312,16 @@ export default function FoodOrderDetail() {
                   <XCircle className="w-4 h-4 mr-2" /> Reject
                 </Button>
               </>
+            )}
+            {canCancel && (
+              <Button
+                variant="outline"
+                className="border-warning/40 text-warning hover:bg-warning/10 hover:text-warning"
+                onClick={() => setCancelOpen(true)}
+                disabled={cancelMut.isPending}
+              >
+                <Ban className="w-4 h-4 mr-2" /> Cancel order
+              </Button>
             )}
             <Button variant="outline" onClick={() => navigate("/food/orders")}>
               <ArrowLeft className="w-4 h-4 mr-2" /> Back to Orders
@@ -354,9 +364,23 @@ export default function FoodOrderDetail() {
         </InfoTile>
       </div>
 
-      <div className="grid lg:grid-cols-3 gap-6">
-        {/* LEFT */}
-        <div className="lg:col-span-2 space-y-6">
+      {/* Timeline — order journey from placement to delivery (full width, top) */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Clock className="w-4 h-4 text-accent" /> Timeline
+          </CardTitle>
+          <CardDescription>Order journey from placement to delivery.</CardDescription>
+        </CardHeader>
+        <Separator />
+        <CardContent className="p-4 sm:p-6">
+          <OrderTimeline status={order.status} events={events} />
+        </CardContent>
+      </Card>
+
+      <div className="space-y-6">
+        {/* MAIN */}
+        <div className="space-y-6">
           {/* Dispatch details */}
           <Card>
             <CardHeader>
@@ -473,7 +497,7 @@ export default function FoodOrderDetail() {
                 <Package className="w-4 h-4 text-accent" /> Ordered vs Delivered
               </CardTitle>
               <CardDescription>
-                Quantities prepared, received and any shortfall per dish.
+                Quantities ordered, received and any shortfall per dish.
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -488,7 +512,6 @@ export default function FoodOrderDetail() {
                       <TableRow>
                         <TableHead>Dish</TableHead>
                         <TableHead className="text-right">Ordered</TableHead>
-                        <TableHead className="text-right">Prepared</TableHead>
                         <TableHead className="text-right">Received</TableHead>
                         <TableHead className="text-right">Wasted</TableHead>
                         <TableHead className="text-right">Variance</TableHead>
@@ -545,9 +568,6 @@ export default function FoodOrderDetail() {
                               {fmtQty(it.orderedQty, it.unit)}
                             </TableCell>
                             <TableCell className="text-right tabular-nums">
-                              {fmtQty(it.preparedQty, it.unit)}
-                            </TableCell>
-                            <TableCell className="text-right tabular-nums">
                               {fmtQty(it.receivedQty, it.unit)}
                             </TableCell>
                             <TableCell className="text-right tabular-nums">
@@ -562,56 +582,6 @@ export default function FoodOrderDetail() {
                     </TableBody>
                   </Table>
                 </div>
-              )}
-            </CardContent>
-          </Card>
-        </div>
-
-        {/* RIGHT */}
-        <div className="lg:col-span-1">
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-base">
-                <Clock className="w-4 h-4 text-accent" /> Lifecycle
-              </CardTitle>
-              <CardDescription>Status history for this order.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              {events.length === 0 ? (
-                <div className="rounded-lg border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
-                  No events recorded yet.
-                </div>
-              ) : (
-                <ol className="relative ml-1 space-y-6">
-                  <span className="absolute left-[5px] top-1.5 bottom-1.5 w-px bg-border" />
-                  {events.map((ev) => (
-                    <li key={ev.id} className="relative pl-6">
-                      <span
-                        className={`absolute left-0 top-1 h-2.5 w-2.5 rounded-full ring-4 ring-card ${dotColor(
-                          ev.status,
-                        )}`}
-                      />
-                      <div className="flex items-center justify-between gap-2">
-                        <p className="text-sm font-medium text-foreground">
-                          {titleize(ev.status)}
-                        </p>
-                        <span className="text-xs text-muted-foreground whitespace-nowrap">
-                          {fmtDateTime(ev.createdAt)}
-                        </span>
-                      </div>
-                      {ev.note && (
-                        <p className="text-sm text-muted-foreground mt-0.5">
-                          {ev.note}
-                        </p>
-                      )}
-                      {ev.actorName && (
-                        <p className="text-xs text-muted-foreground mt-1">
-                          by {ev.actorName}
-                        </p>
-                      )}
-                    </li>
-                  ))}
-                </ol>
               )}
             </CardContent>
           </Card>
@@ -654,6 +624,47 @@ export default function FoodOrderDetail() {
               disabled={rejectMut.isPending}
             >
               {rejectMut.isPending ? "Rejecting…" : "Reject order"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Cancel dialog */}
+      <Dialog open={cancelOpen} onOpenChange={setCancelOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Ban className="w-5 h-5 text-warning" /> Cancel order
+            </DialogTitle>
+            <DialogDescription>
+              This order will be cancelled and removed from the kitchen queue.
+              Optionally share a reason for the audit trail.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label htmlFor="cancel-reason">Reason (optional)</Label>
+            <Textarea
+              id="cancel-reason"
+              rows={3}
+              placeholder="e.g. Residents away, duplicate order…"
+              value={cancelReason}
+              onChange={(e) => setCancelReason(e.target.value)}
+            />
+          </div>
+          <DialogFooter>
+            <Button
+              variant="ghost"
+              onClick={() => setCancelOpen(false)}
+              disabled={cancelMut.isPending}
+            >
+              Keep order
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => cancelMut.mutate()}
+              disabled={cancelMut.isPending}
+            >
+              {cancelMut.isPending ? "Cancelling…" : "Cancel order"}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -58,6 +58,18 @@ export interface FoodOrder {
   updatedAt: string;
 }
 
+/** A multi-meal order batch (one Place Order action → one batch → up to 4 meal orders). */
+export interface OrderBatch {
+  id: string;
+  batchNumber: string;
+  propertyId: string;
+  unitLeadId: string;
+  brand: FoodBrand;
+  serviceDate: string;
+  residentsCount: number;
+  notes: string | null;
+}
+
 export interface FoodOrderItem {
   id: string;
   orderId: string;
@@ -89,9 +101,21 @@ export interface OrderDetail extends FoodOrder {
 }
 
 export interface Kpi { value: number; changePct: number | null }
+/** Variance-order counts per period (FY = Apr–Mar). */
+export interface VarianceCounts { m1: number; m3: number; m6: number; fy: number }
+export type VariancePeriod = "m1" | "m3" | "m6" | "fy";
 export interface DashboardData {
-  kpis: { totalOrders: Kpi; ordered: Kpi; dispatched: Kpi; delivered: Kpi };
-  pendingActions: { awaitingDispatch: number; awaitingConfirmation: number; wastePending: number };
+  kpis: { totalOrders: Kpi; active: Kpi; awaitingConfirmation: Kpi; variance: VarianceCounts };
+  pendingActions: { awaitingDispatch: number; wastePending: number };
+}
+/** One DELIVERED order still inside its waste-edit window (dashboard table). */
+export interface WastePendingRow {
+  orderId: string;
+  orderNumber: string;
+  propertyName: string | null;
+  mealType: MealType;
+  deliveredAt: string | null;
+  wasteEditableUntil: string | null;
 }
 
 export interface KitchenSummaryDish {
@@ -143,6 +167,8 @@ export interface Cluster { id: string; name: string; cityId: string; managerId: 
 export interface UserScope { id: string; userId: string; scopeLevel: string; zoneId: string | null; cityId: string | null; clusterId: string | null; kitchenId: string | null; propertyId: string | null }
 export interface FoodUser { id: string; name: string; email: string; role: string; propertyId: string | null }
 export interface FoodBrandRow { id: string; code: string; name: string; isActive: boolean }
+/** Result of resolving a kitchen from a pincode. `kitchenId` is null when no kitchen serves it. */
+export interface KitchenByPincode { kitchenId: string | null; kitchenName?: string; kitchenCode?: string }
 export interface FoodLookups {
   properties: { id: string; name: string; brand: string | null; kitchenId: string | null; clusterId: string | null }[];
   deliveryPartners: { id: string; name: string }[];
@@ -172,6 +198,7 @@ export interface MealConfig { id: string; mealType: MealType; displayLabel: stri
 export interface MealWindow { id: string; brand: FoodBrand; propertyId: string | null; mealType: MealType; cutoffTime: string | null; serviceTime: string | null; leadTimeMinutes: number; isActive: boolean }
 export interface FoodCutoffConfig { id: string; brand: string; propertyId: string | null; cutoffTime: string; isActive: boolean }
 export interface Cutoff { mealType: MealType; cutoffTime: string | null; serviceTime: string | null; cutoffAt: string | null; isPastCutoff: boolean }
+export interface FoodDefaults { defaultCutoff: string; wasteWindowMinutes: number }
 export interface AnalyticsData {
   period: string; range: { from: string; to: string };
   wastageTrend: { date: string; wasted: number }[];
@@ -179,12 +206,32 @@ export interface AnalyticsData {
   delays: { date: string; delayed: number; total: number }[];
   summary: { totalWasted: number; totalOrdered: number; wastePct: number; delayedOrders: number; deliveredOrders: number };
 }
+// WS7 — Unit-Lead Home dashboard analytics (aggregate across accessible properties).
+export interface HomeAnalytics {
+  period: string;
+  range: { from: string; to: string };
+  prevRange: { from: string; to: string };
+  peopleOrderedTrend: { date: string; people: number }[];
+  peopleByProperty: { propertyId: string; propertyName: string; people: number }[];
+  peopleComparison: { current: number; prior: number; currentLabel: string; priorLabel: string };
+  wastageTrend: { date: string; wasted: number }[];
+  topWasteItems: { dishId: string; dishName: string | null; unit: string; wasted: number; ordered: number; wastePct: number }[];
+  orderDelays: { date: string; delayed: number; total: number }[];
+  activeResidentTrend: { date: string; residents: number }[];
+  occupancy: { totalBeds: number; activeGuests: number; occupancyPct: number; monthlyCollections: number };
+  newSignups: { current: number; prior: number } | null;   // residents who moved in during the period
+  renewals: { current: number; prior: number } | null;     // proxy: lease term completes in the period
+  summary: {
+    totalPeopleOrdered: number; totalWasted: number; totalOrdered: number; wastePct: number;
+    delayedOrders: number; deliveredOrders: number; activeResidents: number;
+  };
+}
 export interface GuestRow { id: string; name: string; phone: string; email: string; gender: string | null; roomNumber: string | null; propertyId: string; propertyName: string | null; checkInDate: string | null; status: string }
 export interface PropertyOverview { id: string; name: string; address: string; city: string; state: string; pincode: string; totalBeds: number; occupied: number; activeGuests: number; occupancyPct: number; monthlyRevenue: number }
 export interface MyPropertyCard {
   id: string; name: string; city: string | null; brand: string | null;
   kitchenId: string | null; kitchenName: string | null;
-  totalBeds: number; activeGuests: number; occupancyPct: number; monthlyRevenue: number;
+  totalBeds: number; occupied: number; activeGuests: number; occupancyPct: number; monthlyRevenue: number;
   activeOrders: number; awaitingDelivery: number; configured: boolean;
 }
 export interface RevenueData { months: { month: string; total: number }[] }
@@ -238,6 +285,7 @@ function qs(params: Record<string, unknown>): string {
 // ─── Query-key factory (stable, structured) ──────────────────────────────────
 export const foodKeys = {
   dashboard: (p: Record<string, unknown>) => ["food", "dashboard", p] as const,
+  wastePending: (p: Record<string, unknown>) => ["food", "waste-pending", p] as const,
   orders: (p: Record<string, unknown>) => ["food", "orders", p] as const,
   order: (id: string) => ["food", "order", id] as const,
   kitchenSummary: (p: Record<string, unknown>) => ["food", "kitchen-summary", p] as const,
@@ -268,11 +316,15 @@ export const foodKeys = {
   cutoffConfig: (p: Record<string, unknown> = {}) => ["food", "cutoff-config", p] as const,
   cutoffs: (p: Record<string, unknown>) => ["food", "cutoffs", p] as const,
   analytics: (p: Record<string, unknown>) => ["food", "analytics", p] as const,
+  homeAnalytics: (p: Record<string, unknown>) => ["food", "home-analytics", p] as const,
   guests: (p: Record<string, unknown>) => ["food", "guests", p] as const,
   propertyOverview: (p: Record<string, unknown>) => ["food", "property-overview", p] as const,
   myProperties: () => ["food", "my-properties"] as const,
   revenue: (p: Record<string, unknown>) => ["food", "revenue", p] as const,
   fullMenu: (p: Record<string, unknown>) => ["food", "full-menu", p] as const,
+  kitchenByPincode: (pincode: string) => ["food", "kitchen-by-pincode", pincode] as const,
+  // WS9 — standalone order tracking by order number / id.
+  trackOrder: (term: string) => ["food", "track", term] as const,
 };
 
 // ─── API surface ─────────────────────────────────────────────────────────────
@@ -280,6 +332,8 @@ export const foodApi = {
   // Dashboard / summary / reports
   dashboard: (p: Record<string, unknown> = {}) =>
     apiFetch<Envelope<DashboardData>>(`/food/dashboard${qs(p)}`).then((r) => r.data),
+  wastePending: (p: Record<string, unknown> = {}) =>
+    apiFetch<Envelope<WastePendingRow[]>>(`/food/waste-pending${qs(p)}`).then((r) => r.data),
   kitchenSummary: (p: Record<string, unknown> = {}) =>
     apiFetch<Envelope<KitchenSummary>>(`/food/kitchen-summary${qs(p)}`).then((r) => r.data),
   reports: (p: Record<string, unknown> = {}) =>
@@ -291,6 +345,9 @@ export const foodApi = {
     apiFetch<Envelope<FoodOrder[]>>(`/food/orders${qs(p)}`),
   getOrder: (id: string) =>
     apiFetch<Envelope<OrderDetail>>(`/food/orders/${id}`).then((r) => r.data),
+  // WS9 — standalone tracking lookup by human order number OR raw id (scoped to accessible properties).
+  trackOrder: (term: string) =>
+    apiFetch<Envelope<OrderDetail>>(`/food/orders/track${qs({ orderNumber: term })}`).then((r) => r.data),
   placeOrder: (body: Record<string, unknown>) =>
     apiFetch<Envelope<OrderDetail>>(`/food/orders`, { method: "POST", body: JSON.stringify(body) }).then((r) => r.data),
   updateOrder: (id: string, body: Record<string, unknown>) =>
@@ -307,6 +364,10 @@ export const foodApi = {
     apiFetch<Envelope<OrderDetail>>(`/food/orders/${id}/confirm-delivery`, { method: "POST", body: JSON.stringify({ items, remarks }) }).then((r) => r.data),
   recordWaste: (id: string, items: { itemId: string; wastedQty: number }[]) =>
     apiFetch<Envelope<OrderDetail>>(`/food/orders/${id}/waste`, { method: "POST", body: JSON.stringify({ items }) }).then((r) => r.data),
+
+  // Resolve the kitchen that serves a pincode (read-only kitchen on the property form)
+  kitchenByPincode: (pincode: string) =>
+    apiFetch<Envelope<KitchenByPincode>>(`/food/kitchen-by-pincode${qs({ pincode })}`).then((r) => r.data),
 
   // Lookups + master data
   lookups: () => apiFetch<Envelope<FoodLookups>>(`/food/lookups`).then((r) => r.data),
@@ -403,7 +464,7 @@ export const foodApi = {
 
   // Per-item order preview (editable persons + auto/overridable qty) + multi-meal batch
   orderPreview: (p: Record<string, unknown> = {}) => apiFetch<Envelope<OrderPreview>>(`/food/order-preview${qs(p)}`).then((r) => r.data),
-  placeOrderBatch: (b: Record<string, unknown>) => apiFetch<Envelope<{ batch: any; orders: FoodOrder[] }>>(`/food/order-batches`, { method: "POST", body: JSON.stringify(b) }).then((r) => r.data),
+  placeOrderBatch: (b: Record<string, unknown>) => apiFetch<Envelope<{ batch: OrderBatch; orders: FoodOrder[] }>>(`/food/order-batches`, { method: "POST", body: JSON.stringify(b) }).then((r) => r.data),
 
   // Meal config + cut-off windows
   mealConfig: () => apiFetch<Envelope<MealConfig[]>>(`/food/meal-config`).then((r) => r.data),
@@ -419,12 +480,18 @@ export const foodApi = {
   deleteCutoffConfig: (id: string) => apiFetch<Envelope<unknown>>(`/food/cutoff-config/${id}`, { method: "DELETE" }),
   cutoffs: (p: Record<string, unknown> = {}) => apiFetch<Envelope<Cutoff[]>>(`/food/cutoffs${qs(p)}`).then((r) => r.data),
 
+  // Global food defaults (system_config) — read by any food user, written by SUPER_ADMIN.
+  foodDefaults: () => apiFetch<Envelope<FoodDefaults>>(`/food/system-config/food-defaults`).then((r) => r.data),
+  updateFoodDefaults: (b: { defaultCutoff?: string; wasteWindowMinutes?: number }) =>
+    apiFetch<Envelope<FoodDefaults>>(`/food/system-config/food-defaults`, { method: "PUT", body: JSON.stringify(b) }).then((r) => r.data),
+
   // Menu (full day + share)
   fullMenu: (p: Record<string, unknown> = {}) => apiFetch<Envelope<FullMenu>>(`/food/menu/full${qs(p)}`).then((r) => r.data),
   shareMenu: (b: Record<string, unknown>) => apiFetch<Envelope<{ recipientCount: number }>>(`/food/menu/share`, { method: "POST", body: JSON.stringify(b) }).then((r) => r.data),
 
   // Analytics
   analytics: (p: Record<string, unknown> = {}) => apiFetch<Envelope<AnalyticsData>>(`/food/analytics${qs(p)}`).then((r) => r.data),
+  homeAnalytics: (p: Record<string, unknown> = {}) => apiFetch<Envelope<HomeAnalytics>>(`/food/home-analytics${qs(p)}`).then((r) => r.data),
 
   // Unit-Lead home insights
   myProperties: () => apiFetch<Envelope<MyPropertyCard[]>>(`/food/my-properties`).then((r) => r.data),
@@ -432,17 +499,19 @@ export const foodApi = {
   revenue: (p: Record<string, unknown> = {}) => apiFetch<Envelope<RevenueData>>(`/food/revenue${qs(p)}`).then((r) => r.data),
   guests: (p: Record<string, unknown> = {}) => apiFetch<Envelope<GuestRow[]>>(`/food/guests${qs(p)}`),
 
-  // Export URLs (open in a new tab / anchor download)
-  rotationExportXlsxUrl: (p: Record<string, unknown> = {}) => `/api/food/menu-rotation/export.xlsx${qs(p)}`,
-  reportsExportXlsxUrl: (p: Record<string, unknown> = {}) => `/api/food/reports/export.xlsx${qs(p)}`,
+  // Export URLs (open in a new tab / anchor download).
+  // WS11: CSV + PDF only — .xls (SpreadsheetML) builders removed.
+  reportsExportCsvUrl: (p: Record<string, unknown> = {}) => `/api/food/reports/export.csv${qs(p)}`,
   reportsExportPdfUrl: (p: Record<string, unknown> = {}) => `/api/food/reports/export.pdf${qs(p)}`,
-  guestsExportXlsxUrl: (p: Record<string, unknown> = {}) => `/api/food/guests/export.xlsx${qs(p)}`,
+  guestsExportCsvUrl: (p: Record<string, unknown> = {}) => `/api/food/guests/export.csv${qs(p)}`,
   guestsExportPdfUrl: (p: Record<string, unknown> = {}) => `/api/food/guests/export.pdf${qs(p)}`,
+  rotationExportCsvUrl: (p: Record<string, unknown> = {}) => `/api/food/menu-rotation/export.csv${qs(p)}`,
+  rotationExportPdfUrl: (p: Record<string, unknown> = {}) => `/api/food/menu-rotation/export.pdf${qs(p)}`,
 };
 
 // ─── Display helpers ─────────────────────────────────────────────────────────
 export const MEAL_LABEL: Record<MealType, string> = {
-  BREAKFAST: "Breakfast", LUNCH: "Lunch", SNACKS: "Evening Snacks", DINNER: "Dinner",
+  BREAKFAST: "Breakfast", LUNCH: "Lunch", SNACKS: "High Tea / Evening Snacks", DINNER: "Dinner",
 };
 export const DAY_LABEL = ["", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 export function fmtQty(qty: number | string | null | undefined, unit?: string): string {

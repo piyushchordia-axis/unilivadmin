@@ -1,30 +1,21 @@
 import * as React from "react";
 import { useLocation, Link } from "wouter";
-import { withQuery } from "@/lib/nav-helpers";
 import { useQuery } from "@tanstack/react-query";
 import { format, subDays } from "date-fns";
 import {
   ClipboardList,
   Package,
   Truck,
-  CheckCircle2,
   PackageCheck,
   Trash2,
   ChevronRight,
-  PlusCircle,
-  ListOrdered,
-  ChefHat,
-  Send,
-  ClipboardCheck,
   BarChart3,
-  Settings,
-  Building2,
-  Users,
-  Wallet,
   Clock,
   LayoutDashboard,
   Compass,
   Timer,
+  Scale,
+  AlertTriangle,
   type LucideIcon,
 } from "lucide-react";
 import { PageHeader } from "@/components/page-header";
@@ -62,11 +53,16 @@ import {
   type DashboardData,
   type FoodLookups,
   type Kpi,
-  type PropertyOverview,
   type Cutoff,
+  type VariancePeriod,
+  type WastePendingRow,
 } from "@/lib/food-api";
 import { useAppStore } from "@/lib/store";
+import { usePermissions } from "@/lib/use-permissions";
 
+// Status chart shows the full lifecycle distribution, scoped to the SAME
+// property / brand / date filters as the KPI cards above.
+const CHART_STATUSES = ["PLACED", "PREPARING", "DISPATCHED", "DELIVERED", "CANCELLED"] as const;
 const STATUS_COLORS: Record<string, string> = {
   PLACED: "var(--info)",
   PREPARING: "var(--warning)",
@@ -75,6 +71,13 @@ const STATUS_COLORS: Record<string, string> = {
   CANCELLED: "var(--destructive)",
 };
 
+const VARIANCE_PERIODS: { key: VariancePeriod; label: string }[] = [
+  { key: "m1", label: "1 month" },
+  { key: "m3", label: "3 months" },
+  { key: "m6", label: "6 months" },
+  { key: "fy", label: "This FY" },
+];
+
 function kpiValue(k?: Kpi): number {
   return k?.value ?? 0;
 }
@@ -82,8 +85,27 @@ function kpiChange(k?: Kpi): number | undefined {
   return k?.changePct ?? undefined;
 }
 
+/** Re-renders consumers every `ms` so live countdowns tick. */
+function useTicker(ms: number): void {
+  const [, setTick] = React.useState(0);
+  React.useEffect(() => {
+    const id = setInterval(() => setTick((t) => t + 1), ms);
+    return () => clearInterval(id);
+  }, [ms]);
+}
+
+/** "NN min left" (or "<1 min left" / "Expired") from an absolute ISO deadline. */
+function minutesLeftLabel(untilIso: string | null): string {
+  if (!untilIso) return "—";
+  const diffMs = new Date(untilIso).getTime() - Date.now();
+  if (diffMs <= 0) return "Expired";
+  const mins = Math.floor(diffMs / 60000);
+  return mins < 1 ? "<1 min left" : `${mins} min left`;
+}
+
 export default function FoodDashboard() {
   const [, setLocation] = useLocation();
+  const { can } = usePermissions();
 
   // Selected property from the global app store (null = all properties).
   const { propertyId: storePropertyId, setPropertyId: setGlobalProperty } = useAppStore();
@@ -92,11 +114,6 @@ export default function FoodDashboard() {
   // Today's date as an ISO string, used to scope cut-offs.
   const todayIso = React.useMemo(() => new Date().toISOString(), []);
 
-  const { data: overview, isLoading: overviewLoading } = useQuery<PropertyOverview | null>({
-    queryKey: foodKeys.propertyOverview({ propertyId: scopedPropertyId }),
-    queryFn: () => foodApi.propertyOverview({ propertyId: scopedPropertyId }),
-  });
-
   const { data: cutoffs, isLoading: cutoffsLoading } = useQuery<Cutoff[]>({
     queryKey: foodKeys.cutoffs({ brand: "UNILIV", propertyId: scopedPropertyId, date: todayIso }),
     queryFn: () =>
@@ -104,9 +121,8 @@ export default function FoodDashboard() {
   });
 
   const [propertyId, setPropertyId] = React.useState(storePropertyId ?? "ALL");
-  // Keep the orders-table filter, the overview/banner scope and the sidebar
-  // selector as one: filter changes push to the global store; global changes
-  // mirror back here.
+  // Keep the orders-table filter, the banner scope and the sidebar selector as
+  // one: filter changes push to the global store; global changes mirror back.
   React.useEffect(() => { setPropertyId(storePropertyId ?? "ALL"); }, [storePropertyId]);
   const selectProperty = (v: string) => {
     setPropertyId(v);
@@ -115,6 +131,7 @@ export default function FoodDashboard() {
   const [brand, setBrand] = React.useState("ALL");
   const [from, setFrom] = React.useState(() => format(subDays(new Date(), 30), "yyyy-MM-dd"));
   const [to, setTo] = React.useState(() => format(new Date(), "yyyy-MM-dd"));
+  const [variancePeriod, setVariancePeriod] = React.useState<VariancePeriod>("m1");
 
   const params = React.useMemo(
     () => ({ propertyId, brand, from, to }),
@@ -132,21 +149,46 @@ export default function FoodDashboard() {
     queryFn: () => foodApi.dashboard(params),
   });
 
+  const wasteParams = React.useMemo(() => ({ propertyId, brand }), [propertyId, brand]);
+  const { data: wasteRows, isLoading: wasteLoading } = useQuery<WastePendingRow[]>({
+    queryKey: foodKeys.wastePending(wasteParams),
+    queryFn: () => foodApi.wastePending(wasteParams),
+    refetchInterval: 60_000,
+  });
+
   const { data: reports } = useQuery({
     queryKey: foodKeys.reports(params),
     queryFn: () => foodApi.reports(params),
   });
 
   const statusData = React.useMemo(() => {
-    const order = ["PLACED", "PREPARING", "DISPATCHED", "DELIVERED", "CANCELLED"];
     const rows = reports?.statusBreakdown ?? [];
-    return [...rows].sort(
-      (a, b) => order.indexOf(a.status) - order.indexOf(b.status),
-    );
+    return rows
+      .filter((r) => (CHART_STATUSES as readonly string[]).includes(r.status))
+      .sort(
+        (a, b) =>
+          CHART_STATUSES.indexOf(a.status as (typeof CHART_STATUSES)[number]) -
+          CHART_STATUSES.indexOf(b.status as (typeof CHART_STATUSES)[number]),
+      );
   }, [reports]);
 
   const kpis = data?.kpis;
   const pending = data?.pendingActions;
+  const varianceValue = kpis?.variance?.[variancePeriod] ?? 0;
+
+  // Absolute deadline for placing TOMORROW's order = TODAY @ cut-off time.
+  // The /cutoffs endpoint anchors cutoffAt on the day before the service date,
+  // and we query it with date=today, so cutoffAt is yesterday@cut-off. Recompute
+  // today@cut-off from the returned cutoffTime instead.
+  const orderDeadline = React.useMemo(() => {
+    const t = cutoffs?.[0]?.cutoffTime;
+    if (!t) return null;
+    const [h, m] = t.split(":").map(Number);
+    if (h == null || Number.isNaN(h)) return null;
+    const d = new Date();
+    d.setHours(h, m || 0, 0, 0);
+    return d;
+  }, [cutoffs]);
 
   return (
     <div className="space-y-6">
@@ -214,22 +256,21 @@ export default function FoodDashboard() {
               icon={ClipboardList}
             />
             <StatCard
-              title="Ordered"
-              value={kpiValue(kpis?.ordered)}
-              change={kpiChange(kpis?.ordered)}
+              title="Active"
+              value={kpiValue(kpis?.active)}
+              change={kpiChange(kpis?.active)}
               icon={Package}
             />
             <StatCard
-              title="Dispatched"
-              value={kpiValue(kpis?.dispatched)}
-              change={kpiChange(kpis?.dispatched)}
-              icon={Truck}
+              title="Awaiting Confirmation"
+              value={kpiValue(kpis?.awaitingConfirmation)}
+              change={kpiChange(kpis?.awaitingConfirmation)}
+              icon={PackageCheck}
             />
-            <StatCard
-              title="Delivered"
-              value={kpiValue(kpis?.delivered)}
-              change={kpiChange(kpis?.delivered)}
-              icon={CheckCircle2}
+            <VarianceCard
+              value={varianceValue}
+              period={variancePeriod}
+              onPeriodChange={setVariancePeriod}
             />
           </div>
         )}
@@ -241,196 +282,106 @@ export default function FoodDashboard() {
             <LayoutDashboard className="h-3.5 w-3.5" /> Overview
           </TabsTrigger>
           <TabsTrigger value="insights" className="gap-1.5">
-            <Compass className="h-3.5 w-3.5" /> Insights &amp; Navigation
+            <Compass className="h-3.5 w-3.5" /> Insights
           </TabsTrigger>
         </TabsList>
 
-        {/* OVERVIEW — property + cut-offs + pending actions */}
+        {/* OVERVIEW — cut-offs + pending actions */}
         <TabsContent value="overview" className="mt-4 space-y-4">
-      {/* Unit-lead home: property overview + today's cut-offs */}
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        {/* Property overview */}
-        {overviewLoading ? (
-          <Skeleton className="h-44 w-full rounded-xl lg:col-span-2" />
-        ) : overview ? (
-          <Card className="lg:col-span-2">
-            <CardHeader className="pb-3">
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div className="flex items-start gap-3">
-                  <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-primary/10">
-                    <Building2 className="h-5 w-5 text-primary" />
-                  </span>
-                  <div className="min-w-0">
-                    <CardTitle className="font-display text-lg leading-tight">
-                      {overview.name}
-                    </CardTitle>
-                    <p className="mt-0.5 text-sm text-muted-foreground">
-                      {[overview.address, overview.city, overview.state]
-                        .filter(Boolean)
-                        .join(", ")}
-                      {overview.pincode ? ` — ${overview.pincode}` : ""}
+          {/* Today's cut-offs + order-deadline countdown */}
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+            <Card className="lg:col-span-2">
+              <CardHeader className="pb-3">
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <Timer className="h-4 w-4 text-muted-foreground" />
+                  Today's Cut-offs
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                {cutoffsLoading ? (
+                  <div className="space-y-2">
+                    {Array.from({ length: 4 }).map((_, i) => (
+                      <Skeleton key={i} className="h-10 w-full rounded-lg" />
+                    ))}
+                  </div>
+                ) : !cutoffs || cutoffs.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center gap-1 py-6 text-center">
+                    <Clock className="h-6 w-6 text-muted-foreground" />
+                    <p className="text-sm font-medium text-foreground">No cut-offs configured</p>
+                    <p className="text-xs text-muted-foreground">
+                      Set meal windows in Settings to see ordering cut-offs.
                     </p>
                   </div>
-                </div>
-                <Link
-                  href={withQuery("/food/guests", { propertyId: overview?.id })}
-                  className="inline-flex items-center gap-1 rounded-md text-sm font-medium text-accent hover:text-accent/80 focus:outline-none focus:ring-2 focus:ring-accent/40"
-                >
-                  View guests
-                  <ChevronRight className="h-4 w-4" />
-                </Link>
-              </div>
-            </CardHeader>
-            <CardContent>
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-                {/* Active guests */}
-                <div className="rounded-lg border border-border bg-surface/60 p-4">
-                  <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
-                    <Users className="h-3.5 w-3.5" />
-                    Active Guests
+                ) : (
+                  <div>
+                    {/* Single cut-off applies to all meals; each meal keeps its own service time. */}
+                    <div className="mb-3 flex items-center justify-between gap-3 rounded-lg border bg-muted/30 px-3 py-2.5">
+                      <div className="flex items-center gap-2.5">
+                        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-muted/50">
+                          <Clock className="h-3.5 w-3.5 text-muted-foreground" />
+                        </span>
+                        <div>
+                          <p className="text-sm font-medium text-foreground">Cut-off — all meals</p>
+                          <p className="font-mono text-xs text-muted-foreground">{cutoffs[0]?.cutoffTime ?? "Not set"}</p>
+                        </div>
+                      </div>
+                      {cutoffs[0]?.cutoffTime ? (
+                        cutoffs[0]?.isPastCutoff ? <Badge variant="destructive">Closed</Badge> : <Badge variant="success">Open</Badge>
+                      ) : <Badge variant="secondary">—</Badge>}
+                    </div>
+                    <BoundedScroll maxHeight="220px" className="pr-2">
+                      <ul className="divide-y divide-border">
+                        {cutoffs.map((c) => (
+                          <li key={c.mealType} className="flex items-center justify-between gap-3 py-2 first:pt-0 last:pb-0">
+                            <span className="text-sm text-foreground">{MEAL_LABEL[c.mealType] ?? c.mealType}</span>
+                            <span className="font-mono text-xs text-muted-foreground">{c.serviceTime ? `Serves ${c.serviceTime}` : "—"}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </BoundedScroll>
                   </div>
-                  <p className="mt-1 font-display text-2xl font-bold text-foreground">
-                    {overview.activeGuests.toLocaleString("en-IN")}
-                  </p>
-                </div>
+                )}
+              </CardContent>
+            </Card>
 
-                {/* Occupancy */}
-                <div className="rounded-lg border border-border bg-surface/60 p-4">
-                  <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
-                    <ClipboardList className="h-3.5 w-3.5" />
-                    Occupancy
-                  </div>
-                  <p className="mt-1 font-display text-2xl font-bold text-foreground">
-                    {overview.occupied}
-                    <span className="text-base font-medium text-muted-foreground">
-                      {" / "}
-                      {overview.totalBeds}
-                    </span>
-                  </p>
-                  <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-muted">
-                    <div
-                      className="h-full rounded-full bg-accent transition-all"
-                      style={{
-                        width: `${Math.min(100, Math.max(0, overview.occupancyPct))}%`,
-                      }}
-                    />
-                  </div>
-                  <p className="mt-1 text-[11px] text-muted-foreground">
-                    {Math.round(overview.occupancyPct)}% occupied
-                  </p>
-                </div>
+            <OrderDeadlineCard deadline={orderDeadline} loading={cutoffsLoading} />
+          </div>
 
-                {/* Monthly revenue */}
-                <div className="rounded-lg border border-border bg-surface/60 p-4">
-                  <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
-                    <Wallet className="h-3.5 w-3.5" />
-                    Monthly Revenue
-                  </div>
-                  <p className="mt-1 font-display text-2xl font-bold text-foreground">
-                    ₹{overview.monthlyRevenue.toLocaleString("en-IN")}
-                  </p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        ) : null}
-
-        {/* Today's cut-offs */}
-        <Card className={overview || overviewLoading ? "" : "lg:col-span-3"}>
-          <CardHeader className="pb-3">
-            <CardTitle className="flex items-center gap-2 text-base">
-              <Timer className="h-4 w-4 text-muted-foreground" />
-              Today's Cut-offs
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            {cutoffsLoading ? (
-              <div className="space-y-2">
-                {Array.from({ length: 4 }).map((_, i) => (
-                  <Skeleton key={i} className="h-10 w-full rounded-lg" />
+          {/* Pending Actions */}
+          <div>
+            <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3">
+              Pending Actions
+            </h2>
+            {isLoading ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {Array.from({ length: 2 }).map((_, i) => (
+                  <Skeleton key={i} className="h-24 w-full rounded-xl" />
                 ))}
               </div>
-            ) : !cutoffs || cutoffs.length === 0 ? (
-              <div className="flex flex-col items-center justify-center gap-1 py-6 text-center">
-                <Clock className="h-6 w-6 text-muted-foreground" />
-                <p className="text-sm font-medium text-foreground">No cut-offs configured</p>
-                <p className="text-xs text-muted-foreground">
-                  Set meal windows in Settings to see ordering cut-offs.
-                </p>
-              </div>
             ) : (
-              <div>
-                {/* Single cut-off applies to all meals; each meal keeps its own service time. */}
-                <div className="mb-3 flex items-center justify-between gap-3 rounded-lg border bg-muted/30 px-3 py-2.5">
-                  <div className="flex items-center gap-2.5">
-                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-muted/50">
-                      <Clock className="h-3.5 w-3.5 text-muted-foreground" />
-                    </span>
-                    <div>
-                      <p className="text-sm font-medium text-foreground">Cut-off — all meals</p>
-                      <p className="font-mono text-xs text-muted-foreground">{cutoffs[0]?.cutoffTime ?? "Not set"}</p>
-                    </div>
-                  </div>
-                  {cutoffs[0]?.cutoffTime ? (
-                    cutoffs[0]?.isPastCutoff ? <Badge variant="destructive">Closed</Badge> : <Badge variant="success">Open</Badge>
-                  ) : <Badge variant="secondary">—</Badge>}
-                </div>
-                <BoundedScroll maxHeight="220px" className="pr-2">
-                  <ul className="divide-y divide-border">
-                    {cutoffs.map((c) => (
-                      <li key={c.mealType} className="flex items-center justify-between gap-3 py-2 first:pt-0 last:pb-0">
-                        <span className="text-sm text-foreground">{MEAL_LABEL[c.mealType] ?? c.mealType}</span>
-                        <span className="font-mono text-xs text-muted-foreground">{c.serviceTime ? `Serves ${c.serviceTime}` : "—"}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </BoundedScroll>
+              <div className={`grid grid-cols-1 gap-4 ${can("FOOD_DISPATCH", "view") ? "md:grid-cols-2" : ""}`}>
+                {/* Dispatch left the unit lead — only FnB roles (FOOD_DISPATCH) see this. */}
+                {can("FOOD_DISPATCH", "view") && (
+                  <PendingActionCard
+                    icon={Truck}
+                    label="Awaiting Dispatch"
+                    count={pending?.awaitingDispatch ?? 0}
+                    accent="text-info"
+                    onClick={() => setLocation("/food/dispatch")}
+                  />
+                )}
+                <WastePendingCard
+                  rows={wasteRows ?? []}
+                  loading={wasteLoading}
+                  count={pending?.wastePending ?? 0}
+                  onAct={() => setLocation("/food/waste")}
+                />
               </div>
             )}
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Pending Actions */}
-      <div>
-        <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3">
-          Pending Actions
-        </h2>
-        {isLoading ? (
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {Array.from({ length: 3 }).map((_, i) => (
-              <Skeleton key={i} className="h-24 w-full rounded-xl" />
-            ))}
           </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <PendingActionCard
-              icon={Truck}
-              label="Awaiting Dispatch"
-              count={pending?.awaitingDispatch ?? 0}
-              accent="text-info"
-              onClick={() => setLocation("/food/dispatch")}
-            />
-            <PendingActionCard
-              icon={PackageCheck}
-              label="Awaiting Confirmation"
-              count={pending?.awaitingConfirmation ?? 0}
-              accent="text-warning"
-              onClick={() => setLocation("/food/confirm-delivery")}
-            />
-            <PendingActionCard
-              icon={Trash2}
-              label="Waste Pending"
-              count={pending?.wastePending ?? 0}
-              accent="text-destructive"
-              onClick={() => setLocation("/food/waste")}
-            />
-          </div>
-        )}
-      </div>
         </TabsContent>
 
-        {/* INSIGHTS & NAVIGATION — secondary chart + quick nav */}
+        {/* INSIGHTS — secondary status chart */}
         <TabsContent value="insights" className="mt-4 space-y-4">
           {/* Status overview chart */}
           <Card>
@@ -443,7 +394,7 @@ export default function FoodDashboard() {
             <CardContent style={{ height: 280 }}>
               {statusData.length === 0 ? (
                 <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-                  No orders in the selected range.
+                  No active or awaiting-confirmation orders in the selected range.
                 </div>
               ) : (
                 <ResponsiveContainer width="100%" height="100%">
@@ -469,27 +420,190 @@ export default function FoodDashboard() {
               )}
             </CardContent>
           </Card>
-
-          {/* Quick Navigation */}
-          <div>
-            <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3">
-              Quick Navigation
-            </h2>
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
-              {QUICK_NAV.map((tile) => (
-                <QuickNavTile
-                  key={tile.href}
-                  icon={tile.icon}
-                  label={tile.label}
-                  description={tile.description}
-                  onClick={() => setLocation(tile.href)}
-                />
-              ))}
-            </div>
-          </div>
         </TabsContent>
       </Tabs>
     </div>
+  );
+}
+
+/** Variance KPI card with a 1mo / 3mo / 6mo / FY period toggle. */
+function VarianceCard({
+  value,
+  period,
+  onPeriodChange,
+}: {
+  value: number;
+  period: VariancePeriod;
+  onPeriodChange: (p: VariancePeriod) => void;
+}) {
+  return (
+    <div className="rounded-xl border bg-card p-4 shadow-sm">
+      <div className="flex items-start justify-between">
+        <div className="flex items-center gap-2">
+          <span className="flex h-9 w-9 items-center justify-center rounded-full bg-muted/40">
+            <Scale className="h-4 w-4 text-muted-foreground" />
+          </span>
+          <span className="text-sm font-medium text-foreground">Variance</span>
+        </div>
+      </div>
+      <div className="mt-2 font-display text-3xl font-bold text-foreground">{value}</div>
+      <p className="text-xs text-muted-foreground">orders with qty variance</p>
+      <div className="mt-3 flex flex-wrap gap-1">
+        {VARIANCE_PERIODS.map((p) => (
+          <button
+            key={p.key}
+            type="button"
+            onClick={() => onPeriodChange(p.key)}
+            className={`rounded-md px-2 py-0.5 text-[11px] font-medium transition-colors ${
+              p.key === period
+                ? "bg-primary text-primary-foreground"
+                : "bg-muted/50 text-muted-foreground hover:bg-muted"
+            }`}
+          >
+            {p.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** Live "time left to place tomorrow's order" countdown card. */
+function OrderDeadlineCard({ deadline, loading }: { deadline: Date | null; loading: boolean }) {
+  useTicker(30_000);
+  const now = Date.now();
+  const diffMs = deadline ? deadline.getTime() - now : null;
+  const closed = diffMs !== null && diffMs <= 0;
+
+  let body: React.ReactNode;
+  if (loading) {
+    body = <Skeleton className="h-8 w-32 rounded-lg" />;
+  } else if (diffMs === null) {
+    body = <p className="text-sm text-muted-foreground">No cut-off configured.</p>;
+  } else if (closed) {
+    body = (
+      <div className="flex items-center gap-2 text-destructive">
+        <AlertTriangle className="h-4 w-4" />
+        <span className="text-sm font-medium">Ordering closed for tomorrow</span>
+      </div>
+    );
+  } else {
+    const totalMin = Math.floor(diffMs / 60000);
+    const hours = Math.floor(totalMin / 60);
+    const mins = totalMin % 60;
+    body = (
+      <p className="font-display text-2xl font-bold text-foreground">
+        {hours > 0 ? `${hours}h ` : ""}
+        {mins}m <span className="text-sm font-medium text-muted-foreground">left</span>
+      </p>
+    );
+  }
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Clock className="h-4 w-4 text-muted-foreground" />
+          Place Tomorrow's Order
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-1">
+        {body}
+        {!loading && diffMs !== null && !closed ? (
+          <p className="text-xs text-muted-foreground">
+            until today's {deadline ? format(deadline, "HH:mm") : ""} cut-off
+          </p>
+        ) : null}
+      </CardContent>
+    </Card>
+  );
+}
+
+/** Waste-Pending card: a table of DELIVERED orders with live "NN min left" countdowns. */
+function WastePendingCard({
+  rows,
+  loading,
+  count,
+  onAct,
+}: {
+  rows: WastePendingRow[];
+  loading: boolean;
+  count: number;
+  onAct: () => void;
+}) {
+  useTicker(30_000);
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Trash2 className="h-4 w-4 text-destructive" />
+          Waste Pending
+          {count > 0 ? <Badge variant="destructive">{count}</Badge> : null}
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        {loading ? (
+          <div className="space-y-2">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <Skeleton key={i} className="h-9 w-full rounded-lg" />
+            ))}
+          </div>
+        ) : rows.length === 0 ? (
+          <div className="flex flex-col items-center justify-center gap-1 py-6 text-center">
+            <PackageCheck className="h-6 w-6 text-muted-foreground" />
+            <p className="text-sm font-medium text-foreground">All caught up</p>
+            <p className="text-xs text-muted-foreground">No deliveries awaiting waste entry.</p>
+          </div>
+        ) : (
+          <BoundedScroll maxHeight="260px" className="pr-1">
+            <table className="w-full text-left text-sm">
+              <thead>
+                <tr className="text-xs uppercase tracking-wide text-muted-foreground">
+                  <th className="py-1.5 pr-2 font-medium">Order #</th>
+                  <th className="py-1.5 pr-2 font-medium">Property</th>
+                  <th className="py-1.5 pr-2 font-medium">Meal</th>
+                  <th className="py-1.5 pr-2 font-medium">Delivered</th>
+                  <th className="py-1.5 pr-2 font-medium">Time left</th>
+                  <th className="py-1.5 font-medium text-right">Action</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {rows.map((r) => (
+                  <tr key={r.orderId}>
+                    <td className="py-2 pr-2 font-mono text-xs text-foreground">{r.orderNumber}</td>
+                    <td className="py-2 pr-2 text-foreground">{r.propertyName ?? "—"}</td>
+                    <td className="py-2 pr-2 text-muted-foreground">{MEAL_LABEL[r.mealType] ?? r.mealType}</td>
+                    <td className="py-2 pr-2 font-mono text-xs text-muted-foreground">
+                      {r.deliveredAt ? format(new Date(r.deliveredAt), "dd MMM HH:mm") : "—"}
+                    </td>
+                    <td className="py-2 pr-2">
+                      <Badge variant="warning">{minutesLeftLabel(r.wasteEditableUntil)}</Badge>
+                    </td>
+                    <td className="py-2 text-right">
+                      <Link
+                        href="/food/waste"
+                        className="inline-flex items-center gap-0.5 text-xs font-medium text-accent hover:text-accent/80"
+                      >
+                        Log <ChevronRight className="h-3.5 w-3.5" />
+                      </Link>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </BoundedScroll>
+        )}
+        {rows.length > 0 ? (
+          <button
+            type="button"
+            onClick={onAct}
+            className="mt-3 inline-flex items-center gap-1 text-sm font-medium text-accent hover:text-accent/80 focus:outline-none focus:ring-2 focus:ring-accent/40 rounded-md"
+          >
+            Go to Waste log <ChevronRight className="h-4 w-4" />
+          </button>
+        ) : null}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -536,46 +650,3 @@ function PendingActionCard({
   );
 }
 
-function QuickNavTile({
-  icon: Icon,
-  label,
-  description,
-  onClick,
-}: {
-  icon: LucideIcon;
-  label: string;
-  description: string;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="group flex flex-col gap-2 rounded-xl border bg-card p-4 text-left shadow-sm transition-all hover:border-primary/40 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-primary/40"
-    >
-      <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 transition-colors group-hover:bg-primary/15">
-        <Icon className="h-5 w-5 text-primary" />
-      </span>
-      <div>
-        <p className="text-sm font-medium text-foreground">{label}</p>
-        <p className="text-xs text-muted-foreground">{description}</p>
-      </div>
-    </button>
-  );
-}
-
-const QUICK_NAV: {
-  label: string;
-  description: string;
-  href: string;
-  icon: LucideIcon;
-}[] = [
-  { label: "Place Order", description: "Create a new food order", href: "/food/place-order", icon: PlusCircle },
-  { label: "All Orders", description: "Browse & manage orders", href: "/food/orders", icon: ListOrdered },
-  { label: "Kitchen Summary", description: "Aggregated prep quantities", href: "/food/kitchen-summary", icon: ChefHat },
-  { label: "Dispatch", description: "Assign & dispatch orders", href: "/food/dispatch", icon: Send },
-  { label: "Confirm Delivery", description: "Record received quantities", href: "/food/confirm-delivery", icon: ClipboardCheck },
-  { label: "Waste", description: "Log wasted quantities", href: "/food/waste", icon: Trash2 },
-  { label: "Reports", description: "Trends & analytics", href: "/food/reports", icon: BarChart3 },
-  { label: "Settings", description: "Menu, rules & masters", href: "/food/settings", icon: Settings },
-];

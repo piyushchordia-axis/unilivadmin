@@ -11,6 +11,7 @@ import { Router } from "express";
 import { db } from "@workspace/db";
 import {
   kitchensTable,
+  kitchenPincodesTable,
   citiesTable,
   foodBrandsTable,
   foodDispatchesTable,
@@ -32,6 +33,7 @@ import {
   roomsTable,
   paymentsTable,
   kycRequestsTable,
+  systemConfigTable,
 } from "@workspace/db";
 import { and, eq, or, ilike, sql, desc, gte, lte, inArray, isNull, isNotNull } from "drizzle-orm";
 import { authenticate } from "../middlewares/auth.js";
@@ -45,9 +47,13 @@ import {
   getPropertyFoodConfig,
   resolveOrderPreview,
   resolveMenu,
+  getDefaultCutoffTime,
+  getSystemConfigValue,
+  FOOD_DEFAULT_CUTOFF_KEY,
+  FOOD_WASTE_WINDOW_KEY,
 } from "../lib/food-service.js";
 import { notifyOrderEvent } from "../lib/notification-service.js";
-import { toXls, toPdf } from "../lib/export-service.js";
+import { toCsv, toPdf, fmtDate, fmtDateTime, fileDateStamp, sanitizeForFilename } from "../lib/export-service.js";
 
 export const foodOpsRouter: Router = Router();
 
@@ -97,7 +103,9 @@ async function resolveCutoff(brand: string, propertyId?: string): Promise<string
   )).orderBy(desc(foodCutoffsTable.updatedAt));
   // Property-specific row wins; otherwise the newest global (deterministic).
   const row = rows.sort((a, b) => (a.propertyId === propertyId ? -1 : 1))[0] ?? null;
-  return row?.cutoffTime ?? null;
+  // Fall back to the SUPER_ADMIN-configured global default (system_config) so the
+  // 09:00 default actually blocks ordering when no brand/property row exists.
+  return row?.cutoffTime ?? (await getDefaultCutoffTime());
 }
 
 /**
@@ -121,9 +129,13 @@ export async function checkOrderCutoff(
   if (serviceDay.getTime() < today.getTime()) {
     return "Cannot place an order for a past date.";
   }
-  // 2) Once the resolved cut-off for the service date passes, ordering is closed.
+  // 2) Once the resolved cut-off passes, ordering is closed. The cut-off deadline
+  //    is anchored on the DAY BEFORE the service date: an order for tomorrow must
+  //    be placed by today's cut-off time (atTime(serviceDate - 1 day, cutoffTime)).
   const cutoffTime = await resolveCutoff(brand, propertyId);
-  const cutoffAt = cutoffTime ? atTime(serviceDate, cutoffTime) : null;
+  const prevDay = new Date(serviceDate);
+  prevDay.setDate(prevDay.getDate() - 1);
+  const cutoffAt = cutoffTime ? atTime(prevDay, cutoffTime) : null;
   if (cutoffAt && now > cutoffAt) {
     const d = serviceDay;
     const label = `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}/${d.getFullYear()}`;
@@ -277,8 +289,12 @@ foodOpsRouter.get("/cutoffs", authenticate, async (req, res) => {
     const now = new Date();
 
     // Single cut-off for ALL meals that day (property override → brand default).
+    // The deadline is anchored on the DAY BEFORE the service date, matching
+    // server-side enforcement in checkOrderCutoff (order tomorrow by today's cut-off).
     const cutoffTime = await resolveCutoff(brand, propertyId);
-    const cutoffAt = cutoffTime ? atTime(date, cutoffTime) : null;
+    const cutoffDay = new Date(date);
+    cutoffDay.setDate(cutoffDay.getDate() - 1);
+    const cutoffAt = cutoffTime ? atTime(cutoffDay, cutoffTime) : null;
     const isPastCutoff = cutoffAt ? now > cutoffAt : false;
 
     // Each meal keeps its own service time (for ETAs); the cut-off is shared.
@@ -297,6 +313,57 @@ foodOpsRouter.get("/cutoffs", authenticate, async (req, res) => {
       });
     }
     res.json({ success: true, data: out });
+  } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
+});
+
+/* ════════════════════════════════════════════════════════════════════════
+ * Global food defaults (system_config) — SUPER_ADMIN configures the org-wide
+ * fallback cut-off time and waste-edit window. Stored as raw JSON scalars under
+ * canonical keys (food_default_cutoff = "09:00", food_waste_edit_window_minutes = 60).
+ * ════════════════════════════════════════════════════════════════════════ */
+
+/** Read the current global food defaults. Any authenticated food user may read. */
+foodOpsRouter.get("/system-config/food-defaults", authenticate, async (req, res) => {
+  try {
+    const defaultCutoff = await getDefaultCutoffTime();
+    const rawWindow = await getSystemConfigValue<number>(FOOD_WASTE_WINDOW_KEY, 60);
+    const wasteWindowMinutes = Number.isFinite(Number(rawWindow)) && Number(rawWindow) > 0 ? Number(rawWindow) : 60;
+    res.json({ success: true, data: { defaultCutoff, wasteWindowMinutes } });
+  } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
+});
+
+/** Upsert the global food defaults. SUPER_ADMIN only (org-wide setting). */
+foodOpsRouter.put("/system-config/food-defaults", authenticate, async (req, res) => {
+  try {
+    if (req.user?.role !== "SUPER_ADMIN") {
+      res.status(403).json({ success: false, error: "Forbidden — SUPER_ADMIN only" });
+      return;
+    }
+    const b = req.body || {};
+    const updates: Array<{ key: string; value: unknown; description: string }> = [];
+
+    if (b.defaultCutoff !== undefined) {
+      const v = String(b.defaultCutoff);
+      if (!/^\d{1,2}:\d{2}$/.test(v)) { res.status(400).json({ success: false, error: "defaultCutoff must be HH:MM" }); return; }
+      updates.push({ key: FOOD_DEFAULT_CUTOFF_KEY, value: v, description: "Default order cut-off time (HH:MM) when no brand/property cut-off is set." });
+    }
+    if (b.wasteWindowMinutes !== undefined) {
+      const n = Number(b.wasteWindowMinutes);
+      if (!Number.isFinite(n) || n <= 0) { res.status(400).json({ success: false, error: "wasteWindowMinutes must be a positive number" }); return; }
+      updates.push({ key: FOOD_WASTE_WINDOW_KEY, value: n, description: "Minutes after delivery during which waste can still be recorded." });
+    }
+    if (!updates.length) { res.status(400).json({ success: false, error: "Nothing to update" }); return; }
+
+    for (const u of updates) {
+      await db.insert(systemConfigTable)
+        .values({ id: newId(), key: u.key, value: u.value as never, description: u.description, updatedAt: new Date() })
+        .onConflictDoUpdate({ target: systemConfigTable.key, set: { value: u.value as never, updatedAt: new Date() } });
+    }
+
+    const defaultCutoff = await getDefaultCutoffTime();
+    const rawWindow = await getSystemConfigValue<number>(FOOD_WASTE_WINDOW_KEY, 60);
+    const wasteWindowMinutes = Number.isFinite(Number(rawWindow)) && Number(rawWindow) > 0 ? Number(rawWindow) : 60;
+    res.json({ success: true, data: { defaultCutoff, wasteWindowMinutes } });
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
@@ -344,6 +411,36 @@ foodOpsRouter.delete("/kitchens/:id", authenticate, authorize("FOOD_SETTINGS", "
     const [row] = await db.update(kitchensTable).set({ isActive: false, updatedAt: new Date() }).where(eq(kitchensTable.id, req.params["id"]!)).returning();
     if (!row) { res.status(404).json({ success: false, error: "Not found" }); return; }
     res.json({ success: true, data: row });
+  } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
+});
+
+/**
+ * Resolve the kitchen that serves a given pincode (kitchen_pincodes → kitchens).
+ * Pincode is globally unique so at most ONE active kitchen maps to it. Used by
+ * the Add/Edit Property form to auto-derive a read-only kitchen from the pincode.
+ *
+ * Returns HTTP 200 with { kitchenId: null } (NOT 404) when no active mapping
+ * exists, so the form can render a friendly "no kitchen for this pincode" message
+ * and block submission. authenticate-only (non-sensitive reference read).
+ */
+foodOpsRouter.get("/kitchen-by-pincode", authenticate, async (req, res) => {
+  try {
+    const pincode = String(req.query["pincode"] ?? "").trim();
+    if (!/^\d{6}$/.test(pincode)) {
+      res.status(400).json({ success: false, error: "A valid 6-digit pincode is required" });
+      return;
+    }
+    const [row] = await db
+      .select({ kitchenId: kitchensTable.id, kitchenName: kitchensTable.name, kitchenCode: kitchensTable.code })
+      .from(kitchenPincodesTable)
+      .innerJoin(kitchensTable, eq(kitchenPincodesTable.kitchenId, kitchensTable.id))
+      .where(and(
+        eq(kitchenPincodesTable.pincode, pincode),
+        eq(kitchenPincodesTable.isActive, true),
+        eq(kitchensTable.isActive, true),
+      ));
+    if (!row) { res.json({ success: true, data: { kitchenId: null } }); return; }
+    res.json({ success: true, data: { kitchenId: row.kitchenId, kitchenName: row.kitchenName, kitchenCode: row.kitchenCode } });
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
@@ -809,6 +906,85 @@ function periodRange(period: string | undefined, q: Record<string, unknown>): { 
   return { from, to };
 }
 
+/* ── Fiscal-year helpers (India FY = Apr 1 → Mar 31) ────────────────────────── */
+
+/** Fiscal year a date belongs to (Jan–Mar roll back to the previous FY label). */
+function fiscalYear(date: Date): number {
+  return date.getMonth() < 3 ? date.getFullYear() - 1 : date.getFullYear();
+}
+
+/** Apr 1 (00:00) of the FY that `date` falls in. */
+function fyStart(date: Date): Date {
+  return new Date(fiscalYear(date), 3, 1, 0, 0, 0, 0);
+}
+
+/** [start, end) for an FY quarter. Q1=Apr–Jun, Q2=Jul–Sep, Q3=Oct–Dec, Q4=Jan–Mar (next cal year). */
+function fyQuarterRange(fyYear: number, quarter: 1 | 2 | 3 | 4): { from: Date; to: Date } {
+  const startMonth = 3 + (quarter - 1) * 3; // Q1→3(Apr), Q2→6(Jul), Q3→9(Oct), Q4→12(Jan next yr)
+  const from = new Date(fyYear, startMonth, 1, 0, 0, 0, 0);
+  const to = new Date(fyYear, startMonth + 3, 1, 0, 0, 0, 0); // exclusive end
+  return { from, to };
+}
+
+/** FY-quarter index (1–4) the date falls in. */
+function fyQuarterOf(date: Date): 1 | 2 | 3 | 4 {
+  const m = date.getMonth();
+  if (m >= 3 && m <= 5) return 1;
+  if (m >= 6 && m <= 8) return 2;
+  if (m >= 9 && m <= 11) return 3;
+  return 4; // Jan–Mar
+}
+
+/**
+ * Resolve the home-dashboard window from a period keyword.
+ *  - week  : current week's prior 7-day window (also exposes prior 7-day bucket)
+ *  - month : current calendar month
+ *  - fq    : current FY quarter
+ *  - fy    : current fiscal year (Apr–Mar)
+ * Explicit ?from/?to always win. Returns the current window plus the immediately
+ * prior comparable window so charts can render "current vs prior".
+ */
+function homePeriodRange(
+  period: string | undefined,
+  q: Record<string, unknown>,
+): { from: Date; to: Date; prevFrom: Date; prevTo: Date; bucket: "day" | "week" | "month" } {
+  const explicitFrom = parseDate(q["from"]);
+  const explicitTo = parseDate(q["to"]);
+  const now = explicitTo ?? new Date();
+  // Window ends are used with `lte`; calendar-bounded ends are exclusive, so step
+  // back 1ms to keep adjacent periods from overlapping on the boundary midnight.
+  const lastMs = (exclusiveEnd: Date) => new Date(exclusiveEnd.getTime() - 1);
+
+  if (period === "fy") {
+    const from = explicitFrom ?? fyStart(now);
+    const to = explicitTo ?? lastMs(new Date(from.getFullYear() + 1, 3, 1, 0, 0, 0, 0));
+    const prevFrom = new Date(from.getFullYear() - 1, 3, 1, 0, 0, 0, 0);
+    return { from, to, prevFrom, prevTo: lastMs(from), bucket: "month" };
+  }
+  if (period === "fq") {
+    const fy = fiscalYear(now);
+    const qtr = fyQuarterOf(now);
+    const cur = fyQuarterRange(fy, qtr);
+    const from = explicitFrom ?? cur.from;
+    const to = explicitTo ?? lastMs(cur.to);
+    const prevQtr = (qtr === 1 ? 4 : (qtr - 1)) as 1 | 2 | 3 | 4;
+    const prevFy = qtr === 1 ? fy - 1 : fy;
+    const prev = fyQuarterRange(prevFy, prevQtr);
+    return { from, to, prevFrom: prev.from, prevTo: lastMs(prev.to), bucket: "week" };
+  }
+  if (period === "month") {
+    const from = explicitFrom ?? new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
+    const to = explicitTo ?? lastMs(new Date(now.getFullYear(), now.getMonth() + 1, 1, 0, 0, 0, 0));
+    const prevFrom = new Date(from.getFullYear(), from.getMonth() - 1, 1, 0, 0, 0, 0);
+    return { from, to, prevFrom, prevTo: lastMs(from), bucket: "day" };
+  }
+  // default: week
+  const to = explicitTo ?? new Date();
+  const from = explicitFrom ?? new Date(to.getTime() - 7 * 86400000);
+  const span = to.getTime() - from.getTime();
+  return { from, to, prevFrom: new Date(from.getTime() - span), prevTo: from, bucket: "day" };
+}
+
 foodOpsRouter.get("/analytics", authenticate, authorize("FOOD_REPORTS", "view"), async (req, res) => {
   try {
     const ids = await resolveAccessiblePropertyIds(req.user!);
@@ -886,10 +1062,219 @@ foodOpsRouter.get("/analytics", authenticate, authorize("FOOD_REPORTS", "view"),
 });
 
 /* ════════════════════════════════════════════════════════════════════════
+ * Unit-Lead Home dashboard analytics (WS7)
+ *
+ * Aggregates across ALL the unit lead's accessible properties by default, with
+ * an optional single-property ?propertyId filter. Period keys: week | month |
+ * fq (FY quarter) | fy (FY year, Apr–Mar). Returns the chart datasets the home
+ * page needs beyond /analytics — "people ordered for" (sum of residentsCount
+ * bucketed by date AND grouped by property), active-resident trend, occupancy /
+ * collections roll-up — and stubs renewals/newSignups (no data model yet).
+ * ════════════════════════════════════════════════════════════════════════ */
+
+foodOpsRouter.get("/home-analytics", authenticate, authorize("FOOD_REPORTS", "view"), async (req, res) => {
+  try {
+    const ids = await resolveAccessiblePropertyIds(req.user!);
+    const period = (req.query["period"] as string | undefined) ?? "week";
+    const { from, to, prevFrom, prevTo } = homePeriodRange(period, req.query as Record<string, unknown>);
+    const propertyId = req.query["propertyId"] as string | undefined;
+    if (propertyId && !isAccessible(propertyId, ids)) {
+      res.status(403).json({ success: false, error: "Property not accessible" }); return;
+    }
+
+    // Order scope for the current window.
+    const orderScope = [gte(foodOrdersTable.serviceDate, from), lte(foodOrdersTable.serviceDate, to)] as any[];
+    if (ids !== null) orderScope.push(ids.length ? inArray(foodOrdersTable.propertyId, ids) : sql`false`);
+    if (propertyId) orderScope.push(eq(foodOrdersTable.propertyId, propertyId));
+    const where = and(...orderScope);
+    const day = sql<string>`to_char(${foodOrdersTable.serviceDate}, 'YYYY-MM-DD')`;
+
+    // ── People ordered for — bucketed by day (sum of residentsCount) ──────────
+    const peopleRows = await db.select({ date: day, people: sql<number>`coalesce(sum(${foodOrdersTable.residentsCount}), 0)::int` })
+      .from(foodOrdersTable).where(where).groupBy(day).orderBy(day);
+    const peopleOrderedTrend = peopleRows.map((r) => ({ date: r.date, people: Number(r.people) }));
+
+    // ── People ordered for — grouped across properties ────────────────────────
+    const peopleByPropRows = await db.select({
+      propertyId: foodOrdersTable.propertyId, propertyName: propertiesTable.name,
+      people: sql<number>`coalesce(sum(${foodOrdersTable.residentsCount}), 0)::int`,
+    }).from(foodOrdersTable)
+      .leftJoin(propertiesTable, eq(foodOrdersTable.propertyId, propertiesTable.id))
+      .where(where).groupBy(foodOrdersTable.propertyId, propertiesTable.name)
+      .orderBy(desc(sql`sum(${foodOrdersTable.residentsCount})`));
+    const peopleByProperty = peopleByPropRows.map((r) => ({
+      propertyId: r.propertyId, propertyName: r.propertyName ?? "—", people: Number(r.people),
+    }));
+
+    // ── People ordered for — current vs prior comparable window ───────────────
+    const [curPeople] = await db.select({ total: sql<number>`coalesce(sum(${foodOrdersTable.residentsCount}), 0)::int` })
+      .from(foodOrdersTable).where(where);
+    const prevScope = [gte(foodOrdersTable.serviceDate, prevFrom), lte(foodOrdersTable.serviceDate, prevTo)] as any[];
+    if (ids !== null) prevScope.push(ids.length ? inArray(foodOrdersTable.propertyId, ids) : sql`false`);
+    if (propertyId) prevScope.push(eq(foodOrdersTable.propertyId, propertyId));
+    const [prevPeople] = await db.select({ total: sql<number>`coalesce(sum(${foodOrdersTable.residentsCount}), 0)::int` })
+      .from(foodOrdersTable).where(and(...prevScope));
+    const peopleComparison = {
+      current: Number(curPeople?.total ?? 0),
+      prior: Number(prevPeople?.total ?? 0),
+      currentLabel: `${from.toISOString().slice(0, 10)} → ${to.toISOString().slice(0, 10)}`,
+      priorLabel: `${prevFrom.toISOString().slice(0, 10)} → ${prevTo.toISOString().slice(0, 10)}`,
+    };
+
+    // ── Wastage trend (sum wasted qty per day) ────────────────────────────────
+    const wastageRows = await db.select({ date: day, wasted: sql<number>`coalesce(sum(${foodOrderItemsTable.wastedQty}), 0)::float` })
+      .from(foodOrdersTable).innerJoin(foodOrderItemsTable, eq(foodOrderItemsTable.orderId, foodOrdersTable.id))
+      .where(where).groupBy(day).orderBy(day);
+    const wastageTrend = wastageRows.map((r) => ({ date: r.date, wasted: Math.round(Number(r.wasted) * 1000) / 1000 }));
+
+    // ── Top 20% items by wastage ──────────────────────────────────────────────
+    const wasteByDish = await db.select({
+      dishId: foodOrderItemsTable.dishId, dishName: dishesTable.name, unit: foodOrderItemsTable.unit,
+      wasted: sql<number>`coalesce(sum(${foodOrderItemsTable.wastedQty}), 0)::float`,
+      ordered: sql<number>`coalesce(sum(${foodOrderItemsTable.orderedQty}), 0)::float`,
+    }).from(foodOrdersTable).innerJoin(foodOrderItemsTable, eq(foodOrderItemsTable.orderId, foodOrdersTable.id))
+      .leftJoin(dishesTable, eq(foodOrderItemsTable.dishId, dishesTable.id))
+      .where(where).groupBy(foodOrderItemsTable.dishId, dishesTable.name, foodOrderItemsTable.unit)
+      .orderBy(desc(sql`sum(${foodOrderItemsTable.wastedQty})`));
+    const nonZero = wasteByDish.filter((d) => Number(d.wasted) > 0);
+    const topCount = Math.max(1, Math.ceil(nonZero.length * 0.2));
+    const topWasteItems = nonZero.slice(0, topCount).map((d) => ({
+      dishId: d.dishId, dishName: d.dishName, unit: d.unit,
+      wasted: Math.round(Number(d.wasted) * 1000) / 1000, ordered: Math.round(Number(d.ordered) * 1000) / 1000,
+      wastePct: Number(d.ordered) > 0 ? Math.round((Number(d.wasted) / Number(d.ordered)) * 1000) / 10 : 0,
+    }));
+
+    // ── Food-order delays per day ─────────────────────────────────────────────
+    const delivered = await db.select({
+      date: sql<string>`to_char(${foodOrdersTable.deliveredAt}, 'YYYY-MM-DD')`,
+      delayed: sql<number>`count(*) filter (where ${foodOrdersTable.expectedDeliveryAt} is not null and ${foodOrdersTable.deliveredAt} > ${foodOrdersTable.expectedDeliveryAt})::int`,
+      total: sql<number>`count(*)::int`,
+    }).from(foodOrdersTable).where(and(where, isNotNull(foodOrdersTable.deliveredAt)))
+      .groupBy(sql`to_char(${foodOrdersTable.deliveredAt}, 'YYYY-MM-DD')`).orderBy(sql`to_char(${foodOrdersTable.deliveredAt}, 'YYYY-MM-DD')`);
+    const orderDelays = delivered.map((r) => ({ date: r.date, delayed: r.delayed, total: r.total }));
+
+    // ── Active-resident trend (cumulative active check-ins per day) ───────────
+    const resScope = [eq(residentsTable.status, "ACTIVE"), isNotNull(residentsTable.checkInDate),
+      lte(residentsTable.checkInDate, to)] as any[];
+    if (ids !== null) resScope.push(ids.length ? inArray(residentsTable.propertyId, ids) : sql`false`);
+    if (propertyId) resScope.push(eq(residentsTable.propertyId, propertyId));
+    const resDay = sql<string>`to_char(${residentsTable.checkInDate}, 'YYYY-MM-DD')`;
+    const checkInRows = await db.select({ date: resDay, c: sql<number>`count(*)::int` })
+      .from(residentsTable).where(and(...resScope)).groupBy(resDay).orderBy(resDay);
+    // Build cumulative series clipped to [from, to]; the count at `from` is the
+    // running total of everyone checked-in on/before `from`.
+    let running = 0;
+    const fromKey = from.toISOString().slice(0, 10);
+    const activeResidentTrend: { date: string; residents: number }[] = [];
+    for (const r of checkInRows) {
+      running += Number(r.c);
+      if (r.date >= fromKey) activeResidentTrend.push({ date: r.date, residents: running });
+    }
+
+    // ── Occupancy + collections roll-up (current month, aggregate) ────────────
+    const propScope = ids === null ? undefined : (ids.length ? inArray(propertiesTable.id, ids) : sql`false`);
+    const propWhere = propertyId
+      ? (propScope ? and(propScope, eq(propertiesTable.id, propertyId)) : eq(propertiesTable.id, propertyId))
+      : propScope;
+    const [beds] = await db.select({ total: sql<number>`coalesce(sum(${propertiesTable.totalBeds}), 0)::int` })
+      .from(propertiesTable).where(propWhere);
+    const residentWhere = [eq(residentsTable.status, "ACTIVE")] as any[];
+    if (ids !== null) residentWhere.push(ids.length ? inArray(residentsTable.propertyId, ids) : sql`false`);
+    if (propertyId) residentWhere.push(eq(residentsTable.propertyId, propertyId));
+    const [activeRes] = await db.select({ c: sql<number>`count(*)::int` })
+      .from(residentsTable).where(and(...residentWhere));
+    const monthStart = new Date(); monthStart.setDate(1); monthStart.setHours(0, 0, 0, 0);
+    const collScope = [eq(paymentsTable.status, "SUCCESS"), gte(paymentsTable.createdAt, monthStart)] as any[];
+    if (ids !== null) collScope.push(ids.length ? inArray(residentsTable.propertyId, ids) : sql`false`);
+    if (propertyId) collScope.push(eq(residentsTable.propertyId, propertyId));
+    const [coll] = await db.select({ total: sql<number>`coalesce(sum(${paymentsTable.amount}::numeric), 0)::float` })
+      .from(paymentsTable).innerJoin(residentsTable, eq(paymentsTable.residentId, residentsTable.id))
+      .where(and(...collScope));
+    // ── New signups (real) & renewals (proxy) ──────────────────────────────────
+    // New signups = residents who checked in during the period. Renewals (proxy)
+    // = active residents whose lease term completes in the period (move-in +
+    // property leaseTermMonths, default 12) — i.e. up for renewal now.
+    const signupWhere = (lo: Date, hi: Date) => {
+      const c: any[] = [isNotNull(residentsTable.checkInDate), gte(residentsTable.checkInDate, lo), lte(residentsTable.checkInDate, hi)];
+      if (ids !== null) c.push(ids.length ? inArray(residentsTable.propertyId, ids) : sql`false`);
+      if (propertyId) c.push(eq(residentsTable.propertyId, propertyId));
+      return and(...c);
+    };
+    const [signupCur] = await db.select({ c: sql<number>`count(*)::int` }).from(residentsTable).where(signupWhere(from, to));
+    const [signupPrev] = await db.select({ c: sql<number>`count(*)::int` }).from(residentsTable).where(signupWhere(prevFrom, prevTo));
+    const renewAt = sql`(${residentsTable.checkInDate} + (coalesce((${propertiesTable.portfolioAttributes}->>'leaseTermMonths')::int, 12) || ' months')::interval)`;
+    const renewWhere = (lo: Date, hi: Date) => {
+      const c: any[] = [eq(residentsTable.status, "ACTIVE"), isNotNull(residentsTable.checkInDate), sql`${renewAt} >= ${lo}`, sql`${renewAt} <= ${hi}`];
+      if (ids !== null) c.push(ids.length ? inArray(residentsTable.propertyId, ids) : sql`false`);
+      if (propertyId) c.push(eq(residentsTable.propertyId, propertyId));
+      return and(...c);
+    };
+    const [renewCur] = await db.select({ c: sql<number>`count(*)::int` }).from(residentsTable).innerJoin(propertiesTable, eq(residentsTable.propertyId, propertiesTable.id)).where(renewWhere(from, to));
+    const [renewPrev] = await db.select({ c: sql<number>`count(*)::int` }).from(residentsTable).innerJoin(propertiesTable, eq(residentsTable.propertyId, propertiesTable.id)).where(renewWhere(prevFrom, prevTo));
+
+    const totalBeds = Number(beds?.total ?? 0);
+    const activeGuests = Number(activeRes?.c ?? 0);
+
+    // ── Summaries ─────────────────────────────────────────────────────────────
+    const [wasteSummary] = await db.select({
+      wasted: sql<number>`coalesce(sum(${foodOrderItemsTable.wastedQty}), 0)::float`,
+      ordered: sql<number>`coalesce(sum(${foodOrderItemsTable.orderedQty}), 0)::float`,
+    }).from(foodOrdersTable).innerJoin(foodOrderItemsTable, eq(foodOrderItemsTable.orderId, foodOrdersTable.id)).where(where);
+    const [delaySummary] = await db.select({
+      delayed: sql<number>`count(*) filter (where ${foodOrdersTable.expectedDeliveryAt} is not null and ${foodOrdersTable.deliveredAt} > ${foodOrdersTable.expectedDeliveryAt})::int`,
+      total: sql<number>`count(*) filter (where ${foodOrdersTable.deliveredAt} is not null)::int`,
+    }).from(foodOrdersTable).where(where);
+
+    res.json({
+      success: true,
+      data: {
+        period,
+        range: { from, to },
+        prevRange: { from: prevFrom, to: prevTo },
+        peopleOrderedTrend,
+        peopleByProperty,
+        peopleComparison,
+        wastageTrend,
+        topWasteItems,
+        orderDelays,
+        activeResidentTrend,
+        occupancy: {
+          totalBeds, activeGuests,
+          occupancyPct: totalBeds ? Math.round((activeGuests / totalBeds) * 100) : 0,
+          monthlyCollections: Math.round(Number(coll?.total ?? 0)),
+        },
+        newSignups: { current: signupCur?.c ?? 0, prior: signupPrev?.c ?? 0 },
+        // Proxy: residents whose lease term completes this period (move-in + leaseTermMonths).
+        renewals: { current: renewCur?.c ?? 0, prior: renewPrev?.c ?? 0 },
+        summary: {
+          totalPeopleOrdered: Number(curPeople?.total ?? 0),
+          totalWasted: Math.round(Number(wasteSummary?.wasted ?? 0) * 1000) / 1000,
+          totalOrdered: Math.round(Number(wasteSummary?.ordered ?? 0) * 1000) / 1000,
+          wastePct: Number(wasteSummary?.ordered) > 0 ? Math.round((Number(wasteSummary?.wasted) / Number(wasteSummary?.ordered)) * 1000) / 10 : 0,
+          delayedOrders: delaySummary?.delayed ?? 0,
+          deliveredOrders: delaySummary?.total ?? 0,
+          activeResidents: activeGuests,
+        },
+      },
+    });
+  } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
+});
+
+/* ════════════════════════════════════════════════════════════════════════
  * Exports — orders & guests (Persona st.34, st.47)
  * ════════════════════════════════════════════════════════════════════════ */
 
-async function fetchOrdersForExport(req: any) {
+/**
+ * Resolves the filtered order rows for export plus the metadata (property name,
+ * data date-range) used in the file header + filename. propertyName is set only
+ * when a single property is in scope (explicit ?propertyId= filter); multi-
+ * property exports leave it null so the filename/header stays generic.
+ */
+async function fetchOrdersForExport(req: any): Promise<{
+  rows: (string | number | null | undefined)[][];
+  propertyName: string | null;
+  dateRange: string | null;
+}> {
   const ids = await resolveAccessiblePropertyIds(req.user!);
   const conds = [] as any[];
   if (ids !== null) conds.push(ids.length ? inArray(foodOrdersTable.propertyId, ids) : sql`false`);
@@ -906,31 +1291,49 @@ async function fetchOrdersForExport(req: any) {
     .from(foodOrdersTable).leftJoin(propertiesTable, eq(foodOrdersTable.propertyId, propertiesTable.id))
     .leftJoin(usersTable, eq(foodOrdersTable.unitLeadId, usersTable.id))
     .where(conds.length ? and(...conds) : undefined).orderBy(desc(foodOrdersTable.serviceDate));
-  return rows.map((r) => [
+
+  // Property name for header/filename: prefer the explicit filter; otherwise, if
+  // every row resolves to the same property, use that; else leave generic.
+  let propertyName: string | null = null;
+  if (propertyId) {
+    propertyName = rows.find((r) => r.propertyName)?.propertyName ?? null;
+  } else {
+    const names = new Set(rows.map((r) => r.propertyName ?? "").filter(Boolean));
+    if (names.size === 1) propertyName = [...names][0];
+  }
+  const dateRange = from || to ? `${from ? fmtDate(from) : "…"} → ${to ? fmtDate(to) : "…"}` : null;
+
+  const mapped = rows.map((r) => [
     r.o.orderNumber, r.propertyName ?? "", r.unitLeadName ?? "", r.o.brand, r.o.mealType,
     r.o.residentsCount, r.o.totalQuantity != null ? Number(r.o.totalQuantity) : "", r.o.status,
-    r.o.serviceDate ? new Date(r.o.serviceDate).toISOString().slice(0, 10) : "",
-    r.o.deliveredAt ? new Date(r.o.deliveredAt).toISOString().slice(0, 16).replace("T", " ") : "",
+    fmtDate(r.o.serviceDate), fmtDateTime(r.o.deliveredAt),
   ]);
+  return { rows: mapped, propertyName, dateRange };
 }
 const ORDER_HEADERS = ["Order ID", "Property", "Unit Lead", "Brand", "Meal", "Residents", "Quantity", "Status", "Service Date", "Delivered At"];
 
-foodOpsRouter.get("/reports/export.xlsx", authenticate, authorize("FOOD_REPORTS", "view"), async (req, res) => {
+/** Build "food-orders-{property?}-{date}.{ext}" filename. */
+function ordersFilename(propertyName: string | null, ext: string): string {
+  const prop = propertyName ? `-${sanitizeForFilename(propertyName)}` : "";
+  return `food-orders${prop}-${fileDateStamp()}.${ext}`;
+}
+
+foodOpsRouter.get("/reports/export.csv", authenticate, authorize("FOOD_REPORTS", "view"), async (req, res) => {
   try {
-    const rows = await fetchOrdersForExport(req);
-    const xls = toXls({ title: "Food Orders", headers: ORDER_HEADERS, rows });
-    res.setHeader("Content-Type", "application/vnd.ms-excel");
-    res.setHeader("Content-Disposition", "attachment; filename=food-orders.xls");
-    res.send(xls);
+    const { rows, propertyName, dateRange } = await fetchOrdersForExport(req);
+    const csv = toCsv({ title: "Food Orders Report", headers: ORDER_HEADERS, rows, propertyName, dateRange });
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename=${ordersFilename(propertyName, "csv")}`);
+    res.send(csv);
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
 foodOpsRouter.get("/reports/export.pdf", authenticate, authorize("FOOD_REPORTS", "view"), async (req, res) => {
   try {
-    const rows = await fetchOrdersForExport(req);
-    const pdf = await toPdf({ title: "Food Orders Report", headers: ORDER_HEADERS, rows });
+    const { rows, propertyName, dateRange } = await fetchOrdersForExport(req);
+    const pdf = await toPdf({ title: "Food Orders Report", headers: ORDER_HEADERS, rows, propertyName, dateRange });
     res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Content-Disposition", "attachment; filename=food-orders.pdf");
+    res.setHeader("Content-Disposition", `attachment; filename=${ordersFilename(propertyName, "pdf")}`);
     res.send(Buffer.from(pdf));
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
@@ -998,7 +1401,7 @@ foodOpsRouter.get("/my-properties", authenticate, authorize("FOOD_DASHBOARD", "v
       return {
         id: p.id, name: p.name, city: p.city, brand: p.brand,
         kitchenId: p.kitchenId, kitchenName: p.kitchenId ? (kitchenName.get(p.kitchenId) ?? null) : null,
-        totalBeds: p.totalBeds, activeGuests: active,
+        totalBeds: p.totalBeds, occupied: active, activeGuests: active,
         occupancyPct: p.totalBeds ? Math.round((active / p.totalBeds) * 100) : 0,
         monthlyRevenue: revByProp.get(p.id) ?? 0,
         activeOrders: pend.active, awaitingDelivery: pend.awaitingDelivery,
@@ -1103,33 +1506,51 @@ foodOpsRouter.get("/guests", authenticate, authorize("FOOD_DASHBOARD", "view"), 
 });
 
 const GUEST_HEADERS = ["Guest ID", "Name", "Mobile", "Email", "Gender", "Room", "Property", "Guest Since"];
-async function guestExportRows(req: any, res: any): Promise<(string | number | null | undefined)[][] | null> {
+/**
+ * Resolves guest export rows + metadata. propertyName is set when the list
+ * resolves to a single property (scoped export); otherwise null. Returns null
+ * if the underlying access guard rejected (response already sent).
+ */
+async function guestExportRows(req: any, res: any): Promise<{
+  rows: (string | number | null | undefined)[][];
+  propertyName: string | null;
+} | null> {
   const guard = await fetchGuests(req, res); if (!guard) return null;
   const { where } = guard;
   const rows = await db.select({ r: residentsTable, propertyName: propertiesTable.name, roomNumber: roomsTable.number })
     .from(residentsTable).leftJoin(propertiesTable, eq(residentsTable.propertyId, propertiesTable.id))
     .leftJoin(roomsTable, eq(residentsTable.roomId, roomsTable.id)).where(where).orderBy(residentsTable.name);
-  return rows.map((r) => [
+  const names = new Set(rows.map((r) => r.propertyName ?? "").filter(Boolean));
+  const propertyName = names.size === 1 ? [...names][0] : null;
+  const mapped = rows.map((r) => [
     r.r.id.slice(0, 8), r.r.name, r.r.phone, r.r.email, r.r.gender ?? "", r.roomNumber ?? "",
-    r.propertyName ?? "", r.r.checkInDate ? new Date(r.r.checkInDate).toISOString().slice(0, 10) : "",
+    r.propertyName ?? "", fmtDate(r.r.checkInDate),
   ]);
+  return { rows: mapped, propertyName };
 }
 
-foodOpsRouter.get("/guests/export.xlsx", authenticate, authorize("FOOD_DASHBOARD", "view"), async (req, res) => {
+/** Build "active-guests-{property?}-{date}.{ext}" filename. */
+function guestsFilename(propertyName: string | null, ext: string): string {
+  const prop = propertyName ? `-${sanitizeForFilename(propertyName)}` : "";
+  return `active-guests${prop}-${fileDateStamp()}.${ext}`;
+}
+
+foodOpsRouter.get("/guests/export.csv", authenticate, authorize("FOOD_DASHBOARD", "view"), async (req, res) => {
   try {
-    const rows = await guestExportRows(req, res); if (!rows) return;
-    res.setHeader("Content-Type", "application/vnd.ms-excel");
-    res.setHeader("Content-Disposition", "attachment; filename=active-guests.xls");
-    res.send(toXls({ title: "Active Guests", headers: GUEST_HEADERS, rows }));
+    const out = await guestExportRows(req, res); if (!out) return;
+    const csv = toCsv({ title: "Active Guests", headers: GUEST_HEADERS, rows: out.rows, propertyName: out.propertyName });
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename=${guestsFilename(out.propertyName, "csv")}`);
+    res.send(csv);
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
 foodOpsRouter.get("/guests/export.pdf", authenticate, authorize("FOOD_DASHBOARD", "view"), async (req, res) => {
   try {
-    const rows = await guestExportRows(req, res); if (!rows) return;
-    const pdf = await toPdf({ title: "Active Guests", headers: GUEST_HEADERS, rows });
+    const out = await guestExportRows(req, res); if (!out) return;
+    const pdf = await toPdf({ title: "Active Guests", headers: GUEST_HEADERS, rows: out.rows, propertyName: out.propertyName });
     res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Content-Disposition", "attachment; filename=active-guests.pdf");
+    res.setHeader("Content-Disposition", `attachment; filename=${guestsFilename(out.propertyName, "pdf")}`);
     res.send(Buffer.from(pdf));
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });

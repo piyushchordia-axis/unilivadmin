@@ -2,7 +2,8 @@ import * as React from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQueryClient, useQuery } from "@tanstack/react-query";
+import { foodApi, foodKeys } from "@/lib/food-api";
 import {
   useCreateProperty,
   useUpdateProperty,
@@ -109,6 +110,7 @@ const schema = z.object({
   email: z.string().email("Invalid email").optional().or(z.literal("")),
   status: z.enum(["ACTIVE", "INACTIVE", "UNDER_RENOVATION"]),
   portfolioType: z.enum(PORTFOLIO_TYPES),
+  brand: z.string().min(1, "Brand required"),
 });
 
 type FormValues = z.infer<typeof schema>;
@@ -152,6 +154,7 @@ export function PropertyFormModal({
       email: "",
       status: "ACTIVE",
       portfolioType: "CO_LIVING",
+      brand: "",
     },
   });
 
@@ -169,6 +172,7 @@ export function PropertyFormModal({
           email: property.email || "",
           status: (property.status as any) || "ACTIVE",
           portfolioType: (property.portfolioType as PortfolioType) || "CO_LIVING",
+          brand: property.brand || "",
         });
         setAmenities(property.amenities || []);
         setCoords({
@@ -188,6 +192,7 @@ export function PropertyFormModal({
           email: "",
           status: "ACTIVE",
           portfolioType: "CO_LIVING",
+          brand: "",
         });
         setAmenities([]);
         setCoords({});
@@ -198,6 +203,30 @@ export function PropertyFormModal({
 
   const createMut = useCreateProperty();
   const updateMut = useUpdateProperty();
+
+  // Brand options come from the admin-managed master (active brands only).
+  const { data: brands = [] } = useQuery({
+    queryKey: foodKeys.brands({ active: true }),
+    queryFn: () => foodApi.listBrands({ active: true }),
+    enabled: open,
+  });
+
+  // Kitchen is auto-derived (read-only) from the pincode via kitchen_pincodes.
+  const pincode = watch("pincode");
+  const pincodeReady = /^\d{6}$/.test(pincode || "");
+  const {
+    data: kitchenLookup,
+    isFetching: kitchenLoading,
+  } = useQuery({
+    queryKey: foodKeys.kitchenByPincode(pincode || ""),
+    queryFn: () => foodApi.kitchenByPincode(pincode),
+    enabled: open && pincodeReady,
+    staleTime: 5 * 60_000,
+  });
+  // Resolved kitchen id (empty when no kitchen serves the pincode). This is the
+  // value submitted; the server re-derives and re-validates it independently.
+  const derivedKitchenId = kitchenLookup?.kitchenId ?? "";
+  const noKitchenForPincode = pincodeReady && !kitchenLoading && !derivedKitchenId;
 
   const toggleAmenity = (a: string) =>
     setAmenities((prev) =>
@@ -234,6 +263,21 @@ export function PropertyFormModal({
   };
 
   const onSubmit = async (values: FormValues) => {
+    // Kitchen must resolve from the pincode — without brand + kitchen we cannot
+    // create a property. Block submit with a clear message if it's still loading
+    // or no kitchen serves the pincode.
+    if (kitchenLoading) {
+      toast({ title: "Resolving kitchen for this pincode…", variant: "destructive" });
+      return;
+    }
+    if (!derivedKitchenId) {
+      toast({
+        title: "No kitchen for this pincode",
+        description: "No kitchen serves this pincode. Change the pincode or contact an admin.",
+        variant: "destructive",
+      });
+      return;
+    }
     const fields = portfolioAttrFields(values.portfolioType);
     const filteredAttrs: PortfolioAttributes = {};
     for (const k of fields) {
@@ -251,6 +295,8 @@ export function PropertyFormModal({
       phone: values.phone || undefined,
       email: values.email || undefined,
       portfolioAttributes: filteredAttrs,
+      brand: values.brand,
+      kitchenId: derivedKitchenId,
     };
     try {
       if (isEdit && property) {
@@ -318,6 +364,29 @@ export function PropertyFormModal({
           </Select>
         </div>
         <div>
+          <Label>Brand *</Label>
+          <Select
+            value={watch("brand") || ""}
+            onValueChange={(v) =>
+              setValue("brand", v, { shouldValidate: true, shouldDirty: true })
+            }
+          >
+            <SelectTrigger data-testid="select-property-brand">
+              <SelectValue placeholder="Select brand" />
+            </SelectTrigger>
+            <SelectContent>
+              {brands.map((b) => (
+                <SelectItem key={b.id} value={b.code}>
+                  {b.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {errors.brand && (
+            <p className="text-xs text-destructive mt-1">{errors.brand.message}</p>
+          )}
+        </div>
+        <div>
           <Label>Address *</Label>
           <Textarea data-testid="input-property-address" rows={2} {...register("address")} />
           {errors.address && (
@@ -367,6 +436,36 @@ export function PropertyFormModal({
             {errors.pincode && (
               <p className="text-xs text-destructive mt-1">{errors.pincode.message}</p>
             )}
+          </div>
+          <div>
+            <Label>Kitchen *</Label>
+            <div
+              className="mt-1 flex h-10 items-center rounded-md border bg-surface px-3 text-sm"
+              data-testid="display-property-kitchen"
+            >
+              {!pincodeReady ? (
+                <span className="text-muted-foreground">Enter a 6-digit pincode</span>
+              ) : kitchenLoading ? (
+                <span className="flex items-center text-muted-foreground">
+                  <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> Resolving kitchen…
+                </span>
+              ) : derivedKitchenId ? (
+                <span className="font-medium text-primary">
+                  {kitchenLookup?.kitchenName}
+                  {kitchenLookup?.kitchenCode ? ` (${kitchenLookup.kitchenCode})` : ""}
+                </span>
+              ) : (
+                <span className="text-destructive">No kitchen for this pincode</span>
+              )}
+            </div>
+            {noKitchenForPincode && (
+              <p className="text-xs text-destructive mt-1">
+                No kitchen serves this pincode. Change the pincode or contact an admin.
+              </p>
+            )}
+            <p className="text-[11px] text-muted-foreground mt-1">
+              Auto-derived from the pincode (read-only).
+            </p>
           </div>
           <div>
             <Label>Total Beds *</Label>

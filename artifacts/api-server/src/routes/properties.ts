@@ -7,6 +7,7 @@ import { authorize } from "../middlewares/authorize.js";
 import { pick } from "../lib/authz.js";
 import { getPagination, buildMeta } from "../lib/paginate.js";
 import { newId } from "../lib/id.js";
+import { resolveKitchenForPincode, isActiveBrand } from "../lib/food-service.js";
 
 const router = Router();
 
@@ -27,6 +28,8 @@ const PROPERTY_FIELDS = [
   "phone",
   "email",
   "amenities",
+  "brand",
+  "kitchenId",
 ] as const;
 
 router.get("/", authenticate, authorize("PROPERTIES", "view"), async (req, res) => {
@@ -61,6 +64,36 @@ router.get("/", authenticate, authorize("PROPERTIES", "view"), async (req, res) 
 router.post("/", authenticate, authorize("PROPERTIES", "create"), async (req, res) => {
   try {
     const body = pick(req.body, PROPERTY_FIELDS);
+
+    // ── Food config: brand + kitchen are MANDATORY on create. ───────────────
+    // "Without brand and kitchen we cannot create a property" (Persona/admin).
+    const brand = body.brand ? String(body.brand).trim() : "";
+    if (!brand) {
+      res.status(400).json({ success: false, error: "Brand is required." });
+      return;
+    }
+    if (!(await isActiveBrand(brand))) {
+      res.status(400).json({ success: false, error: "Unknown or inactive brand." });
+      return;
+    }
+    // Kitchen is auto-derived from the pincode server-side — never trust the
+    // client's kitchenId. We re-derive it and require an exact match (so a
+    // tampered/stale kitchenId is rejected rather than silently persisted).
+    const kitchen = await resolveKitchenForPincode(String(body.pincode ?? ""));
+    if (!kitchen) {
+      res.status(400).json({ success: false, error: "No kitchen serves this pincode. Change the pincode or contact an admin." });
+      return;
+    }
+    const clientKitchenId = body.kitchenId ? String(body.kitchenId).trim() : "";
+    if (!clientKitchenId) {
+      res.status(400).json({ success: false, error: "Kitchen is required." });
+      return;
+    }
+    if (clientKitchenId !== kitchen.id) {
+      res.status(400).json({ success: false, error: "Kitchen does not match the kitchen mapped to this pincode." });
+      return;
+    }
+
     const [row] = await db.insert(propertiesTable).values({
       id: newId(),
       name: body.name,
@@ -78,6 +111,8 @@ router.post("/", authenticate, authorize("PROPERTIES", "create"), async (req, re
       phone: body.phone,
       email: body.email,
       amenities: body.amenities || [],
+      brand,
+      kitchenId: kitchen.id,
       updatedAt: new Date(),
     }).returning();
     res.status(201).json({ success: true, data: { ...row, occupiedBeds: 0 } });
@@ -102,6 +137,41 @@ router.get("/:id", authenticate, authorize("PROPERTIES", "view"), async (req, re
 router.put("/:id", authenticate, authorize("PROPERTIES", "edit"), async (req, res) => {
   try {
     const body = pick(req.body, PROPERTY_FIELDS);
+
+    const [existing] = await db.select().from(propertiesTable).where(eq(propertiesTable.id, req.params["id"]!));
+    if (!existing) { res.status(404).json({ success: false, error: "Not found" }); return; }
+
+    // Brand is freely editable, but if supplied it must be a known active brand.
+    if (body.brand !== undefined) {
+      const brand = body.brand ? String(body.brand).trim() : "";
+      if (!brand || !(await isActiveBrand(brand))) {
+        res.status(400).json({ success: false, error: "Unknown or inactive brand." });
+        return;
+      }
+      body.brand = brand;
+    }
+
+    // Kitchen is auto-derived from pincode. When the pincode changes (or a
+    // kitchenId is supplied), re-derive server-side and validate — the client's
+    // kitchenId is never trusted. A pincode with no mapped kitchen is rejected.
+    const pincodeChanged = body.pincode !== undefined && String(body.pincode) !== String(existing.pincode);
+    if (pincodeChanged || body.kitchenId !== undefined) {
+      const pincode = body.pincode !== undefined ? String(body.pincode) : String(existing.pincode);
+      const kitchen = await resolveKitchenForPincode(pincode);
+      if (!kitchen) {
+        res.status(400).json({ success: false, error: "No kitchen serves this pincode. Change the pincode or contact an admin." });
+        return;
+      }
+      if (body.kitchenId !== undefined && String(body.kitchenId).trim() !== kitchen.id) {
+        res.status(400).json({ success: false, error: "Kitchen does not match the kitchen mapped to this pincode." });
+        return;
+      }
+      body.kitchenId = kitchen.id; // always persist the server-derived kitchen
+    } else {
+      // No pincode/kitchen change in this request — don't touch the column.
+      delete body.kitchenId;
+    }
+
     const [row] = await db.update(propertiesTable).set({ ...body, updatedAt: new Date() }).where(eq(propertiesTable.id, req.params["id"]!)).returning();
     if (!row) { res.status(404).json({ success: false, error: "Not found" }); return; }
     const [r] = await db.select({ count: sql<number>`count(*)::int` }).from(residentsTable).where(eq(residentsTable.propertyId, row.id));

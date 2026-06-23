@@ -22,6 +22,8 @@ import { useLocation } from "wouter";
 import { PropertyFormModal } from "@/components/property-form-modal";
 import { Badge } from "@/components/ui/badge";
 import { PORTFOLIO_TYPES, PORTFOLIO_TYPE_LABELS, type PortfolioType } from "@/lib/portfolio-types";
+import { useQuery } from "@tanstack/react-query";
+import { foodApi, foodKeys } from "@/lib/food-api";
 
 export default function Properties() {
   const [, setLocation] = useLocation();
@@ -30,6 +32,17 @@ export default function Properties() {
   });
 
   const properties = propertiesRes?.data || [];
+
+  // Map kitchenId → kitchen name so the list can show a human-readable kitchen.
+  const { data: kitchens = [] } = useQuery({
+    queryKey: foodKeys.kitchens({ active: true }),
+    queryFn: () => foodApi.listKitchens({ active: true }),
+  });
+  const kitchenName = React.useMemo(() => {
+    const m: Record<string, string> = {};
+    for (const k of kitchens) m[k.id] = k.name;
+    return m;
+  }, [kitchens]);
 
   const [city, setCity] = React.useState<string>("ALL");
   const [status, setStatus] = React.useState<string>("ALL");
@@ -79,6 +92,32 @@ export default function Properties() {
           <Badge variant="outline" data-testid={`badge-portfolio-${row.original.id}`}>
             {PORTFOLIO_TYPE_LABELS[t] || t}
           </Badge>
+        );
+      },
+    },
+    {
+      id: "brand",
+      header: "Brand",
+      cell: ({ row }: any) =>
+        row.original.brand ? (
+          <Badge variant="secondary" data-testid={`badge-brand-${row.original.id}`}>
+            {row.original.brand}
+          </Badge>
+        ) : (
+          <span className="text-muted-foreground">—</span>
+        ),
+    },
+    {
+      id: "kitchen",
+      header: "Kitchen",
+      cell: ({ row }: any) => {
+        const k = row.original.kitchenId
+          ? kitchenName[row.original.kitchenId]
+          : null;
+        return k ? (
+          <span className="text-sm">{k}</span>
+        ) : (
+          <span className="text-muted-foreground">—</span>
         );
       },
     },

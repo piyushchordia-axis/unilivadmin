@@ -59,7 +59,7 @@ async function seedMealConfig() {
   const meals: Array<{ mealType: string; displayLabel: string; brand: string | null; sortOrder: number }> = [
     { mealType: "BREAKFAST", displayLabel: "Breakfast", brand: null, sortOrder: 1 },
     { mealType: "LUNCH", displayLabel: "Lunch", brand: null, sortOrder: 2 },
-    { mealType: "SNACKS", displayLabel: "Evening Snacks", brand: null, sortOrder: 3 },
+    { mealType: "SNACKS", displayLabel: "High Tea / Evening Snacks", brand: null, sortOrder: 3 },
     { mealType: "DINNER", displayLabel: "Dinner", brand: null, sortOrder: 4 },
   ];
   for (const m of meals) {
@@ -232,6 +232,95 @@ async function assignPropertyKitchensAndBrands() {
   console.log(`  ✓ ${k.rowCount} properties → kitchen, ${br.rowCount} → brand`);
 }
 
+async function seedFoodSystemConfig() {
+  console.log("  food system_config defaults (cut-off + waste window)...");
+  // Canonical keys (raw JSON scalars). Readers live in food-service.ts
+  // (getDefaultCutoffTime / getWasteEditWindowMs). Idempotent upsert: keep
+  // description fresh but do NOT clobber an operator-tuned value blindly — we
+  // set the documented defaults here so a fresh DB resolves correctly.
+  const cfg: Array<{ key: string; value: string | number; description: string }> = [
+    { key: "food_default_cutoff", value: "09:00", description: "Global default order cut-off time (HH:MM 24h) applied when no brand/property cut-off row exists." },
+    { key: "food_waste_edit_window_minutes", value: 60, description: "Minutes after delivery during which waste quantities remain editable (PRD §7.7)." },
+  ];
+  for (const c of cfg) {
+    await db.insert(systemConfigTable)
+      .values({ id: id(), key: c.key, value: c.value as never, description: c.description, updatedAt: new Date() })
+      .onConflictDoUpdate({ target: systemConfigTable.key, set: { value: c.value as never, description: c.description, updatedAt: new Date() } });
+  }
+  console.log(`  ✓ ${cfg.length} food config keys (food_default_cutoff, food_waste_edit_window_minutes)`);
+}
+
+async function seedKitchenPincodes() {
+  console.log("  kitchen_pincodes (property pincode → kitchen)...");
+  // pincode is GLOBALLY UNIQUE (one kitchen per pincode; a kitchen serves many).
+  // Cover EVERY existing property pincode so downstream auto-derivation resolves.
+  // Resolve each property's kitchen: property.kitchen_id if set, else the
+  // lowest-id active kitchen in the property's city (via cluster.city_id).
+  // Skip-on-conflict keeps this idempotent and respects the global-unique rule
+  // (if two properties share a pincode, the first mapping wins — intended).
+  const r = await pool.query(
+    `INSERT INTO kitchen_pincodes (id, kitchen_id, pincode, is_active, created_at, updated_at)
+       SELECT gen_random_uuid()::text, sub.kid, sub.pincode, true, now(), now()
+         FROM (
+           SELECT DISTINCT ON (p.pincode)
+                  p.pincode,
+                  COALESCE(
+                    p.kitchen_id,
+                    (SELECT k.id FROM kitchens k
+                       JOIN clusters c2 ON c2.city_id = k.city_id
+                      WHERE c2.id = p.cluster_id AND k.is_active
+                      ORDER BY k.id LIMIT 1)
+                  ) AS kid
+             FROM properties p
+            WHERE p.pincode IS NOT NULL
+            ORDER BY p.pincode, p.kitchen_id NULLS LAST
+         ) sub
+        WHERE sub.kid IS NOT NULL
+     ON CONFLICT (pincode) DO NOTHING`,
+  );
+  console.log(`  ✓ ${r.rowCount} kitchen_pincodes inserted (existing skipped)`);
+}
+
+async function backfillPropertyBrandAndKitchen() {
+  console.log("  backfill properties → kitchen + brand (none left NULL)...");
+  // 1) kitchen_id: derive from the property's pincode via kitchen_pincodes
+  //    (authoritative once seedKitchenPincodes has run); fall back to the
+  //    lowest-id active kitchen in the property's city. Idempotent via IS DISTINCT FROM.
+  const k = await pool.query(
+    `UPDATE properties p
+        SET kitchen_id = sub.kid, updated_at = now()
+       FROM (
+         SELECT p2.id,
+                COALESCE(
+                  p2.kitchen_id,
+                  (SELECT kp.kitchen_id FROM kitchen_pincodes kp
+                    WHERE kp.pincode = p2.pincode AND kp.is_active LIMIT 1),
+                  (SELECT k.id FROM kitchens k
+                     JOIN clusters c ON c.city_id = k.city_id
+                    WHERE c.id = p2.cluster_id AND k.is_active
+                    ORDER BY k.id LIMIT 1)
+                ) AS kid
+           FROM properties p2
+       ) sub
+      WHERE p.id = sub.id AND sub.kid IS NOT NULL
+        AND p.kitchen_id IS DISTINCT FROM sub.kid`,
+  );
+  // 2) brand: kitchen.brand if present, else keep existing, else default 'UNILIV'.
+  //    Preserve already-set values (only fill where it changes / is NULL).
+  const br = await pool.query(
+    `UPDATE properties p
+        SET brand = COALESCE(k.brand, p.brand, 'UNILIV'), updated_at = now()
+       FROM kitchens k
+      WHERE p.kitchen_id = k.id
+        AND p.brand IS DISTINCT FROM COALESCE(k.brand, p.brand, 'UNILIV')`,
+  );
+  // 3) any property still lacking a brand (e.g. no kitchen.brand and was NULL) → default.
+  const def = await pool.query(
+    `UPDATE properties SET brand = 'UNILIV', updated_at = now() WHERE brand IS NULL`,
+  );
+  console.log(`  ✓ ${k.rowCount} props → kitchen, ${br.rowCount} props → brand, ${def.rowCount} props → default brand`);
+}
+
 async function setDishBrands() {
   console.log("  dishes → brand tags...");
   const r = await pool.query(
@@ -369,8 +458,11 @@ async function main() {
   await seedKitchens();
   await seedBrands();
   await assignKitchenCities();
+  await seedFoodSystemConfig();
   await assignResidentialProperties();
   await assignPropertyKitchensAndBrands();
+  await seedKitchenPincodes();
+  await backfillPropertyBrandAndKitchen();
   await setDishBrands();
   await seedRawMaterials();
   await seedCompositionRules();

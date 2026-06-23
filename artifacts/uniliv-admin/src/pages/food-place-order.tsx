@@ -1,12 +1,12 @@
 import * as React from "react";
-import { useLocation } from "wouter";
+import { Link, useLocation } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { format } from "date-fns";
+import { addDays, format } from "date-fns";
 import jsPDF from "jspdf";
 import {
   UtensilsCrossed, ChefHat, Loader2, Building2, CalendarDays, Users,
-  Check, ChevronsUpDown, Clock, Lock, Download, Share2, Mail, MessageCircle,
-  Link2, Copy, Soup, Info, Tag, AlertTriangle, Pencil, RotateCcw, Zap,
+  Check, ChevronsUpDown, Clock, Lock, Download, Share2, Link2, Copy,
+  Soup, Info, Tag, AlertTriangle, Pencil, Zap, CheckCircle2, Truck, ArrowRight,
 } from "lucide-react";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
@@ -19,18 +19,18 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
 import { EmptyState } from "@/components/ui/empty-state";
+import { StatusBadge } from "@/components/status-badge";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
-import { Calendar } from "@/components/ui/calendar";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   Drawer, DrawerClose, DrawerContent, DrawerDescription, DrawerFooter, DrawerHeader, DrawerTitle,
 } from "@/components/ui/drawer";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import {
   foodApi, foodKeys, MEAL_LABEL, fmtQty,
-  type Cutoff, type OrderPreview, type PropertyOverview,
+  type Cutoff, type FoodOrder, type OrderBatch, type OrderPreview, type PropertyOverview,
 } from "@/lib/food-api";
 import { useToast } from "@/hooks/use-toast";
 import { useAppStore } from "@/lib/store";
@@ -38,46 +38,61 @@ import { usePermissions } from "@/lib/use-permissions";
 import { useQueryParam } from "@/lib/nav-helpers";
 import { cn } from "@/lib/utils";
 
-type ShareChannel = "EMAIL" | "WHATSAPP" | "LINK";
-type ShareRecipientType = "GUESTS" | "CUSTOM";
-
-/** Per-item override, keyed `${mealType}__${dishId}`. Anything unset is DERIVED
- *  from the meal's persons (or the global headcount), so changing headcount
- *  recomputes every quantity instantly — no refetch, no state reset. */
+/** Per-item override, keyed `${mealType}__${dishId}`. Editing is disabled for now
+ *  ("coming soon"), so every dish is always included and quantities auto-compute. */
 type Override = { excluded?: boolean; persons?: number; qty?: number };
 
 const todayDate = () => { const d = new Date(); d.setHours(0, 0, 0, 0); return d; };
 const itemKey = (mealType: string, dishId: string) => `${mealType}__${dishId}`;
 const round3 = (n: number) => Math.round(n * 1000) / 1000;
 
+/** Live countdown to a deadline, formatted "Hh Mm Ss" (or "Mm Ss" under an hour). */
+function useCountdown(deadline: Date | null): { text: string; passed: boolean } {
+  const [now, setNow] = React.useState(() => Date.now());
+  React.useEffect(() => {
+    if (!deadline) return;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [deadline?.getTime()]);
+  if (!deadline) return { text: "", passed: false };
+  const ms = deadline.getTime() - now;
+  if (ms <= 0) return { text: "0s", passed: true };
+  const s = Math.floor(ms / 1000);
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+  const text = h > 0 ? `${h}h ${m}m ${sec}s` : `${m}m ${sec}s`;
+  return { text, passed: false };
+}
+
 export default function FoodPlaceOrder() {
   const qc = useQueryClient();
   const { toast } = useToast();
   const [, navigate] = useLocation();
   const { propertyId: storePropertyId } = useAppStore();
-  const { can } = usePermissions();
+  const { can, role } = usePermissions();
   const canPlace = can("FOOD_PLACE_ORDER", "create");
+  // Download menu stays for Unit Lead + FnB roles (only on the success state).
+  const canDownload = role === "UNIT_LEAD" || role === "SUPER_ADMIN" || (role ?? "").startsWith("FNB_");
 
   const [propertyId, setPropertyId] = React.useState<string>("");
   const [propertyOpen, setPropertyOpen] = React.useState(false);
-  const [date, setDate] = React.useState<Date>(todayDate());
-  const [dateOpen, setDateOpen] = React.useState(false);
+
+  // Service date is ALWAYS tomorrow (today + 1) and read-only — no picker.
+  const date = React.useMemo(() => addDays(todayDate(), 1), []);
+  const dateStr = format(date, "yyyy-MM-dd");
+  const dateLabel = format(date, "EEE, dd MMM yyyy");
 
   // The single lever: how many people we're serving. Drives every quantity.
   const [persons, setPersons] = React.useState<number>(1);
-  // Per-meal headcount override (absent = inherit the global headcount).
-  const [mealPersons, setMealPersons] = React.useState<Record<string, number>>({});
-  // Per-item overrides (exclude / custom persons / custom qty).
-  const [overrides, setOverrides] = React.useState<Record<string, Override>>({});
+
+  // Per-item overrides retained for derivation, but editing is disabled.
+  const [overrides] = React.useState<Record<string, Override>>({});
   const [activeMeal, setActiveMeal] = React.useState<string>("");
 
-  const [shareOpen, setShareOpen] = React.useState(false);
-  const [shareChannel, setShareChannel] = React.useState<ShareChannel>("EMAIL");
-  const [shareRecipientType, setShareRecipientType] = React.useState<ShareRecipientType>("GUESTS");
-  const [shareLink, setShareLink] = React.useState<string | null>(null);
+  // Success state (shown after a batch is placed).
+  const [placed, setPlaced] = React.useState<{ batch: OrderBatch; orders: FoodOrder[] } | null>(null);
 
-  const dateStr = format(date, "yyyy-MM-dd");
-  const dateLabel = format(date, "EEE, dd MMM yyyy");
+  const [shareOpen, setShareOpen] = React.useState(false);
+  const [shareLink, setShareLink] = React.useState<string | null>(null);
 
   // ── Lookups (properties carry inherited brand + kitchen) ──
   const { data: lookups, isLoading: lookupsLoading } = useQuery({
@@ -108,7 +123,7 @@ export default function FoodPlaceOrder() {
     if (overview && overview.activeGuests > 0) setPersons(overview.activeGuests);
   }, [overview?.id]);
 
-  // ── Cut-offs ──
+  // ── Cut-offs (day-before-anchored cutoffAt / isPastCutoff from the server) ──
   const { data: cutoffsRaw } = useQuery({
     queryKey: foodKeys.cutoffs({ brand, propertyId, date: dateStr }),
     queryFn: () => foodApi.cutoffs({ brand: brand!, propertyId, date: dateStr }),
@@ -120,47 +135,44 @@ export default function FoodPlaceOrder() {
     return map;
   }, [cutoffsRaw]);
 
-  // ── Menu / per-resident rates (fetched ONCE per property+date — persons is
-  //    NOT in the key, so changing headcount never refetches). We only need
-  //    each dish's qtyPerResident; quantities are computed client-side. ──
+  // Single cut-off applies to all meals. Derive the shared deadline for the banner.
+  const cutoffAny = cutoffsRaw?.[0];
+  const cutoffTime = cutoffAny?.cutoffTime ?? null;
+  const cutoffDeadline = cutoffAny?.cutoffAt ? new Date(cutoffAny.cutoffAt) : null;
+  const countdown = useCountdown(cutoffDeadline);
+  // Closed once the server says the (day-before) cut-off passed, or the live countdown elapses.
+  const orderingClosed = Boolean(cutoffAny?.isPastCutoff) || countdown.passed;
+
+  // ── Menu / per-resident rates (fetched ONCE per property+date) ──
   const { data: preview, isLoading: previewLoading } = useQuery<OrderPreview>({
     queryKey: foodKeys.orderPreview({ propertyId, date: dateStr }),
     queryFn: () => foodApi.orderPreview({ propertyId, serviceDate: dateStr, persons: 1 }),
     enabled: !!propertyId && configured,
   });
 
-  // Reset overrides + active meal when a fresh menu arrives (property/date change).
   React.useEffect(() => {
     if (!preview?.meals) return;
-    setOverrides({});
-    setMealPersons({});
-    const firstOpen = preview.meals.find((m) => !cutoffByMeal[m.mealType]?.isPastCutoff) ?? preview.meals[0];
-    setActiveMeal(firstOpen?.mealType ?? "");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    setActiveMeal(preview.meals[0]?.mealType ?? "");
   }, [preview]);
 
-  // ── Live full-day menu (for download / share) ──
+  // ── Live full-day menu (for download / share on the success state) ──
   const { data: fullMenu, isLoading: menuLoading } = useQuery({
     queryKey: foodKeys.fullMenu({ propertyId, date: dateStr }),
     queryFn: () => foodApi.fullMenu({ propertyId, date: dateStr }),
     enabled: !!propertyId && configured,
   });
 
-  const isClosed = (mt: string) => !!cutoffByMeal[mt]?.isPastCutoff;
-
-  /** Derived effective state for one dish — the heart of the reactive model. */
+  /** Derived effective state for one dish. Checkboxes/edit are disabled, so every
+   *  dish is included by default and the quantity is always the auto-computed one. */
   const effFor = React.useCallback((mt: string, dishId: string, qtyPerResident: number) => {
     const ov = overrides[itemKey(mt, dishId)];
-    const closed = isClosed(mt);
-    const included = !closed && !(ov?.excluded ?? false);
-    const p = ov?.persons ?? mealPersons[mt] ?? persons;
+    const included = !(ov?.excluded ?? false);
+    const p = ov?.persons ?? persons;
     const qty = ov?.qty ?? round3(p * qtyPerResident);
-    const edited = ov?.persons != null || ov?.qty != null;
-    return { included, persons: p, qty, edited, closed };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [overrides, mealPersons, persons, cutoffByMeal]);
+    return { included, persons: p, qty };
+  }, [overrides, persons]);
 
-  // ── Derived order ──
+  // ── Derived order (only meals that have a menu produce items → one order each) ──
   const selection = React.useMemo(() => {
     const meals = (preview?.meals ?? []).map((meal) => {
       const items = meal.items
@@ -175,16 +187,6 @@ export default function FoodPlaceOrder() {
     return { meals, itemCount, mealCount: meals.length, countByMeal };
   }, [preview, effFor]);
 
-  // ── Override mutators ──
-  const patchOverride = (key: string, patch: Override) =>
-    setOverrides((p) => ({ ...p, [key]: { ...p[key], ...patch } }));
-  const setExcluded = (mt: string, dishId: string, excluded: boolean) =>
-    patchOverride(itemKey(mt, dishId), { excluded });
-  const resetItem = (mt: string, dishId: string) =>
-    setOverrides((p) => { const n = { ...p }; const cur = { ...n[itemKey(mt, dishId)] }; delete cur.persons; delete cur.qty; n[itemKey(mt, dishId)] = cur; return n; });
-  const toggleAll = (mt: string, dishIds: string[], include: boolean) =>
-    setOverrides((p) => { const n = { ...p }; dishIds.forEach((d) => { n[itemKey(mt, d)] = { ...n[itemKey(mt, d)], excluded: !include }; }); return n; });
-
   // ── Place order ──
   const placeMutation = useMutation({
     mutationFn: () => foodApi.placeOrderBatch({
@@ -195,7 +197,7 @@ export default function FoodPlaceOrder() {
       qc.invalidateQueries({ queryKey: ["food"] });
       const n = res?.orders?.length ?? selection.mealCount;
       toast({ title: `${n} order${n === 1 ? "" : "s"} placed`, description: `${selectedProperty?.name ?? "Property"} • ${brand} • ${dateLabel}` });
-      navigate("/food/orders");
+      setPlaced({ batch: res.batch, orders: res.orders });
     },
     onError: (e: any) => toast({ title: e?.message || "Failed to place order", variant: "destructive" }),
   });
@@ -203,16 +205,17 @@ export default function FoodPlaceOrder() {
   const handlePlace = () => {
     if (!propertyId) { toast({ title: "Select a property first", variant: "destructive" }); return; }
     if (!configured) { toast({ title: "Property not configured for ordering", variant: "destructive" }); return; }
-    if (selection.mealCount === 0) { toast({ title: "Add at least one item", description: "Include an item with quantity greater than 0.", variant: "destructive" }); return; }
+    if (orderingClosed) { toast({ title: "Ordering for tomorrow is closed", variant: "destructive" }); return; }
+    if (selection.mealCount === 0) { toast({ title: "No menu to order", description: "There is no menu configured for tomorrow.", variant: "destructive" }); return; }
     placeMutation.mutate();
   };
 
-  // ── Share ──
+  // ── Share (menu link only — no guest-recipient targeting) ──
   const shareMutation = useMutation({
-    mutationFn: () => foodApi.shareMenu({ propertyId, brand, date: dateStr, channel: shareChannel, recipientType: shareRecipientType }),
+    mutationFn: () => foodApi.shareMenu({ propertyId, brand, date: dateStr, channel: "LINK" }),
     onSuccess: (res: any) => {
-      if (shareChannel === "LINK" && res?.shareToken) { setShareLink(`${window.location.origin}/m/${res.shareToken}`); toast({ title: "Share link ready" }); }
-      else { setShareLink(null); const count = res?.recipientCount ?? 0; toast({ title: shareRecipientType === "GUESTS" ? `Menu shared with ${count} guest${count === 1 ? "" : "s"}` : "Menu shared" }); setShareOpen(false); }
+      if (res?.shareToken) { setShareLink(`${window.location.origin}/m/${res.shareToken}`); toast({ title: "Share link ready" }); }
+      else { toast({ title: "Menu shared" }); }
     },
     onError: (e: any) => toast({ title: e?.message || "Failed to share menu", variant: "destructive" }),
   });
@@ -256,20 +259,134 @@ export default function FoodPlaceOrder() {
 
   const saving = placeMutation.isPending;
 
+  // ════════════════════════════════════════════════════════════════════════
+  // SUCCESS STATE — batch reference + per-meal orders (each links to tracking)
+  // ════════════════════════════════════════════════════════════════════════
+  if (placed) {
+    return (
+      <div className="space-y-6">
+        <PageHeader
+          title="Order placed"
+          subtitle="Your meal orders are in. Track each one or place another."
+          breadcrumbs={[{ label: "Food", href: "/food/orders" }, { label: "Place Order" }]}
+        />
+        <div className="mx-auto w-full max-w-2xl space-y-5">
+          <Card>
+            <CardContent className="flex flex-col items-center gap-3 py-8 text-center">
+              <div className="flex h-14 w-14 items-center justify-center rounded-full bg-success/12">
+                <CheckCircle2 className="h-8 w-8 text-success" />
+              </div>
+              <div>
+                <h2 className="font-display text-lg font-semibold">
+                  {placed.orders.length} order{placed.orders.length === 1 ? "" : "s"} placed
+                </h2>
+                <p className="text-sm text-muted-foreground">
+                  {selectedProperty?.name ?? "Property"} · {brand} · {dateLabel}
+                </p>
+              </div>
+              <Badge variant="secondary" className="gap-1.5 font-mono text-xs">
+                <Tag className="h-3 w-3" /> Batch {placed.batch.batchNumber}
+              </Badge>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base font-display">Your orders</CardTitle>
+              <CardDescription>Track any order to follow its kitchen-to-delivery status.</CardDescription>
+            </CardHeader>
+            <Separator />
+            <CardContent className="p-0">
+              <ul className="divide-y">
+                {placed.orders.map((o) => (
+                  <li key={o.id} className="flex items-center gap-3 px-4 py-3">
+                    <Soup className="h-4 w-4 shrink-0 text-accent" />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium">{MEAL_LABEL[o.mealType] ?? o.mealType}</p>
+                      <p className="truncate font-mono text-xs text-muted-foreground">{o.orderNumber}</p>
+                    </div>
+                    <StatusBadge status={o.status} />
+                    <Button asChild variant="outline" size="sm">
+                      <Link href={`/food/track?order=${encodeURIComponent(o.orderNumber)}`}>
+                        <Truck className="mr-1.5 h-3.5 w-3.5" /> Track your order
+                      </Link>
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            </CardContent>
+          </Card>
+
+          {/* Download + Share — only on the success state */}
+          <Card>
+            <CardContent className="flex flex-wrap items-center gap-2 py-4">
+              {canDownload && (
+                <Button type="button" variant="outline" size="sm" onClick={downloadMenuPdf} disabled={menuLoading}>
+                  <Download className="mr-2 h-4 w-4" /> Download menu
+                </Button>
+              )}
+              <Button type="button" variant="outline" size="sm" onClick={() => { setShareLink(null); setShareOpen(true); }}>
+                <Share2 className="mr-2 h-4 w-4" /> Share menu
+              </Button>
+              <div className="ml-auto flex items-center gap-2">
+                <Button variant="ghost" size="sm" onClick={() => navigate("/food/orders")}>View all orders</Button>
+                <Button size="sm" onClick={() => { setPlaced(null); setShareLink(null); }}>
+                  Place another <ArrowRight className="ml-1.5 h-3.5 w-3.5" />
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Share drawer — menu LINK only */}
+        <ShareMenuDrawer
+          open={shareOpen} onOpenChange={setShareOpen}
+          brand={brand} dateLabel={dateLabel} propertyName={selectedProperty?.name}
+          shareLink={shareLink} onGenerate={() => shareMutation.mutate()} generating={shareMutation.isPending}
+          onCopy={copyShareLink}
+        />
+      </div>
+    );
+  }
+
+  // ════════════════════════════════════════════════════════════════════════
+  // PRE-ORDER STATE
+  // ════════════════════════════════════════════════════════════════════════
   return (
+    <TooltipProvider delayDuration={150}>
     <div className="space-y-6">
       <PageHeader
         title="Place Order"
         subtitle="Set the headcount once — quantities are calculated for every dish."
         breadcrumbs={[{ label: "Food", href: "/food/orders" }, { label: "Place Order" }]}
         action={
-          <Button onClick={handlePlace} disabled={saving || !canPlace || selection.mealCount === 0} size="lg">
+          <Button onClick={handlePlace} disabled={saving || !canPlace || orderingClosed || selection.mealCount === 0} size="lg">
             {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <UtensilsCrossed className="mr-2 h-4 w-4" />}
             Place order
             {selection.itemCount > 0 && <Badge variant="secondary" className="ml-2 bg-white/20 text-white border-0">{selection.itemCount}</Badge>}
           </Button>
         }
       />
+
+      {/* ── Cut-off banner ── */}
+      {orderingClosed ? (
+        <div className="flex items-center gap-2.5 rounded-lg border border-destructive/30 bg-destructive/8 px-4 py-3 text-sm text-destructive">
+          <Lock className="h-4 w-4 shrink-0" />
+          <span>
+            Ordering for tomorrow is closed{cutoffTime ? ` — the ${cutoffTime} cut-off has passed` : ""}.
+          </span>
+        </div>
+      ) : cutoffDeadline ? (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-accent/30 bg-accent/5 px-4 py-3 text-sm">
+          <Clock className="h-4 w-4 shrink-0 text-accent" />
+          <span className="text-muted-foreground">
+            Order for tomorrow before today's {cutoffTime} cut-off.
+          </span>
+          <span className="ml-auto inline-flex items-center gap-1.5 font-medium tabular-nums">
+            <Zap className="h-3.5 w-3.5 text-accent" /> {countdown.text} left
+          </span>
+        </div>
+      ) : null}
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
         {/* ── Left: builder ── */}
@@ -310,18 +427,17 @@ export default function FoodPlaceOrder() {
                     </PopoverContent>
                   </Popover>
                 </div>
+                {/* Service date — read-only, always tomorrow */}
                 <div className="space-y-1.5">
                   <Label className="text-xs text-muted-foreground">Service date</Label>
-                  <Popover open={dateOpen} onOpenChange={setDateOpen}>
-                    <PopoverTrigger asChild>
-                      <Button variant="outline" className="w-full justify-start font-normal sm:w-[180px]">
-                        <CalendarDays className="mr-2 h-4 w-4 text-muted-foreground" />{dateLabel}
-                      </Button>
-                    </PopoverTrigger>
-                    <PopoverContent className="p-0 w-auto" align="end">
-                      <Calendar mode="single" selected={date} onSelect={(d) => { if (d) { const nd = new Date(d); nd.setHours(0, 0, 0, 0); setDate(nd); } setDateOpen(false); }} initialFocus />
-                    </PopoverContent>
-                  </Popover>
+                  <div className="flex h-10 items-center gap-2 rounded-md border bg-muted/40 px-3 sm:w-[220px]" aria-readonly="true">
+                    <CalendarDays className="h-4 w-4 shrink-0 text-muted-foreground" />
+                    <span className="truncate text-sm">
+                      <span className="font-medium">Tomorrow</span>
+                      <span className="text-muted-foreground"> · {dateLabel}</span>
+                    </span>
+                    <Lock className="ml-auto h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                  </div>
                 </div>
               </div>
 
@@ -358,67 +474,42 @@ export default function FoodPlaceOrder() {
             </CardContent></Card>
           ) : !preview || preview.meals.length === 0 ? (
             <Card><CardContent className="py-10">
-              <EmptyState icon={Soup} title="No menu for this day" description="Nothing is configured for this property's kitchen and brand on the selected date." />
+              <EmptyState icon={Soup} title="No menu for tomorrow" description="Nothing is configured for this property's kitchen and brand for tomorrow's service date." />
             </CardContent></Card>
           ) : (
             <Tabs value={activeMeal} onValueChange={setActiveMeal} className="space-y-3">
               <TabsList className="h-auto w-full justify-start gap-1 overflow-x-auto bg-transparent p-0 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                 {preview.meals.map((meal) => {
-                  const closed = isClosed(meal.mealType);
                   const count = selection.countByMeal[meal.mealType] ?? 0;
                   return (
                     <TabsTrigger key={meal.mealType} value={meal.mealType}
                       className="shrink-0 gap-2 rounded-lg border border-transparent px-3 py-2 data-[state=active]:border-border data-[state=active]:bg-card">
-                      {closed ? <Lock className="h-3.5 w-3.5 text-muted-foreground" /> : <Soup className="h-3.5 w-3.5 text-accent" />}
+                      <Soup className="h-3.5 w-3.5 text-accent" />
                       <span className="font-medium">{meal.label}</span>
-                      {closed ? (
-                        <span className="text-[10px] uppercase text-muted-foreground">closed</span>
-                      ) : (
-                        <Badge variant={count > 0 ? "default" : "secondary"} className="h-5 min-w-5 justify-center px-1.5 text-[10px]">{count}</Badge>
-                      )}
+                      <Badge variant={count > 0 ? "default" : "secondary"} className="h-5 min-w-5 justify-center px-1.5 text-[10px]">{count}</Badge>
                     </TabsTrigger>
                   );
                 })}
               </TabsList>
 
               {preview.meals.map((meal) => {
-                const closed = isClosed(meal.mealType);
-                const cutoff = cutoffByMeal[meal.mealType];
                 const dishIds = meal.items.map((i) => i.dishId);
-                const allIncluded = !closed && dishIds.every((d) => !(overrides[itemKey(meal.mealType, d)]?.excluded));
-                const mealHead = mealPersons[meal.mealType];
                 return (
                   <TabsContent key={meal.mealType} value={meal.mealType} className="mt-0">
                     <Card>
                       <CardHeader className="flex-row items-center justify-between gap-3 space-y-0 py-3">
-                        {closed ? (
-                          <Badge variant="destructive" className="gap-1"><Lock className="h-3 w-3" /> Cut-off passed</Badge>
-                        ) : (
-                          <label className="flex cursor-pointer items-center gap-2 text-sm">
-                            <Checkbox checked={allIncluded} onCheckedChange={(v) => toggleAll(meal.mealType, dishIds, !!v)} aria-label={`Include all ${meal.label}`} />
-                            <span className="text-muted-foreground">Select all · {meal.items.length} dishes</span>
-                          </label>
-                        )}
-                        {!closed && (
-                          <div className="flex items-center gap-2">
-                            <span className="text-xs text-muted-foreground">{meal.label} persons</span>
-                            <NumberStepper value={mealHead ?? persons} min={0}
-                              onChange={(n) => setMealPersons((p) => ({ ...p, [meal.mealType]: n }))}
-                              aria-label={`${meal.label} persons`} className="w-auto" />
-                            {mealHead != null && mealHead !== persons && (
-                              <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground" aria-label="Reset meal persons"
-                                onClick={() => setMealPersons((p) => { const n = { ...p }; delete n[meal.mealType]; return n; })}>
-                                <RotateCcw className="h-3.5 w-3.5" />
-                              </Button>
-                            )}
-                          </div>
-                        )}
+                        {/* Select-all checkbox — DISABLED ("coming soon"); all dishes always included */}
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <label className="flex items-center gap-2 text-sm opacity-60" aria-disabled="true">
+                              <Checkbox checked disabled aria-label={`Include all ${meal.label}`} />
+                              <span className="text-muted-foreground">All {dishIds.length} dishes included</span>
+                              <Badge variant="outline" className="text-[9px] uppercase">coming soon</Badge>
+                            </label>
+                          </TooltipTrigger>
+                          <TooltipContent>Selecting individual dishes is coming soon — all dishes are included for now.</TooltipContent>
+                        </Tooltip>
                       </CardHeader>
-                      {cutoff?.cutoffTime && !closed && (
-                        <div className="px-4 pb-2 text-xs text-muted-foreground flex items-center gap-1.5">
-                          <Clock className="h-3 w-3" /> Order before cut-off {cutoff.cutoffTime}
-                        </div>
-                      )}
                       <Separator />
                       <CardContent className="p-0">
                         <BoundedScroll size="lg">
@@ -426,58 +517,37 @@ export default function FoodPlaceOrder() {
                             {meal.items.map((it) => {
                               const e = effFor(meal.mealType, it.dishId, it.qtyPerResident);
                               return (
-                                <li key={it.dishId} className={cn("flex items-center gap-3 px-4 py-2.5", !e.included && "opacity-50")}>
-                                  <Checkbox checked={e.included} disabled={closed}
-                                    onCheckedChange={(v) => setExcluded(meal.mealType, it.dishId, !v)}
-                                    aria-label={`Include ${it.dishName}`} />
+                                <li key={it.dishId} className="flex items-center gap-3 px-4 py-2.5">
+                                  {/* Per-item include checkbox — DISABLED ("coming soon") */}
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <span className="inline-flex" aria-disabled="true">
+                                        <Checkbox checked disabled aria-label={`Include ${it.dishName}`} />
+                                      </span>
+                                    </TooltipTrigger>
+                                    <TooltipContent>Including/excluding dishes is coming soon.</TooltipContent>
+                                  </Tooltip>
                                   <div className="min-w-0 flex-1">
-                                    <div className="flex items-center gap-1.5">
-                                      <p className="truncate text-sm font-medium">{it.dishName}</p>
-                                      {e.edited && <Badge variant="default" className="text-[9px] px-1.5 py-0">edited</Badge>}
-                                    </div>
+                                    <p className="truncate text-sm font-medium">{it.dishName}</p>
                                     <p className="truncate text-xs text-muted-foreground">
                                       {it.slotLabel ? `${it.slotLabel} · ` : ""}
-                                      {e.edited ? `${e.persons} persons` : `${fmtQty(it.qtyPerResident, it.unit)}/person`}
+                                      {fmtQty(it.qtyPerResident, it.unit)}/person
                                     </p>
                                   </div>
                                   <div className="shrink-0 text-right tabular-nums">
-                                    <span className={cn("text-sm font-semibold", !e.included && "text-muted-foreground")}>
-                                      {e.included ? fmtQty(e.qty, it.unit) : "—"}
-                                    </span>
+                                    <span className="text-sm font-semibold">{fmtQty(e.qty, it.unit)}</span>
                                   </div>
-                                  <Popover>
-                                    <PopoverTrigger asChild>
-                                      <Button variant="ghost" size="icon" disabled={closed || !e.included}
-                                        className={cn("h-8 w-8 shrink-0", e.edited ? "text-accent" : "text-muted-foreground")}
-                                        aria-label={`Customise ${it.dishName}`}>
-                                        <Pencil className="h-3.5 w-3.5" />
-                                      </Button>
-                                    </PopoverTrigger>
-                                    <PopoverContent align="end" className="w-64 space-y-3">
-                                      <div>
-                                        <p className="text-sm font-medium">{it.dishName}</p>
-                                        <p className="text-xs text-muted-foreground">{fmtQty(it.qtyPerResident, it.unit)} per person</p>
-                                      </div>
-                                      <div className="flex items-center justify-between gap-2">
-                                        <Label className="text-xs">Persons</Label>
-                                        <NumberStepper value={e.persons} min={0} className="w-auto"
-                                          onChange={(n) => patchOverride(itemKey(meal.mealType, it.dishId), { persons: n, qty: undefined })}
-                                          aria-label="Override persons" />
-                                      </div>
-                                      <div className="flex items-center justify-between gap-2">
-                                        <Label className="text-xs">Quantity ({it.unit.toLowerCase()})</Label>
-                                        <NumberStepper value={e.qty} min={0} step={0.001} className="w-auto"
-                                          onChange={(n) => patchOverride(itemKey(meal.mealType, it.dishId), { qty: n })}
-                                          aria-label="Override quantity" />
-                                      </div>
-                                      {e.edited && (
-                                        <Button variant="outline" size="sm" className="w-full"
-                                          onClick={() => resetItem(meal.mealType, it.dishId)}>
-                                          <RotateCcw className="mr-2 h-3.5 w-3.5" /> Reset to calculated
+                                  {/* Edit pencil — DISABLED ("coming soon") */}
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <span className="inline-flex">
+                                        <Button variant="ghost" size="icon" disabled className="h-8 w-8 shrink-0 text-muted-foreground" aria-label={`Customise ${it.dishName} (coming soon)`}>
+                                          <Pencil className="h-3.5 w-3.5" />
                                         </Button>
-                                      )}
-                                    </PopoverContent>
-                                  </Popover>
+                                      </span>
+                                    </TooltipTrigger>
+                                    <TooltipContent>Per-dish quantity editing is coming soon.</TooltipContent>
+                                  </Tooltip>
                                 </li>
                               );
                             })}
@@ -492,7 +562,7 @@ export default function FoodPlaceOrder() {
           )}
         </div>
 
-        {/* ── Right: summary + share ── */}
+        {/* ── Right: summary ── */}
         <div className="lg:col-span-5">
           <Card className="lg:sticky lg:top-6">
             <CardHeader className="pb-4">
@@ -506,15 +576,11 @@ export default function FoodPlaceOrder() {
                   </CardDescription>
                 </div>
               </div>
-              <div className="flex items-center gap-2 pt-2">
-                <Button type="button" variant="outline" size="sm" className="flex-1" onClick={downloadMenuPdf} disabled={menuLoading || !configured}><Download className="mr-2 h-4 w-4" /> Download</Button>
-                <Button type="button" variant="outline" size="sm" className="flex-1" onClick={() => { setShareLink(null); setShareOpen(true); }} disabled={!propertyId || !configured}><Share2 className="mr-2 h-4 w-4" /> Share</Button>
-              </div>
             </CardHeader>
             <Separator />
             <CardContent className="p-4">
               {selection.mealCount === 0 ? (
-                <EmptyState icon={Info} title="Nothing selected" description="Set the headcount and include dishes to build the order." />
+                <EmptyState icon={Info} title="Nothing to order" description="Set the headcount — every dish on tomorrow's menu is included automatically." />
               ) : (
                 <BoundedScroll size="md">
                   <div className="space-y-3 pr-1">
@@ -543,7 +609,7 @@ export default function FoodPlaceOrder() {
                     <span className="text-muted-foreground">{selection.mealCount} meal{selection.mealCount === 1 ? "" : "s"} · </span>
                     <span className="font-semibold">{selection.itemCount} item{selection.itemCount === 1 ? "" : "s"}</span>
                   </div>
-                  <Button onClick={handlePlace} disabled={saving || !canPlace}>
+                  <Button onClick={handlePlace} disabled={saving || !canPlace || orderingClosed}>
                     {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <UtensilsCrossed className="mr-2 h-4 w-4" />}
                     Place order
                   </Button>
@@ -553,59 +619,50 @@ export default function FoodPlaceOrder() {
           </Card>
         </div>
       </div>
-
-      {/* ── Share drawer ── */}
-      <Drawer open={shareOpen} onOpenChange={setShareOpen}>
-        <DrawerContent>
-          <div className="mx-auto w-full max-w-lg">
-            <DrawerHeader>
-              <DrawerTitle className="flex items-center gap-2"><Share2 className="h-5 w-5 text-accent" /> Share menu</DrawerTitle>
-              <DrawerDescription>{brand} • {dateLabel}{selectedProperty ? ` • ${selectedProperty.name}` : ""}</DrawerDescription>
-            </DrawerHeader>
-            <div className="px-4 space-y-6">
-              <div className="space-y-2">
-                <Label>Channel</Label>
-                <RadioGroup value={shareChannel} onValueChange={(v) => setShareChannel(v as ShareChannel)} className="grid grid-cols-3 gap-2">
-                  {[{ v: "EMAIL", label: "Email", icon: Mail }, { v: "WHATSAPP", label: "WhatsApp", icon: MessageCircle }, { v: "LINK", label: "Link", icon: Link2 }].map(({ v, label, icon: Icon }) => (
-                    <Label key={v} htmlFor={`channel-${v}`} className={cn("flex cursor-pointer flex-col items-center gap-1.5 rounded-lg border p-3 text-sm transition-colors", shareChannel === v ? "border-accent bg-accent/5 text-foreground" : "border-border text-muted-foreground hover:bg-muted/50")}>
-                      <RadioGroupItem id={`channel-${v}`} value={v} className="sr-only" />
-                      <Icon className="h-5 w-5" />{label}
-                    </Label>
-                  ))}
-                </RadioGroup>
-              </div>
-              {shareChannel !== "LINK" && (
-                <div className="space-y-2">
-                  <Label>Recipients</Label>
-                  <RadioGroup value={shareRecipientType} onValueChange={(v) => setShareRecipientType(v as ShareRecipientType)} className="grid grid-cols-2 gap-2">
-                    {[{ v: "GUESTS", label: "All active guests" }, { v: "CUSTOM", label: "Custom" }].map(({ v, label }) => (
-                      <Label key={v} htmlFor={`rcpt-${v}`} className={cn("flex cursor-pointer items-center gap-2 rounded-lg border p-3 text-sm transition-colors", shareRecipientType === v ? "border-accent bg-accent/5 text-foreground" : "border-border text-muted-foreground hover:bg-muted/50")}>
-                        <RadioGroupItem id={`rcpt-${v}`} value={v} />{label}
-                      </Label>
-                    ))}
-                  </RadioGroup>
-                </div>
-              )}
-              {shareChannel === "LINK" && shareLink && (
-                <div className="space-y-2">
-                  <Label>Shareable link</Label>
-                  <div className="flex items-center gap-2">
-                    <Input readOnly value={shareLink} className="font-mono text-xs" />
-                    <Button type="button" variant="outline" size="icon" onClick={copyShareLink} aria-label="Copy link"><Copy className="h-4 w-4" /></Button>
-                  </div>
-                </div>
-              )}
-            </div>
-            <DrawerFooter>
-              <Button onClick={() => shareMutation.mutate()} disabled={shareMutation.isPending || !propertyId}>
-                {shareMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                {shareChannel === "LINK" ? "Generate link" : "Share menu"}
-              </Button>
-              <DrawerClose asChild><Button variant="outline">Close</Button></DrawerClose>
-            </DrawerFooter>
-          </div>
-        </DrawerContent>
-      </Drawer>
     </div>
+    </TooltipProvider>
+  );
+}
+
+/** Share drawer — menu LINK only (no guest-recipient targeting). */
+function ShareMenuDrawer({
+  open, onOpenChange, brand, dateLabel, propertyName, shareLink, onGenerate, generating, onCopy,
+}: {
+  open: boolean; onOpenChange: (v: boolean) => void;
+  brand: string | null; dateLabel: string; propertyName?: string;
+  shareLink: string | null; onGenerate: () => void; generating: boolean; onCopy: () => void;
+}) {
+  return (
+    <Drawer open={open} onOpenChange={onOpenChange}>
+      <DrawerContent>
+        <div className="mx-auto w-full max-w-lg">
+          <DrawerHeader>
+            <DrawerTitle className="flex items-center gap-2"><Share2 className="h-5 w-5 text-accent" /> Share menu</DrawerTitle>
+            <DrawerDescription>{brand} • {dateLabel}{propertyName ? ` • ${propertyName}` : ""}</DrawerDescription>
+          </DrawerHeader>
+          <div className="space-y-4 px-4">
+            <p className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Link2 className="h-4 w-4" /> Generate a shareable menu link.
+            </p>
+            {shareLink && (
+              <div className="space-y-2">
+                <Label>Shareable link</Label>
+                <div className="flex items-center gap-2">
+                  <Input readOnly value={shareLink} className="font-mono text-xs" />
+                  <Button type="button" variant="outline" size="icon" onClick={onCopy} aria-label="Copy link"><Copy className="h-4 w-4" /></Button>
+                </div>
+              </div>
+            )}
+          </div>
+          <DrawerFooter>
+            <Button onClick={onGenerate} disabled={generating}>
+              {generating && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              {shareLink ? "Regenerate link" : "Generate link"}
+            </Button>
+            <DrawerClose asChild><Button variant="outline">Close</Button></DrawerClose>
+          </DrawerFooter>
+        </div>
+      </DrawerContent>
+    </Drawer>
   );
 }

@@ -25,6 +25,8 @@ export interface PropertyDto {
   phone?: string | null;
   email?: string | null;
   amenities: string[];
+  brand?: string | null;
+  kitchenId?: string | null;
   occupiedBeds: number;
   createdAt: string;
   updatedAt: string;
