@@ -265,9 +265,8 @@ function SidebarContent({
 
 function Logo() {
   return (
-    <div className="flex items-center gap-3">
-      <div className="w-8 h-8 rounded-lg bg-brand-gradient flex items-center justify-center text-white font-display font-bold text-lg">U</div>
-      <span className="font-display font-bold text-lg tracking-tight text-sidebar-foreground">Uniliv</span>
+    <div className="flex items-center">
+      <img src="/brand/uniliv-logo.svg" alt="Uniliv" className="h-8 w-auto select-none" draggable={false} />
     </div>
   )
 }

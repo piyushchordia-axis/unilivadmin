@@ -239,12 +239,9 @@ export default function Login() {
         <div className="absolute inset-0" style={{ backgroundImage: "linear-gradient(rgba(255,255,255,0.045) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.045) 1px, transparent 1px)", backgroundSize: "46px 46px", WebkitMaskImage: "radial-gradient(72% 72% at 32% 50%, black, transparent)", maskImage: "radial-gradient(72% 72% at 32% 50%, black, transparent)" }} />
         <div className="absolute inset-0" style={{ background: "linear-gradient(120deg, rgba(0,0,0,0) 38%, rgba(0,0,0,0.45))" }} />
 
-        <div className="relative z-10 flex items-center gap-3">
-          <div className="w-11 h-11 rounded-xl bg-brand-gradient flex items-center justify-center text-white font-display font-bold text-xl">U</div>
-          <div className="leading-tight">
-            <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-white/45">Property operations platform</div>
-            <div className="font-display font-bold text-xl text-white">Uniliv</div>
-          </div>
+        <div className="relative z-10">
+          <img src="/brand/uniliv-logo.svg" alt="Uniliv" className="h-10 w-auto select-none" draggable={false} />
+          <div className="mt-2.5 text-[11px] font-semibold uppercase tracking-[0.22em] text-white/45">Property operations platform</div>
         </div>
 
         <div className="relative z-10 max-w-md">
@@ -268,9 +265,8 @@ export default function Login() {
       {/* ── Right form panel ── */}
       <div className="w-full lg:w-1/2 flex items-center justify-center p-5 sm:p-8">
         <div className="w-full max-w-md rounded-3xl border border-white/10 bg-white/[0.035] p-7 sm:p-9 shadow-[0_30px_80px_-20px_rgba(0,0,0,0.8)] backdrop-blur-xl">
-          <div className="lg:hidden mb-6 flex items-center justify-center gap-2.5">
-            <div className="w-9 h-9 rounded-lg bg-brand-gradient flex items-center justify-center text-white font-display font-bold">U</div>
-            <span className="font-display font-bold text-lg text-white">Uniliv</span>
+          <div className="lg:hidden mb-6 flex items-center justify-center">
+            <img src="/brand/uniliv-logo.svg" alt="Uniliv" className="h-9 w-auto select-none" draggable={false} />
           </div>
 
           {reason && (
