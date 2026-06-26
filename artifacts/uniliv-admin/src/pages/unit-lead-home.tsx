@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/select";
 import { GlobalPropertyScopeBanner } from "@/components/property-scope-banner";
 import { useAppStore } from "@/lib/store";
+import { usePermissions } from "@/lib/use-permissions";
 import {
   foodApi, foodKeys,
   type HomeAnalytics, type MyPropertyCard, type RevenueData, type FoodLookups,
@@ -90,6 +91,18 @@ function TenancyCard({ icon: Icon, title, value, prior, hint }: { icon: React.El
 }
 
 export default function UnitLeadHome() {
+  const { me } = usePermissions();
+
+  // Time-of-day greeting (same boundaries as the header GreetingClock), with the
+  // user's name and — when set — their designation.
+  const greeting = React.useMemo(() => {
+    const h = new Date().getHours();
+    const word = h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : "Good evening";
+    const first = me?.name?.split(" ")[0];
+    const who = first ? `${word}, ${first}` : word;
+    return me?.designation ? `${who} · ${me.designation}` : who;
+  }, [me?.name, me?.designation]);
+
   // Global property scope: null = all the unit lead's properties.
   const { propertyId: storePropertyId, setPropertyId: setGlobalProperty } = useAppStore();
   const scopedPropertyId = storePropertyId ?? undefined;
@@ -163,7 +176,7 @@ export default function UnitLeadHome() {
   return (
     <div className="space-y-6">
       <PageHeader
-        title="Unit-Lead Home"
+        title={greeting}
         subtitle="Property overview, demand, wastage, occupancy & collections across your properties"
       />
 

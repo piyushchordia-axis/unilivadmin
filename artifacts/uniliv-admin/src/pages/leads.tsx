@@ -4,7 +4,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import jsPDF from "jspdf";
-import { apiFetch } from "@/lib/api-fetch";
+import { apiFetch, apiDownload } from "@/lib/api-fetch";
 import { PageHeader } from "@/components/page-header";
 import { DataTable } from "@/components/data-table";
 import { FormModal } from "@/components/ui/form-modal";
@@ -99,22 +99,11 @@ export default function Leads() {
   const onDrop = (e: React.DragEvent, stage: string) => { e.preventDefault(); const id = e.dataTransfer.getData("text/plain"); if (id) moveStage(id, stage); };
 
   const exportCsv = async () => {
-    // Authenticated download: the export route requires a Bearer token, which
-    // window.open cannot attach — fetch with the header then save the blob.
+    // Authenticated download: the export route requires a Bearer token, which window.open
+    // cannot attach. apiDownload attaches the in-memory token (with 401→refresh→retry) and
+    // saves the returned blob.
     try {
-      const res = await fetch(`/api/leads/export-csv?_t=${Date.now()}`, {
-        headers: { Authorization: `Bearer ${localStorage.getItem("uniliv_token") || ""}` },
-      });
-      if (!res.ok) throw new Error(`Export failed (${res.status})`);
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = "leads.csv";
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
+      await apiDownload(`/api/leads/export-csv?_t=${Date.now()}`, "leads.csv");
     } catch (e: any) {
       toast({ title: e?.message || "Export failed", variant: "destructive" });
     }

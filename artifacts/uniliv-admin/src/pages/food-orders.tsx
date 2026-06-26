@@ -3,7 +3,7 @@ import { useLocation } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { format } from "date-fns";
 import {
-  Plus, Search, Utensils, Package, CheckCircle2, XCircle, Truck, Clock, Ban,
+  Plus, Search, Utensils, Package, CheckCircle2, XCircle, Truck, Clock, Ban, Pencil,
 } from "lucide-react";
 import { DataTable } from "@/components/data-table";
 import { PageHeader } from "@/components/page-header";
@@ -149,6 +149,30 @@ export default function FoodOrders() {
       accessorKey: "status",
       header: "Status",
       cell: ({ row }: any) => <StatusBadge status={row.original.status} />,
+    },
+    {
+      id: "actions",
+      header: "",
+      cell: ({ row }: any) => {
+        // Edit lives on the detail page; only offer it while the order is still
+        // editable (PLACED / PREPARING), mirroring the backend's PUT gating.
+        const editable =
+          row.original.status === "PLACED" || row.original.status === "PREPARING";
+        if (!editable) return null;
+        return (
+          <Button
+            size="icon"
+            variant="ghost"
+            title="Edit order"
+            onClick={(e) => {
+              e.stopPropagation();
+              setLocation(`/food/orders/${row.original.id}`);
+            }}
+          >
+            <Pencil className="w-4 h-4" />
+          </Button>
+        );
+      },
     },
   ];
 

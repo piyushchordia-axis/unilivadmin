@@ -137,6 +137,13 @@ export interface ReportsData {
   statusBreakdown: { status: string; count: number }[];
 }
 
+// WS11 — aggregated ordered-vs-delivered variance, grouped by meal type.
+export interface VarianceRow { mealType: MealType; ordered: number; received: number; wasted: number; variance: number }
+export interface VarianceData {
+  rows: VarianceRow[];
+  totals: { ordered: number; received: number; wasted: number; variance: number };
+}
+
 export interface DishIngredientRow { id?: string; rawMaterialId: string; rawMaterialName?: string | null; quantity: string | number | null; unit: string | null }
 export interface Dish {
   id: string; name: string; component: string; unit: string;
@@ -290,6 +297,7 @@ export const foodKeys = {
   order: (id: string) => ["food", "order", id] as const,
   kitchenSummary: (p: Record<string, unknown>) => ["food", "kitchen-summary", p] as const,
   reports: (p: Record<string, unknown>) => ["food", "reports", p] as const,
+  reportsVariance: (p: Record<string, unknown>) => ["food", "reports-variance", p] as const,
   dishes: (p: Record<string, unknown>) => ["food", "dishes", p] as const,
   dish: (id: string) => ["food", "dish", id] as const,
   rawMaterials: (p: Record<string, unknown> = {}) => ["food", "raw-materials", p] as const,
@@ -338,6 +346,9 @@ export const foodApi = {
     apiFetch<Envelope<KitchenSummary>>(`/food/kitchen-summary${qs(p)}`).then((r) => r.data),
   reports: (p: Record<string, unknown> = {}) =>
     apiFetch<Envelope<ReportsData>>(`/food/reports${qs(p)}`).then((r) => r.data),
+  // WS11 — aggregated ordered-vs-delivered variance table.
+  reportsVariance: (p: Record<string, unknown> = {}) =>
+    apiFetch<Envelope<VarianceData>>(`/food/reports/variance${qs(p)}`).then((r) => r.data),
   reportsExportUrl: (p: Record<string, unknown> = {}) => `/api/food/reports/export${qs(p)}`,
 
   // Orders
@@ -500,11 +511,13 @@ export const foodApi = {
   guests: (p: Record<string, unknown> = {}) => apiFetch<Envelope<GuestRow[]>>(`/food/guests${qs(p)}`),
 
   // Export URLs (open in a new tab / anchor download).
-  // WS11: CSV + PDF only — .xls (SpreadsheetML) builders removed.
+  // WS11: CSV + PDF + XLS (Excel) — same endpoints, .xls suffix mirrors .csv/.pdf.
   reportsExportCsvUrl: (p: Record<string, unknown> = {}) => `/api/food/reports/export.csv${qs(p)}`,
   reportsExportPdfUrl: (p: Record<string, unknown> = {}) => `/api/food/reports/export.pdf${qs(p)}`,
+  reportsExportXlsUrl: (p: Record<string, unknown> = {}) => `/api/food/reports/export.xls${qs(p)}`,
   guestsExportCsvUrl: (p: Record<string, unknown> = {}) => `/api/food/guests/export.csv${qs(p)}`,
   guestsExportPdfUrl: (p: Record<string, unknown> = {}) => `/api/food/guests/export.pdf${qs(p)}`,
+  guestsExportXlsUrl: (p: Record<string, unknown> = {}) => `/api/food/guests/export.xls${qs(p)}`,
   rotationExportCsvUrl: (p: Record<string, unknown> = {}) => `/api/food/menu-rotation/export.csv${qs(p)}`,
   rotationExportPdfUrl: (p: Record<string, unknown> = {}) => `/api/food/menu-rotation/export.pdf${qs(p)}`,
 };

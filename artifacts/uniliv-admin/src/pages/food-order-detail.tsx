@@ -22,6 +22,7 @@ import {
   ListChecks,
   Ban,
   Check,
+  Pencil,
 } from "lucide-react";
 import { PageHeader } from "@/components/page-header";
 import { StatusBadge } from "@/components/status-badge";
@@ -29,6 +30,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
@@ -144,6 +146,11 @@ export default function FoodOrderDetail() {
   const [rejectReason, setRejectReason] = React.useState("");
   const [cancelOpen, setCancelOpen] = React.useState(false);
   const [cancelReason, setCancelReason] = React.useState("");
+  const [editOpen, setEditOpen] = React.useState(false);
+  // Edit form fields — pre-filled from the order when the dialog opens.
+  const [editQuantity, setEditQuantity] = React.useState("");
+  const [editResidents, setEditResidents] = React.useState("");
+  const [editNotes, setEditNotes] = React.useState("");
 
   const {
     data: order,
@@ -192,6 +199,36 @@ export default function FoodOrderDetail() {
     },
     onError: (e: any) =>
       toast({ title: e?.message || "Failed to cancel", variant: "destructive" }),
+  });
+
+  // Pre-fill the edit form from the current order each time the dialog opens.
+  const openEdit = () => {
+    if (!order) return;
+    setEditQuantity(order.totalQuantity != null ? String(order.totalQuantity) : "");
+    setEditResidents(String(order.residentsCount ?? ""));
+    setEditNotes(order.notes ?? "");
+    setEditOpen(true);
+  };
+
+  const editMut = useMutation({
+    // Backend accepts { quantity?, residentsCount?, notes? } (among others) and
+    // recomputes the per-dish items automatically from the total quantity.
+    mutationFn: () => {
+      const body: Record<string, unknown> = {};
+      const qty = Number(editQuantity);
+      if (Number.isFinite(qty) && qty > 0) body.quantity = qty;
+      const residents = Number(editResidents);
+      if (Number.isFinite(residents) && residents > 0) body.residentsCount = residents;
+      body.notes = editNotes.trim() || null;
+      return foodApi.updateOrder(id, body);
+    },
+    onSuccess: () => {
+      invalidate();
+      toast({ title: "Order updated" });
+      setEditOpen(false);
+    },
+    onError: (e: any) =>
+      toast({ title: e?.message || "Failed to update order", variant: "destructive" }),
   });
 
   // Delivery punctuality.
@@ -280,6 +317,10 @@ export default function FoodOrderDetail() {
   const canCancel =
     isPreDispatch &&
     (can("FOOD_PLACE_ORDER", "edit") || can("FOOD_KITCHEN_SUMMARY", "edit"));
+  // Backend permits editing only while PLACED or PREPARING (mirrors the PUT handler).
+  const canEdit =
+    (order.status === "PLACED" || order.status === "PREPARING") &&
+    can("FOOD_PLACE_ORDER", "edit");
 
   return (
     <div className="space-y-6">
@@ -312,6 +353,15 @@ export default function FoodOrderDetail() {
                   <XCircle className="w-4 h-4 mr-2" /> Reject
                 </Button>
               </>
+            )}
+            {canEdit && (
+              <Button
+                variant="outline"
+                onClick={openEdit}
+                disabled={editMut.isPending}
+              >
+                <Pencil className="w-4 h-4 mr-2" /> Edit order
+              </Button>
             )}
             {canCancel && (
               <Button
@@ -665,6 +715,72 @@ export default function FoodOrderDetail() {
               disabled={cancelMut.isPending}
             >
               {cancelMut.isPending ? "Cancelling…" : "Cancel order"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit dialog — quantity / residents / notes. Items are recomputed server-side. */}
+      <Dialog open={editOpen} onOpenChange={setEditOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Pencil className="w-5 h-5 text-accent" /> Edit order
+            </DialogTitle>
+            <DialogDescription>
+              Adjust the order while it is still placed or preparing. Changing the
+              quantity recomputes the per-dish breakdown automatically.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="edit-quantity">Quantity</Label>
+                <Input
+                  id="edit-quantity"
+                  type="number"
+                  min={1}
+                  step="0.01"
+                  value={editQuantity}
+                  onChange={(e) => setEditQuantity(e.target.value)}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="edit-residents">Residents</Label>
+                <Input
+                  id="edit-residents"
+                  type="number"
+                  min={1}
+                  step="1"
+                  value={editResidents}
+                  onChange={(e) => setEditResidents(e.target.value)}
+                />
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="edit-notes">Notes</Label>
+              <Textarea
+                id="edit-notes"
+                rows={3}
+                placeholder="Optional notes for the kitchen…"
+                value={editNotes}
+                onChange={(e) => setEditNotes(e.target.value)}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="ghost"
+              onClick={() => setEditOpen(false)}
+              disabled={editMut.isPending}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() => editMut.mutate()}
+              disabled={editMut.isPending}
+            >
+              {editMut.isPending ? "Saving…" : "Save changes"}
             </Button>
           </DialogFooter>
         </DialogContent>

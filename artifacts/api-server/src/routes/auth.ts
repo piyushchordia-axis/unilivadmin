@@ -370,6 +370,10 @@ router.post("/reset-password", authRateLimiter, async (req, res) => {
 });
 
 /* ── Session ────────────────────────────────────────────────────────────── */
+// NOTE: deliberately NOT behind authRateLimiter. A reload now always hits
+// /refresh (the access token is in-memory), so many legitimate sessions behind
+// one NAT/egress IP would otherwise share the strict 50/15min credential bucket
+// and get 429-logged-out. The app-wide globalRateLimiter (600/min) still applies.
 router.post("/refresh", async (req, res) => {
   try {
     const token = req.cookies?.["refreshToken"];
@@ -388,6 +392,43 @@ router.post("/refresh", async (req, res) => {
     // access token still matches the single active session.
     const authUser = { id: user.id, email: user.email, role: user.role, propertyId: user.propertyId, sid: user.currentSessionId };
     const accessToken = signAccessToken(authUser);
+
+    // Rotate the refresh token: mint a fresh value and atomically replace the old
+    // DB row. A leaked/stolen refresh token is then single-use — once the legit
+    // client refreshes, the old token no longer matches any row. The conditional
+    // delete (by the presented token) preserves the single-active-session model:
+    // if a concurrent login already replaced this row, no new row is inserted.
+    const newRefreshToken = signRefreshToken(user.id);
+    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+    // Atomic single-use rotation. Only the request whose DELETE actually matched
+    // the presented token performs the INSERT and writes the new cookie. A
+    // concurrent refresh of the SAME token (e.g. two tabs restoring on boot share
+    // one httpOnly cookie) finds nothing to delete and is served a fresh access
+    // token WITHOUT clobbering the cookie — the browser keeps the rotated value
+    // the winning request committed to the DB instead of an orphaned one. (A
+    // truly stale/stolen token is already rejected by the lookup above, since its
+    // row no longer exists.)
+    let rotated = false;
+    await db.transaction(async (tx) => {
+      const deleted = await tx
+        .delete(refreshTokensTable)
+        .where(eq(refreshTokensTable.token, token))
+        .returning({ id: refreshTokensTable.id });
+      if (deleted.length) {
+        await tx.insert(refreshTokensTable).values({ id: newId(), userId: user.id, token: newRefreshToken, expiresAt });
+        rotated = true;
+      }
+    });
+    if (rotated) {
+      res.cookie("refreshToken", newRefreshToken, {
+        httpOnly: true,
+        secure: COOKIE_SECURE,
+        sameSite: "lax",
+        maxAge: 7 * 24 * 60 * 60 * 1000,
+        path: "/",
+      });
+    }
+
     res.json({ success: true, accessToken, user: publicUser(user) });
   } catch (err) {
     req.log.error(err);

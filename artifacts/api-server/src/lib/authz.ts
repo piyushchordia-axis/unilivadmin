@@ -55,6 +55,58 @@ export function httpError(statusCode: number, message: string, details?: unknown
 export const forbidden = (msg = "Forbidden") => httpError(403, msg);
 export const badRequest = (msg = "Bad request", details?: unknown) => httpError(400, msg, details);
 
+/**
+ * Privilege tiers used to gate role assignment (anti privilege-escalation).
+ * Higher number = more privileged. A caller may grant roles of EQUAL or LOWER
+ * tier than their own, never higher; only SUPER_ADMIN (the sole rank-100 role)
+ * can grant SUPER_ADMIN. Any role not listed here defaults to 0 (lowest) via the
+ * lookup in assertCanAssignRole().
+ */
+export const ROLE_RANK: Record<string, number> = {
+  // ── Tier 4: top of the org ──────────────────────────────────────────────
+  SUPER_ADMIN: 100,
+  // ── Tier 3: org-wide leadership / cross-property heads ───────────────────
+  SENIOR_VICE_PRESIDENT: 80,
+  OPS_EXCELLENCE: 80,
+  AUDIT_READONLY: 80,
+  FINANCE: 80,
+  HR_MANAGER: 80,
+  OPERATIONS_MANAGER: 80,
+  PROCUREMENT_MANAGER: 80,
+  PROJECTS_MANAGER: 80,
+  PROPERTY_ACQUISITION: 80,
+  FNB_ZONAL_HEAD: 80,
+  ZONAL_HEAD: 80,
+  // ── Tier 2: mid-level / regional managers ────────────────────────────────
+  CITY_HEAD: 50,
+  CLUSTER_MANAGER: 50,
+  FNB_MANAGER: 50,
+  FNB_SUPERVISOR: 50,
+  // ── Tier 1: property / line roles ────────────────────────────────────────
+  WARDEN: 20,
+  UNIT_LEAD: 20,
+  SALES_EXECUTIVE: 20,
+  KITCHEN_MANAGER: 20,
+  VENDOR_RESTRICTED: 20,
+};
+
+/**
+ * Throw 403 unless `callerRole` is permitted to assign `targetRole`.
+ * Rule: SUPER_ADMIN may assign anything; everyone else may grant roles of EQUAL
+ * OR LOWER rank than their own (lateral peer management is allowed — e.g. an
+ * HR_MANAGER onboarding another tier-3 manager) but NEVER a higher tier. Since
+ * SUPER_ADMIN is the sole rank-100 role, this still makes escalation to
+ * SUPER_ADMIN impossible for anyone who isn't already SUPER_ADMIN. Unknown roles
+ * rank 0 (lowest).
+ */
+export function assertCanAssignRole(callerRole: string, targetRole: string): void {
+  if (callerRole === "SUPER_ADMIN") return;
+  const callerRank = ROLE_RANK[callerRole] ?? 0;
+  const targetRank = ROLE_RANK[targetRole] ?? 0;
+  if (targetRank <= callerRank) return;
+  throw forbidden("You cannot assign a role above your own privilege level");
+}
+
 /** True when the caller is bound to a single property (e.g. WARDEN / UNIT_LEAD). */
 export function isPropertyScoped(req: Request): boolean {
   const role = req.user?.role;

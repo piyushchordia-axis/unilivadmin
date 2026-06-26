@@ -11,6 +11,7 @@
  */
 import { Router, text as textBody, type Request, type Response } from "express";
 import { suppress } from "@workspace/notify-core";
+import { IS_PRODUCTION } from "../config/env.js";
 
 const router = Router();
 
@@ -18,8 +19,9 @@ const SKIP_VERIFY = process.env["NODE_ENV"] !== "production" && process.env["SES
 
 // Expected SNS topic ARN. sns-validator only proves the message is signed by
 // *some* AWS SNS topic, not *our* topic, so without this any AWS account can
-// forge a valid bounce/complaint and poison the suppression list. Optional for
-// back-compat: when unset we warn and proceed.
+// forge a valid bounce/complaint and poison the suppression list. REQUIRED in
+// production (fail closed): when unset in prod the endpoint rejects requests.
+// In non-production only we warn and proceed for local testing.
 const EXPECTED_TOPIC_ARN = process.env["SES_SNS_TOPIC_ARN"];
 
 async function verifySns(envelope: unknown): Promise<boolean> {
@@ -105,8 +107,14 @@ router.post("/webhooks/ses", textBody({ type: () => true }), async (req: Request
         res.status(403).json({ success: false, error: "Unexpected SNS topic" });
         return;
       }
+    } else if (IS_PRODUCTION) {
+      // Fail closed: without the allowlist any AWS account could forge a signed
+      // bounce/complaint and poison the suppression list. Never process in prod.
+      req.log.error("SES_SNS_TOPIC_ARN is not set; rejecting SES/SNS webhook in production");
+      res.status(403).json({ success: false, error: "Webhook not configured" });
+      return;
     } else {
-      req.log.warn("SES_SNS_TOPIC_ARN is not set; skipping TopicArn allowlist check");
+      req.log.warn("SES_SNS_TOPIC_ARN is not set; skipping TopicArn allowlist check (non-production)");
     }
 
     // One-time subscription handshake when wiring the SNS topic to this endpoint.

@@ -7,6 +7,7 @@ import {
   UtensilsCrossed, ChefHat, Loader2, Building2, CalendarDays, Users,
   Check, ChevronsUpDown, Clock, Lock, Download, Share2, Link2, Copy,
   Soup, Info, Tag, AlertTriangle, Pencil, Zap, CheckCircle2, Truck, ArrowRight,
+  Image as ImageIcon, FileText, Mail, ChevronDown,
 } from "lucide-react";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
@@ -28,6 +29,9 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import {
   Drawer, DrawerClose, DrawerContent, DrawerDescription, DrawerFooter, DrawerHeader, DrawerTitle,
 } from "@/components/ui/drawer";
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   foodApi, foodKeys, MEAL_LABEL, fmtQty,
   type Cutoff, type FoodOrder, type OrderBatch, type OrderPreview, type PropertyOverview,
@@ -210,15 +214,28 @@ export default function FoodPlaceOrder() {
     placeMutation.mutate();
   };
 
-  // ── Share (menu link only — no guest-recipient targeting) ──
+  // ── Share — copy-link (LINK) OR dispatch to active guests (EMAIL/GUESTS) ──
+  // `recipientCount` may arrive on `res` or `res.data` depending on the unwrap; read both.
   const shareMutation = useMutation({
-    mutationFn: () => foodApi.shareMenu({ propertyId, brand, date: dateStr, channel: "LINK" }),
-    onSuccess: (res: any) => {
-      if (res?.shareToken) { setShareLink(`${window.location.origin}/m/${res.shareToken}`); toast({ title: "Share link ready" }); }
+    mutationFn: (mode: "LINK" | "GUESTS") =>
+      mode === "GUESTS"
+        // For GUESTS the backend resolves the property's active guests and dispatches via notify().
+        ? foodApi.shareMenu({ propertyId, brand, date: dateStr, channel: "EMAIL", recipientType: "GUESTS" } as Record<string, unknown>)
+        : foodApi.shareMenu({ propertyId, brand, date: dateStr, channel: "LINK" }),
+    onSuccess: (res: any, mode) => {
+      if (mode === "GUESTS") {
+        const n = res?.recipientCount ?? res?.data?.recipientCount ?? 0;
+        toast({ title: `Menu shared with ${n} active guest${n === 1 ? "" : "s"}` });
+        setShareOpen(false);
+        return;
+      }
+      const token = res?.shareToken ?? res?.data?.shareToken;
+      if (token) { setShareLink(`${window.location.origin}/m/${token}`); toast({ title: "Share link ready" }); }
       else { toast({ title: "Menu shared" }); }
     },
     onError: (e: any) => toast({ title: e?.message || "Failed to share menu", variant: "destructive" }),
   });
+  const sharingMode = (shareMutation.variables as "LINK" | "GUESTS" | undefined);
 
   const downloadMenuPdf = () => {
     try {
@@ -250,6 +267,138 @@ export default function FoodPlaceOrder() {
       toast({ title: "Menu downloaded" });
     } catch (e: any) { toast({ title: e?.message || "Couldn't generate PDF", variant: "destructive" }); }
   };
+
+  // #14 — render the same menu content to a PNG via the canvas 2D API (no new deps).
+  const downloadMenuImage = () => {
+    try {
+      const ms = fullMenu?.meals ?? [];
+      // Layout constants (CSS px; we scale the backing store by `dpr` for crisp text).
+      const W = 720, PAD = 48, dpr = Math.max(2, Math.min(3, window.devicePixelRatio || 1));
+      const titleH = 34, dateH = 22, ruleGap = 26;
+      const mealHeadH = 26, dishH = 22, dishGap = 6, mealGap = 22, emptyH = 22;
+      // First pass: measure height so the canvas fits all content.
+      let H = PAD + titleH + dateH + 14 + ruleGap;
+      if (ms.length === 0) H += emptyH;
+      ms.forEach((meal) => {
+        H += mealHeadH + 6;
+        H += meal.dishes.length === 0 ? emptyH : meal.dishes.length * (dishH + dishGap);
+        H += mealGap;
+      });
+      H += PAD;
+
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(W * dpr);
+      canvas.height = Math.round(H * dpr);
+      const ctx = canvas.getContext("2d");
+      if (!ctx) { toast({ title: "Couldn't generate image", variant: "destructive" }); return; }
+      ctx.scale(dpr, dpr);
+
+      // Background.
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, W, H);
+
+      const font = (size: number, weight = "400") =>
+        `${weight} ${size}px ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`;
+      let y = PAD;
+
+      // Title (brand) + meta (date / property).
+      ctx.textBaseline = "alphabetic";
+      ctx.fillStyle = "#0f172a";
+      ctx.font = font(24, "700");
+      ctx.textAlign = "left";
+      y += 24;
+      ctx.fillText(brand ?? "Menu", PAD, y);
+      y += dateH;
+      ctx.font = font(13, "400");
+      ctx.fillStyle = "#64748b";
+      ctx.fillText(dateLabel, PAD, y);
+      if (selectedProperty?.name) {
+        ctx.textAlign = "right";
+        ctx.fillText(selectedProperty.name, W - PAD, y);
+        ctx.textAlign = "left";
+      }
+
+      // Divider rule.
+      y += 14;
+      ctx.strokeStyle = "#e2e8f0";
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(PAD, y + 0.5); ctx.lineTo(W - PAD, y + 0.5); ctx.stroke();
+      y += ruleGap;
+
+      if (ms.length === 0) {
+        ctx.font = font(13, "400");
+        ctx.fillStyle = "#94a3b8";
+        ctx.fillText("No menu configured for this day.", PAD, y);
+      }
+
+      ms.forEach((meal) => {
+        // Meal heading.
+        ctx.font = font(16, "700");
+        ctx.fillStyle = "#0f172a";
+        y += 16;
+        ctx.fillText(meal.label || MEAL_LABEL[meal.mealType], PAD, y);
+        y += 10;
+
+        if (meal.dishes.length === 0) {
+          ctx.font = font(13, "400");
+          ctx.fillStyle = "#94a3b8";
+          y += dishH - 6;
+          ctx.fillText("— No dishes —", PAD + 8, y);
+          y += emptyH - (dishH - 6);
+        } else {
+          meal.dishes.slice().sort((a, b) => a.sortOrder - b.sortOrder).forEach((d) => {
+            y += dishH - 6;
+            ctx.font = font(13, "400");
+            ctx.fillStyle = "#1e293b";
+            ctx.textAlign = "left";
+            ctx.fillText(`•  ${d.dishName}`, PAD + 8, y);
+            const slot = d.slotLabel ? `${d.slotLabel} · ` : "";
+            ctx.fillStyle = "#94a3b8";
+            ctx.textAlign = "right";
+            ctx.fillText(`${slot}${d.unit.toLowerCase()}`, W - PAD, y);
+            ctx.textAlign = "left";
+            y += dishGap;
+          });
+        }
+        y += mealGap;
+      });
+
+      canvas.toBlob((blob) => {
+        if (!blob) { toast({ title: "Couldn't generate image", variant: "destructive" }); return; }
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `uniliv-menu-${dateStr}.png`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        toast({ title: "Menu image downloaded" });
+      }, "image/png");
+    } catch (e: any) { toast({ title: e?.message || "Couldn't generate image", variant: "destructive" }); }
+  };
+
+  // Shared download control (PDF + image) — gated by canDownload; reused on the
+  // menu-preview area and the success screen.
+  const hasMenu = (fullMenu?.meals?.length ?? 0) > 0;
+  const MenuDownloadButton = () => (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button type="button" variant="outline" size="sm" disabled={menuLoading || !hasMenu}>
+          <Download className="mr-2 h-4 w-4" /> Download menu
+          <ChevronDown className="ml-1.5 h-3.5 w-3.5 opacity-60" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start">
+        <DropdownMenuItem onClick={downloadMenuPdf}>
+          <FileText className="mr-2 h-4 w-4" /> Download PDF
+        </DropdownMenuItem>
+        <DropdownMenuItem onClick={downloadMenuImage}>
+          <ImageIcon className="mr-2 h-4 w-4" /> Download image
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
 
   const copyShareLink = async () => {
     if (!shareLink) return;
@@ -320,11 +469,7 @@ export default function FoodPlaceOrder() {
           {/* Download + Share — only on the success state */}
           <Card>
             <CardContent className="flex flex-wrap items-center gap-2 py-4">
-              {canDownload && (
-                <Button type="button" variant="outline" size="sm" onClick={downloadMenuPdf} disabled={menuLoading}>
-                  <Download className="mr-2 h-4 w-4" /> Download menu
-                </Button>
-              )}
+              {canDownload && <MenuDownloadButton />}
               <Button type="button" variant="outline" size="sm" onClick={() => { setShareLink(null); setShareOpen(true); }}>
                 <Share2 className="mr-2 h-4 w-4" /> Share menu
               </Button>
@@ -338,11 +483,14 @@ export default function FoodPlaceOrder() {
           </Card>
         </div>
 
-        {/* Share drawer — menu LINK only */}
+        {/* Share drawer — copy link OR dispatch to active guests */}
         <ShareMenuDrawer
           open={shareOpen} onOpenChange={setShareOpen}
           brand={brand} dateLabel={dateLabel} propertyName={selectedProperty?.name}
-          shareLink={shareLink} onGenerate={() => shareMutation.mutate()} generating={shareMutation.isPending}
+          activeGuests={overview?.activeGuests ?? 0}
+          shareLink={shareLink}
+          onShare={(mode) => shareMutation.mutate(mode)}
+          generating={shareMutation.isPending} sharingMode={sharingMode}
           onCopy={copyShareLink}
         />
       </div>
@@ -478,6 +626,15 @@ export default function FoodPlaceOrder() {
             </CardContent></Card>
           ) : (
             <Tabs value={activeMeal} onValueChange={setActiveMeal} className="space-y-3">
+              {/* Menu actions — surfaced as soon as a menu is loaded (not only post-order). */}
+              {(canDownload || hasMenu) && (
+                <div className="flex flex-wrap items-center gap-2">
+                  {canDownload && <MenuDownloadButton />}
+                  <Button type="button" variant="outline" size="sm" onClick={() => { setShareLink(null); setShareOpen(true); }} disabled={!hasMenu}>
+                    <Share2 className="mr-2 h-4 w-4" /> Share menu
+                  </Button>
+                </div>
+              )}
               <TabsList className="h-auto w-full justify-start gap-1 overflow-x-auto bg-transparent p-0 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                 {preview.meals.map((meal) => {
                   const count = selection.countByMeal[meal.mealType] ?? 0;
@@ -619,18 +776,32 @@ export default function FoodPlaceOrder() {
           </Card>
         </div>
       </div>
+
+      {/* Share drawer — copy link OR dispatch to active guests (available pre-order too) */}
+      <ShareMenuDrawer
+        open={shareOpen} onOpenChange={setShareOpen}
+        brand={brand} dateLabel={dateLabel} propertyName={selectedProperty?.name}
+        activeGuests={overview?.activeGuests ?? 0}
+        shareLink={shareLink}
+        onShare={(mode) => shareMutation.mutate(mode)}
+        generating={shareMutation.isPending} sharingMode={sharingMode}
+        onCopy={copyShareLink}
+      />
     </div>
     </TooltipProvider>
   );
 }
 
-/** Share drawer — menu LINK only (no guest-recipient targeting). */
+/** Share drawer — copy a menu link OR dispatch the menu to the property's active guests. */
 function ShareMenuDrawer({
-  open, onOpenChange, brand, dateLabel, propertyName, shareLink, onGenerate, generating, onCopy,
+  open, onOpenChange, brand, dateLabel, propertyName, activeGuests, shareLink, onShare, generating, sharingMode, onCopy,
 }: {
   open: boolean; onOpenChange: (v: boolean) => void;
   brand: string | null; dateLabel: string; propertyName?: string;
-  shareLink: string | null; onGenerate: () => void; generating: boolean; onCopy: () => void;
+  activeGuests: number;
+  shareLink: string | null;
+  onShare: (mode: "LINK" | "GUESTS") => void; generating: boolean;
+  sharingMode?: "LINK" | "GUESTS"; onCopy: () => void;
 }) {
   return (
     <Drawer open={open} onOpenChange={onOpenChange}>
@@ -640,25 +811,49 @@ function ShareMenuDrawer({
             <DrawerTitle className="flex items-center gap-2"><Share2 className="h-5 w-5 text-accent" /> Share menu</DrawerTitle>
             <DrawerDescription>{brand} • {dateLabel}{propertyName ? ` • ${propertyName}` : ""}</DrawerDescription>
           </DrawerHeader>
-          <div className="space-y-4 px-4">
-            <p className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Link2 className="h-4 w-4" /> Generate a shareable menu link.
-            </p>
-            {shareLink && (
-              <div className="space-y-2">
-                <Label>Shareable link</Label>
+          <div className="space-y-5 px-4">
+            {/* Option 1 — copy a shareable link */}
+            <div className="space-y-2">
+              <p className="flex items-center gap-2 text-sm font-medium">
+                <Link2 className="h-4 w-4 text-accent" /> Copy a shareable link
+              </p>
+              <p className="text-xs text-muted-foreground">Generate a public menu link anyone can open.</p>
+              {shareLink ? (
                 <div className="flex items-center gap-2">
                   <Input readOnly value={shareLink} className="font-mono text-xs" />
                   <Button type="button" variant="outline" size="icon" onClick={onCopy} aria-label="Copy link"><Copy className="h-4 w-4" /></Button>
+                  <Button type="button" variant="outline" size="sm" onClick={() => onShare("LINK")} disabled={generating}>
+                    {generating && sharingMode === "LINK" && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                    Regenerate
+                  </Button>
                 </div>
-              </div>
-            )}
+              ) : (
+                <Button type="button" variant="outline" size="sm" onClick={() => onShare("LINK")} disabled={generating}>
+                  {generating && sharingMode === "LINK" && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                  <Link2 className="mr-2 h-4 w-4" /> Generate link
+                </Button>
+              )}
+            </div>
+
+            <Separator />
+
+            {/* Option 2 — dispatch to the property's active guests */}
+            <div className="space-y-2">
+              <p className="flex items-center gap-2 text-sm font-medium">
+                <Users className="h-4 w-4 text-accent" /> Share with active guests
+              </p>
+              <p className="text-xs text-muted-foreground">
+                {activeGuests > 0
+                  ? `Email the menu to all ${activeGuests} active guest${activeGuests === 1 ? "" : "s"} at ${propertyName ?? "this property"}.`
+                  : `Email the menu to all active guests at ${propertyName ?? "this property"}.`}
+              </p>
+              <Button type="button" size="sm" onClick={() => onShare("GUESTS")} disabled={generating}>
+                {generating && sharingMode === "GUESTS" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Mail className="mr-2 h-4 w-4" />}
+                Share with guests
+              </Button>
+            </div>
           </div>
           <DrawerFooter>
-            <Button onClick={onGenerate} disabled={generating}>
-              {generating && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              {shareLink ? "Regenerate link" : "Generate link"}
-            </Button>
             <DrawerClose asChild><Button variant="outline">Close</Button></DrawerClose>
           </DrawerFooter>
         </div>

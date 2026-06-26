@@ -5,7 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { format, subDays } from "date-fns";
 import {
   Download, CalendarRange, ClipboardList, UtensilsCrossed, Users, PieChart as PieChartIcon, BarChart3,
-  FileText, FileDown, Trash2, Clock, TrendingDown, ChevronDown,
+  FileText, FileDown, FileSpreadsheet, Trash2, Clock, TrendingDown, ChevronDown, Scale,
 } from "lucide-react";
 import {
   ResponsiveContainer, AreaChart, Area, LineChart, Line, BarChart, Bar, PieChart, Pie, Cell,
@@ -18,6 +18,9 @@ import { Input } from "@/components/ui/input";
 import { DatePicker } from "@/components/ui/date-picker";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
+} from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
@@ -31,6 +34,7 @@ import { apiDownload } from "@/lib/api-fetch";
 import {
   foodApi, foodKeys, BRANDS, ORDER_STATUSES, MEAL_LABEL,
   type ReportsData, type AnalyticsData, type MealType, type OrderStatus, type FoodLookups,
+  type VarianceData,
 } from "@/lib/food-api";
 
 // Chart palette — keyed to the design-system CSS variables (raw hex values).
@@ -70,6 +74,16 @@ function ChartEmpty({ icon: Icon, label }: { icon: React.ElementType; label: str
       <p className="text-sm">{label}</p>
     </div>
   );
+}
+
+/** Signed variance display (+/−) and tone — non-zero variance reads as off-target. */
+function fmtVariance(v: number): string {
+  if (!v) return "0";
+  return v > 0 ? `+${v}` : String(v);
+}
+function varianceTone(v: number): string {
+  if (!v) return "text-muted-foreground";
+  return v > 0 ? "text-warning" : "text-destructive";
 }
 
 function ChartSkeleton() {
@@ -132,6 +146,19 @@ export default function FoodReports() {
     queryKey: foodKeys.analytics(analyticsParams),
     queryFn: () => foodApi.analytics(analyticsParams),
   });
+
+  // WS11 — ordered-vs-delivered variance, scoped to the same date range / property.
+  const varianceParams: Record<string, string> = { from, to };
+  if (propertyId !== "ALL") varianceParams.propertyId = propertyId;
+
+  const {
+    data: variance, isLoading: varianceLoading,
+  } = useQuery<VarianceData>({
+    queryKey: foodKeys.reportsVariance(varianceParams),
+    queryFn: () => foodApi.reportsVariance(varianceParams),
+  });
+  const varianceRows = variance?.rows ?? [];
+  const varianceTotals = variance?.totals;
 
   const ordersPerDay = data?.ordersPerDay ?? [];
   const mealTypeDistribution = data?.mealTypeDistribution ?? [];
@@ -202,11 +229,13 @@ export default function FoodReports() {
     return `food-orders${prop}-${format(new Date(), "yyyy-MM-dd")}.${ext}`;
   };
 
-  const runExport = async (fmt: "pdf" | "csv") => {
+  const runExport = async (fmt: "pdf" | "csv" | "xls") => {
     setDownloading(true);
     try {
       if (fmt === "pdf") {
         await apiDownload(foodApi.reportsExportPdfUrl(exportParams), exportFilename("pdf"));
+      } else if (fmt === "xls") {
+        await apiDownload(foodApi.reportsExportXlsUrl(exportParams), exportFilename("xls"));
       } else {
         await apiDownload(foodApi.reportsExportCsvUrl(exportParams), exportFilename("csv"));
       }
@@ -237,6 +266,9 @@ export default function FoodReports() {
               <DropdownMenuSeparator />
               <DropdownMenuItem onClick={() => runExport("csv")}>
                 <FileDown className="w-4 h-4 mr-2 text-muted-foreground" /> CSV
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => runExport("xls")}>
+                <FileSpreadsheet className="w-4 h-4 mr-2 text-success" /> Excel (.xls)
               </DropdownMenuItem>
               <DropdownMenuItem onClick={() => runExport("pdf")}>
                 <FileText className="w-4 h-4 mr-2 text-destructive" /> PDF
@@ -604,6 +636,68 @@ export default function FoodReports() {
           </Card>
         </TabsContent>
       </Tabs>
+
+      {/* Ordered vs Delivered (variance) — aggregated per meal type */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base flex items-center gap-2">
+            <Scale className="w-4 h-4 text-accent" /> Ordered vs Delivered (variance)
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="p-0">
+          {varianceLoading ? (
+            <div className="space-y-2 p-6">
+              {Array.from({ length: 5 }).map((_, i) => (
+                <Skeleton key={i} className="h-9 w-full" />
+              ))}
+            </div>
+          ) : !varianceRows.some((r) => r.ordered || r.received || r.wasted) ? (
+            // Backend always returns one zero-filled row per meal type, so gate the
+            // empty state on whether there is any actual order data, not row count.
+            <div className="py-12">
+              <ChartEmpty icon={Scale} label="No order data in this range" />
+            </div>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Meal Type</TableHead>
+                  <TableHead className="text-right">Ordered</TableHead>
+                  <TableHead className="text-right">Received</TableHead>
+                  <TableHead className="text-right">Wasted</TableHead>
+                  <TableHead className="text-right">Variance</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {varianceRows.map((r) => (
+                  <TableRow key={r.mealType}>
+                    <TableCell className="font-medium">
+                      {MEAL_LABEL[r.mealType] ?? r.mealType}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">{r.ordered}</TableCell>
+                    <TableCell className="text-right tabular-nums">{r.received}</TableCell>
+                    <TableCell className="text-right tabular-nums">{r.wasted}</TableCell>
+                    <TableCell className={`text-right tabular-nums font-medium ${varianceTone(r.variance)}`}>
+                      {fmtVariance(r.variance)}
+                    </TableCell>
+                  </TableRow>
+                ))}
+                {varianceTotals && (
+                  <TableRow className="border-t-2 bg-muted/40 font-semibold">
+                    <TableCell>Total</TableCell>
+                    <TableCell className="text-right tabular-nums">{varianceTotals.ordered}</TableCell>
+                    <TableCell className="text-right tabular-nums">{varianceTotals.received}</TableCell>
+                    <TableCell className="text-right tabular-nums">{varianceTotals.wasted}</TableCell>
+                    <TableCell className={`text-right tabular-nums ${varianceTone(varianceTotals.variance)}`}>
+                      {fmtVariance(varianceTotals.variance)}
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
 
       {/* Property filter context footnote */}
       {propertyId !== "ALL" && (

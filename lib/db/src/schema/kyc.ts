@@ -5,7 +5,13 @@ export const kycRequestsTable = pgTable("kyc_requests", {
   id: text("id").primaryKey(),
   residentId: text("resident_id").notNull().references(() => residentsTable.id, { onDelete: "cascade" }),
   idType: text("id_type").notNull(),
+  // idNumber now stores an AES-256-GCM ciphertext envelope (legacy rows may still
+  // be plaintext until the WS5 backfill runs). Column TYPE stays `text`.
   idNumber: text("id_number").notNull(),
+  // Deterministic HMAC blind index of the *normalized* id number, used for
+  // exact-match guest search now that idNumber is encrypted. Nullable so legacy
+  // rows (pre-backfill) and rows created before this column existed are tolerated.
+  idNumberIndex: text("id_number_index"),
   idImageFront: text("id_image_front"),
   idImageBack: text("id_image_back"),
   selfieImage: text("selfie_image"),

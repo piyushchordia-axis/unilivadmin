@@ -1,14 +1,18 @@
-const TOKEN_KEY = "uniliv_token";
-const getToken = () => localStorage.getItem(TOKEN_KEY) ?? sessionStorage.getItem(TOKEN_KEY);
-/** Persist a (refreshed) token to whichever storage the "remember me" choice implies. */
-function persistToken(token: string): void {
-  const remember = localStorage.getItem("uniliv_remember") !== "0";
-  (remember ? localStorage : sessionStorage).setItem(TOKEN_KEY, token);
-  (remember ? sessionStorage : localStorage).removeItem(TOKEN_KEY);
+// The access token is held in memory only — never in localStorage/sessionStorage —
+// so a XSS payload cannot exfiltrate it from web storage. It is lost on a full page
+// reload and rehydrated from the httpOnly refresh cookie via bootstrapAuth()/refreshSession().
+let accessToken: string | null = null;
+
+/** Current in-memory access token (null when logged out / not yet rehydrated). */
+export function getToken(): string | null {
+  return accessToken;
+}
+/** Set the in-memory access token. Pass null to clear it (logout / unrecoverable session). */
+export function setToken(token: string | null): void {
+  accessToken = token;
 }
 function clearToken(): void {
-  localStorage.removeItem(TOKEN_KEY);
-  sessionStorage.removeItem(TOKEN_KEY);
+  accessToken = null;
 }
 
 function loginPath(): string {
@@ -42,13 +46,24 @@ export function refreshSession(): Promise<string | null> {
         if (!r.ok) return null;
         const j = await r.json().catch(() => null);
         const t = j?.accessToken as string | undefined;
-        if (t) { persistToken(t); return t; }
+        if (t) { accessToken = t; return t; }
         return null;
       })
       .catch(() => null)
       .finally(() => { refreshPromise = null; });
   }
   return refreshPromise;
+}
+
+/**
+ * On app boot the in-memory access token is empty (a reload wiped it). Mint a fresh
+ * one from the httpOnly refresh cookie so the first authenticated request doesn't have
+ * to 401-then-retry. Returns true when a token is now in memory (i.e. user is logged in).
+ * If there is no valid refresh cookie this resolves false and leaves the app logged out;
+ * the 401→refresh→retry path in apiFetch/apiDownload remains the safety net.
+ */
+export async function bootstrapAuth(): Promise<boolean> {
+  return (await refreshSession()) != null;
 }
 
 /** Recover from a 401: refresh silently; if that fails, go to login. True if a fresh token is now available. */

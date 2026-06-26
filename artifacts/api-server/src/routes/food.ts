@@ -39,6 +39,7 @@ import {
 } from "@workspace/db";
 import { and, eq, or, ilike, sql, desc, asc, gte, lte, inArray, isNull, isNotNull } from "drizzle-orm";
 import type { AnyColumn } from "drizzle-orm";
+import { z } from "zod";
 import { authenticate } from "../middlewares/auth.js";
 import { authorize } from "../middlewares/authorize.js";
 import { can, type UserRole } from "../lib/permissions.js";
@@ -92,6 +93,37 @@ function parseDate(v: unknown): Date | undefined {
 function isAccessible(propertyId: string, ids: string[] | null): boolean {
   return ids === null || ids.includes(propertyId);
 }
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * Request-body validation (WS6)
+ *
+ * Additive zod gates on the mutating handlers below. Each gate runs BEFORE the
+ * handler's existing body-reading code and only rejects malformed/missing-required
+ * requests with a 400 — a currently-valid request still parses and flows through
+ * the unchanged `req.body`/`b` logic. Schemas stay deliberately permissive
+ * (free-text bounded, ids bounded, enums mirrored only where already hand-checked)
+ * so we never reject a request the handler would previously have accepted.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/** Mirror of operations.ts: validate req.body, 400 with field details on failure. */
+function validateBody<T>(schema: z.ZodType<T>, req: { body: unknown }, res: {
+  status: (code: number) => { json: (body: unknown) => void };
+}): boolean {
+  const p = schema.safeParse(req.body);
+  if (!p.success) {
+    res.status(400).json({ success: false, error: "Invalid request", details: p.error.flatten() });
+    return false;
+  }
+  return true;
+}
+
+// Reusable primitives.
+const zId = z.string().min(1).max(128);
+const zText = z.string().max(1000);
+const zMealType = z.enum(MEAL_TYPES);
+// Free-form brand string (the brand master is admin-managed; handlers accept any
+// configured code, so we only bound length rather than enum-restrict).
+const zBrand = z.string().min(1).max(128);
 
 /* ────────────────────────────────────────────────────────────────────────────
  * Dashboard
@@ -339,8 +371,18 @@ foodRouter.get("/orders", authenticate, authorize("FOOD_ALL_ORDERS", "view"), as
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
+const placeOrderSchema = z.object({
+  propertyId: zId,
+  mealType: zMealType,
+  serviceDate: z.union([z.string(), z.number(), z.coerce.date()]),
+  quantity: z.coerce.number(),
+  residentsCount: z.coerce.number().nullish(),
+  notes: zText.nullish(),
+}).passthrough();
+
 foodRouter.post("/orders", authenticate, authorize("FOOD_PLACE_ORDER", "create"), async (req, res) => {
   try {
+    if (!validateBody(placeOrderSchema, req, res)) return;
     const b = req.body || {};
     const { propertyId, mealType, serviceDate, quantity, residentsCount, notes } = b;
     if (!propertyId || !mealType || !serviceDate || quantity == null) {
@@ -434,8 +476,14 @@ foodRouter.post("/orders", authenticate, authorize("FOOD_PLACE_ORDER", "create")
 });
 
 // Static routes BEFORE param routes.
+const dispatchBulkSchema = z.object({
+  orderIds: z.array(zId).optional(),
+  deliveryPartnerId: zId.nullish(),
+}).passthrough();
+
 foodRouter.post("/orders/dispatch/bulk", authenticate, authorize("FOOD_DISPATCH", "edit"), async (req, res) => {
   try {
+    if (!validateBody(dispatchBulkSchema, req, res)) return;
     const b = req.body || {};
     const orderIds: string[] = Array.isArray(b.orderIds) ? b.orderIds : [];
     const deliveryPartnerId = b.deliveryPartnerId as string | undefined;
@@ -608,8 +656,18 @@ foodRouter.get("/orders/:id", authenticate, authorize("FOOD_ALL_ORDERS", "view")
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
+const updateOrderSchema = z.object({
+  quantity: z.coerce.number().nullish(),
+  residentsCount: z.coerce.number().nullish(),
+  notes: zText.nullish(),
+  mealType: zMealType.optional(),
+  brand: zBrand.optional(),
+  serviceDate: z.union([z.string(), z.number(), z.coerce.date()]).optional(),
+}).passthrough();
+
 foodRouter.put("/orders/:id", authenticate, authorize("FOOD_PLACE_ORDER", "edit"), async (req, res) => {
   try {
+    if (!validateBody(updateOrderSchema, req, res)) return;
     const id = req.params["id"]!;
     const [order] = await db.select().from(foodOrdersTable).where(eq(foodOrdersTable.id, id));
     if (!order) { res.status(404).json({ success: false, error: "Not found" }); return; }
@@ -671,8 +729,11 @@ foodRouter.put("/orders/:id", authenticate, authorize("FOOD_PLACE_ORDER", "edit"
 // kitchen side (FnB via FOOD_KITCHEN_SUMMARY) — FnB is intentionally NOT granted
 // FOOD_PLACE_ORDER, so we gate inline on either edit permission rather than a single
 // authorize() call. Cancel is only valid while the order is still pre-dispatch.
+const cancelOrderSchema = z.object({ reason: zText.nullish() }).passthrough();
+
 foodRouter.post("/orders/:id/cancel", authenticate, async (req, res) => {
   try {
+    if (!validateBody(cancelOrderSchema, req, res)) return;
     const role = req.user?.role as UserRole | undefined;
     const canCancel = can(role, "FOOD_PLACE_ORDER", "edit") || can(role, "FOOD_KITCHEN_SUMMARY", "edit");
     if (!canCancel) { res.status(403).json({ success: false, error: "Forbidden — insufficient permissions" }); return; }
@@ -723,8 +784,14 @@ foodRouter.post("/orders/:id/prepare", authenticate, authorize("FOOD_KITCHEN_SUM
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
+const dispatchOrderSchema = z.object({
+  action: z.enum(["start", "dispatch"]).optional(),
+  deliveryPartnerId: zId.nullish(),
+}).passthrough();
+
 foodRouter.post("/orders/:id/dispatch", authenticate, authorize("FOOD_DISPATCH", "edit"), async (req, res) => {
   try {
+    if (!validateBody(dispatchOrderSchema, req, res)) return;
     const id = req.params["id"]!;
     const b = req.body || {};
     const action = (b.action as string | undefined) || "dispatch";
@@ -782,8 +849,17 @@ foodRouter.post("/orders/:id/dispatch", authenticate, authorize("FOOD_DISPATCH",
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
+const confirmDeliverySchema = z.object({
+  items: z.array(z.object({
+    itemId: zId,
+    receivedQty: z.coerce.number(),
+  }).passthrough()).optional(),
+  remarks: zText.nullish(),
+}).passthrough();
+
 foodRouter.post("/orders/:id/confirm-delivery", authenticate, authorize("FOOD_CONFIRM_DELIVERY", "edit"), async (req, res) => {
   try {
+    if (!validateBody(confirmDeliverySchema, req, res)) return;
     const id = req.params["id"]!;
     const b = req.body || {};
     const [order] = await db.select().from(foodOrdersTable).where(eq(foodOrdersTable.id, id));
@@ -829,8 +905,16 @@ foodRouter.post("/orders/:id/confirm-delivery", authenticate, authorize("FOOD_CO
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
+const wasteSchema = z.object({
+  items: z.array(z.object({
+    itemId: zId,
+    wastedQty: z.coerce.number(),
+  }).passthrough()).optional(),
+}).passthrough();
+
 foodRouter.post("/orders/:id/waste", authenticate, authorize("FOOD_WASTE_TRACKING", "edit"), async (req, res) => {
   try {
+    if (!validateBody(wasteSchema, req, res)) return;
     const id = req.params["id"]!;
     const b = req.body || {};
     const [order] = await db.select().from(foodOrdersTable).where(eq(foodOrdersTable.id, id));
@@ -1158,8 +1242,27 @@ async function loadDishIngredients(dishId: string) {
     .where(eq(dishIngredientsTable.dishId, dishId));
 }
 
+// Ingredient rows accepted by replaceDishIngredients (rawMaterialId required; qty/unit loose).
+const zIngredient = z.object({
+  rawMaterialId: zId,
+  quantity: z.union([z.string(), z.number()]).nullish(),
+  unit: z.string().max(64).nullish(),
+}).passthrough();
+
+const createDishSchema = z.object({
+  name: zText,
+  component: z.string().min(1).max(128),
+  unit: z.string().min(1).max(64),
+  brands: z.array(z.string().max(128)).optional(),
+  preparations: z.array(z.string().max(128)).optional(),
+  photoUrl: z.string().max(2048).nullish(),
+  isActive: z.boolean().optional(),
+  ingredients: z.array(zIngredient).optional(),
+}).passthrough();
+
 foodRouter.post("/dishes", authenticate, authorize("FOOD_SETTINGS", "create"), async (req, res) => {
   try {
+    if (!validateBody(createDishSchema, req, res)) return;
     const b = req.body || {};
     if (!b.name || !b.component || !b.unit) { res.status(400).json({ success: false, error: "name, component, unit required" }); return; }
     const [row] = await db.insert(dishesTable).values({
@@ -1187,8 +1290,20 @@ foodRouter.get("/dishes/:id", authenticate, async (req, res) => {
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
+const updateDishSchema = z.object({
+  name: zText.optional(),
+  component: z.string().max(128).optional(),
+  unit: z.string().max(64).optional(),
+  brands: z.array(z.string().max(128)).optional(),
+  preparations: z.array(z.string().max(128)).optional(),
+  photoUrl: z.string().max(2048).nullish(),
+  isActive: z.boolean().optional(),
+  ingredients: z.array(zIngredient).optional(),
+}).passthrough();
+
 foodRouter.put("/dishes/:id", authenticate, authorize("FOOD_SETTINGS", "edit"), async (req, res) => {
   try {
+    if (!validateBody(updateDishSchema, req, res)) return;
     const b = req.body || {};
     const u: Record<string, unknown> = { updatedAt: new Date() };
     for (const k of ["name", "component", "unit", "brands", "photoUrl", "isActive"]) if (b[k] !== undefined) u[k] = b[k];
@@ -1224,8 +1339,15 @@ foodRouter.get("/raw-materials", authenticate, async (req, res) => {
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
+const createRawMaterialSchema = z.object({
+  name: zText,
+  unit: z.string().min(1).max(64),
+  isActive: z.boolean().optional(),
+}).passthrough();
+
 foodRouter.post("/raw-materials", authenticate, authorize("FOOD_SETTINGS", "create"), async (req, res) => {
   try {
+    if (!validateBody(createRawMaterialSchema, req, res)) return;
     const b = req.body || {};
     if (!b.name || !b.unit) { res.status(400).json({ success: false, error: "name and unit required" }); return; }
     const [row] = await db.insert(rawMaterialsTable).values({
@@ -1235,8 +1357,15 @@ foodRouter.post("/raw-materials", authenticate, authorize("FOOD_SETTINGS", "crea
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
+const updateRawMaterialSchema = z.object({
+  name: zText.optional(),
+  unit: z.string().max(64).optional(),
+  isActive: z.boolean().optional(),
+}).passthrough();
+
 foodRouter.put("/raw-materials/:id", authenticate, authorize("FOOD_SETTINGS", "edit"), async (req, res) => {
   try {
+    if (!validateBody(updateRawMaterialSchema, req, res)) return;
     const b = req.body || {};
     const u: Record<string, unknown> = { updatedAt: new Date() };
     for (const k of ["name", "unit", "isActive"]) if (b[k] !== undefined) u[k] = b[k];
@@ -1378,8 +1507,23 @@ foodRouter.get("/menu-rotation/export.pdf", authenticate, async (req, res) => {
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
+const createRotationSchema = z.object({
+  kitchenId: zId,
+  brand: zBrand,
+  mealType: zMealType,
+  dishId: zId,
+  dayOfWeek: z.coerce.number(),
+  rotationWeek: z.coerce.number().nullish(),
+  slotLabel: z.string().max(256).nullish(),
+  sortOrder: z.coerce.number().nullish(),
+  effectiveFrom: z.union([z.string(), z.number(), z.coerce.date()]).nullish(),
+  effectiveTo: z.union([z.string(), z.number(), z.coerce.date()]).nullish(),
+  isActive: z.boolean().optional(),
+}).passthrough();
+
 foodRouter.post("/menu-rotation", authenticate, authorize("FOOD_SETTINGS", "create"), async (req, res) => {
   try {
+    if (!validateBody(createRotationSchema, req, res)) return;
     const b = req.body || {};
     if (!b.kitchenId || !b.brand || !b.mealType || !b.dishId || b.dayOfWeek == null) {
       res.status(400).json({ success: false, error: "kitchenId, brand, mealType, dishId, dayOfWeek required" }); return;
@@ -1404,8 +1548,24 @@ foodRouter.post("/menu-rotation", authenticate, authorize("FOOD_SETTINGS", "crea
 });
 
 /** Bulk-add menu items for one kitchen+brand+week+day+meal (multi-dish builder). */
+const zRotationItem = z.object({
+  dishId: zId,
+  slotLabel: z.string().max(256).nullish(),
+  sortOrder: z.coerce.number().nullish(),
+}).passthrough();
+
+const bulkRotationSchema = z.object({
+  kitchenId: zId,
+  brand: zBrand,
+  mealType: zMealType,
+  dayOfWeek: z.coerce.number(),
+  rotationWeek: z.coerce.number().nullish(),
+  items: z.array(zRotationItem).optional(),
+}).passthrough();
+
 foodRouter.post("/menu-rotation/bulk", authenticate, authorize("FOOD_SETTINGS", "create"), async (req, res) => {
   try {
+    if (!validateBody(bulkRotationSchema, req, res)) return;
     const b = req.body || {};
     const items: Array<{ dishId: string; slotLabel?: string; sortOrder?: number }> = Array.isArray(b.items) ? b.items : [];
     if (!b.kitchenId || !b.brand || !b.mealType || b.dayOfWeek == null || !items.length) {
@@ -1434,8 +1594,18 @@ foodRouter.post("/menu-rotation/bulk", authenticate, authorize("FOOD_SETTINGS", 
 });
 
 // Replace ALL dishes of one menu slot (kitchen+brand+week+day+meal) — the EDIT path.
+const slotRotationSchema = z.object({
+  kitchenId: zId,
+  brand: zBrand,
+  rotationWeek: z.coerce.number(),
+  dayOfWeek: z.coerce.number(),
+  mealType: zMealType,
+  items: z.array(zRotationItem).optional(),
+}).passthrough();
+
 foodRouter.put("/menu-rotation/slot", authenticate, authorize("FOOD_SETTINGS", "edit"), async (req, res) => {
   try {
+    if (!validateBody(slotRotationSchema, req, res)) return;
     const b = req.body || {};
     const { kitchenId, brand, rotationWeek, dayOfWeek, mealType } = b;
     const items: Array<{ dishId: string; slotLabel?: string | null; sortOrder?: number }> = Array.isArray(b.items) ? b.items : [];
@@ -1498,8 +1668,23 @@ foodRouter.get("/menu-rotation/auto-fill", authenticate, async (req, res) => {
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
+const updateRotationSchema = z.object({
+  kitchenId: zId.optional(),
+  brand: zBrand.optional(),
+  mealType: zMealType.optional(),
+  dishId: zId.optional(),
+  slotLabel: z.string().max(256).nullish(),
+  isActive: z.boolean().optional(),
+  rotationWeek: z.coerce.number().optional(),
+  dayOfWeek: z.coerce.number().optional(),
+  sortOrder: z.coerce.number().optional(),
+  effectiveFrom: z.union([z.string(), z.number(), z.coerce.date()]).nullish(),
+  effectiveTo: z.union([z.string(), z.number(), z.coerce.date()]).nullish(),
+}).passthrough();
+
 foodRouter.put("/menu-rotation/:id", authenticate, authorize("FOOD_SETTINGS", "edit"), async (req, res) => {
   try {
+    if (!validateBody(updateRotationSchema, req, res)) return;
     const b = req.body || {};
     const u: Record<string, unknown> = { updatedAt: new Date() };
     for (const k of ["kitchenId", "brand", "mealType", "dishId", "slotLabel", "isActive"]) if (b[k] !== undefined) u[k] = b[k];
@@ -1545,8 +1730,18 @@ foodRouter.get("/rules", authenticate, async (req, res) => {
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
+const createRuleSchema = z.object({
+  brand: zBrand,
+  mealType: zMealType,
+  dishId: zId,
+  qtyPerResident: z.coerce.number(),
+  unit: z.string().min(1).max(64),
+  isActive: z.boolean().optional(),
+}).passthrough();
+
 foodRouter.post("/rules", authenticate, authorize("FOOD_SETTINGS", "create"), async (req, res) => {
   try {
+    if (!validateBody(createRuleSchema, req, res)) return;
     const b = req.body || {};
     if (!b.brand || !b.mealType || !b.dishId || b.qtyPerResident == null || !b.unit) {
       res.status(400).json({ success: false, error: "brand, mealType, dishId, qtyPerResident, unit required" }); return;
@@ -1571,8 +1766,18 @@ foodRouter.post("/rules", authenticate, authorize("FOOD_SETTINGS", "create"), as
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
+const updateRuleSchema = z.object({
+  brand: zBrand.optional(),
+  mealType: zMealType.optional(),
+  dishId: zId.optional(),
+  unit: z.string().max(64).optional(),
+  isActive: z.boolean().optional(),
+  qtyPerResident: z.coerce.number().optional(),
+}).passthrough();
+
 foodRouter.put("/rules/:id", authenticate, authorize("FOOD_SETTINGS", "edit"), async (req, res) => {
   try {
+    if (!validateBody(updateRuleSchema, req, res)) return;
     const b = req.body || {};
     const u: Record<string, unknown> = { updatedAt: new Date() };
     for (const k of ["brand", "mealType", "dishId", "unit", "isActive"]) if (b[k] !== undefined) u[k] = b[k];
@@ -1625,8 +1830,28 @@ foodRouter.get("/composition-rules", authenticate, async (req, res) => {
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
+// Slots consumed by slotValues(): all fields loose (coerced/defaulted in code).
+const zCompositionSlot = z.object({
+  slotLabel: z.string().max(256).nullish(),
+  component: z.string().max(128).nullish(),
+  preparation: z.string().max(128).nullish(),
+  minCount: z.union([z.coerce.number(), z.literal("")]).nullish(),
+  maxCount: z.union([z.coerce.number(), z.literal("")]).nullish(),
+  sortOrder: z.union([z.coerce.number(), z.literal("")]).nullish(),
+}).passthrough();
+
+const createCompositionRuleSchema = z.object({
+  brand: zBrand,
+  mealType: zMealType,
+  kitchenId: z.string().max(128).nullish(),
+  name: z.string().max(256).nullish(),
+  isActive: z.boolean().optional(),
+  slots: z.array(zCompositionSlot).optional(),
+}).passthrough();
+
 foodRouter.post("/composition-rules", authenticate, authorize("FOOD_SETTINGS", "create"), async (req, res) => {
   try {
+    if (!validateBody(createCompositionRuleSchema, req, res)) return;
     const b = req.body || {};
     if (!b.brand || !b.mealType) { res.status(400).json({ success: false, error: "brand and mealType required" }); return; }
     const result = await db.transaction(async (tx) => {
@@ -1642,8 +1867,20 @@ foodRouter.post("/composition-rules", authenticate, authorize("FOOD_SETTINGS", "
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
+const updateCompositionRuleSchema = z.object({
+  // The handler converts "" → null for these, so accept blank strings too;
+  // mealType is therefore left a bounded string here (not enum) to preserve that.
+  brand: z.string().max(128).optional(),
+  mealType: z.string().max(64).optional(),
+  kitchenId: z.string().max(128).optional(),
+  name: z.string().max(256).optional(),
+  isActive: z.boolean().optional(),
+  slots: z.array(zCompositionSlot).optional(),
+}).passthrough();
+
 foodRouter.put("/composition-rules/:id", authenticate, authorize("FOOD_SETTINGS", "edit"), async (req, res) => {
   try {
+    if (!validateBody(updateCompositionRuleSchema, req, res)) return;
     const b = req.body || {};
     const id = req.params["id"]!;
     const result = await db.transaction(async (tx) => {
@@ -1684,8 +1921,16 @@ foodRouter.get("/delivery-partners", authenticate, async (req, res) => {
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
+const createDeliveryPartnerSchema = z.object({
+  name: zText,
+  phone: z.string().max(32).nullish(),
+  vehicleNumber: z.string().max(64).nullish(),
+  isActive: z.boolean().optional(),
+}).passthrough();
+
 foodRouter.post("/delivery-partners", authenticate, authorize("FOOD_SETTINGS", "create"), async (req, res) => {
   try {
+    if (!validateBody(createDeliveryPartnerSchema, req, res)) return;
     const b = req.body || {};
     if (!b.name) { res.status(400).json({ success: false, error: "name required" }); return; }
     const [row] = await db.insert(deliveryPartnersTable).values({
@@ -1700,8 +1945,16 @@ foodRouter.post("/delivery-partners", authenticate, authorize("FOOD_SETTINGS", "
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
+const updateDeliveryPartnerSchema = z.object({
+  name: zText.optional(),
+  phone: z.string().max(32).nullish(),
+  vehicleNumber: z.string().max(64).nullish(),
+  isActive: z.boolean().optional(),
+}).passthrough();
+
 foodRouter.put("/delivery-partners/:id", authenticate, authorize("FOOD_SETTINGS", "edit"), async (req, res) => {
   try {
+    if (!validateBody(updateDeliveryPartnerSchema, req, res)) return;
     const b = req.body || {};
     const u: Record<string, unknown> = { updatedAt: new Date() };
     for (const k of ["name", "phone", "vehicleNumber", "isActive"]) if (b[k] !== undefined) u[k] = b[k];
@@ -1737,8 +1990,17 @@ foodRouter.get("/agencies", authenticate, authorize("FOOD_ORG", "view"), async (
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
+const createAgencySchema = z.object({
+  name: zText,
+  phone: z.string().max(32).nullish(),
+  contactName: z.string().max(256).nullish(),
+  email: z.string().max(256).nullish(),
+  isActive: z.boolean().optional(),
+}).passthrough();
+
 foodRouter.post("/agencies", authenticate, authorize("FOOD_ORG", "create"), async (req, res) => {
   try {
+    if (!validateBody(createAgencySchema, req, res)) return;
     const b = req.body || {};
     if (!b.name) { res.status(400).json({ success: false, error: "name required" }); return; }
     const [row] = await db.insert(agenciesTable).values({
@@ -1749,8 +2011,17 @@ foodRouter.post("/agencies", authenticate, authorize("FOOD_ORG", "create"), asyn
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
+const updateAgencySchema = z.object({
+  name: zText.optional(),
+  phone: z.string().max(32).nullish(),
+  contactName: z.string().max(256).nullish(),
+  email: z.string().max(256).nullish(),
+  isActive: z.boolean().optional(),
+}).passthrough();
+
 foodRouter.put("/agencies/:id", authenticate, authorize("FOOD_ORG", "edit"), async (req, res) => {
   try {
+    if (!validateBody(updateAgencySchema, req, res)) return;
     const b = req.body || {};
     const u: Record<string, unknown> = { updatedAt: new Date() };
     for (const k of ["name", "phone", "contactName", "email", "isActive"]) if (b[k] !== undefined) u[k] = b[k];
@@ -1769,8 +2040,20 @@ foodRouter.delete("/agencies/:id", authenticate, authorize("FOOD_ORG", "delete")
 });
 
 // Nested locations (flat update/delete paths to avoid :id collisions)
+const createAgencyLocationSchema = z.object({
+  name: zText,
+  address: z.string().max(1000).nullish(),
+  city: z.string().max(256).nullish(),
+  state: z.string().max(256).nullish(),
+  pincode: z.string().max(16).nullish(),
+  contactName: z.string().max(256).nullish(),
+  contactPhone: z.string().max(32).nullish(),
+  isActive: z.boolean().optional(),
+}).passthrough();
+
 foodRouter.post("/agencies/:id/locations", authenticate, authorize("FOOD_ORG", "create"), async (req, res) => {
   try {
+    if (!validateBody(createAgencyLocationSchema, req, res)) return;
     const b = req.body || {};
     if (!b.name) { res.status(400).json({ success: false, error: "name required" }); return; }
     const [row] = await db.insert(agencyLocationsTable).values({
@@ -1782,8 +2065,20 @@ foodRouter.post("/agencies/:id/locations", authenticate, authorize("FOOD_ORG", "
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
+const updateAgencyLocationSchema = z.object({
+  name: zText.optional(),
+  address: z.string().max(1000).nullish(),
+  city: z.string().max(256).nullish(),
+  state: z.string().max(256).nullish(),
+  pincode: z.string().max(16).nullish(),
+  contactName: z.string().max(256).nullish(),
+  contactPhone: z.string().max(32).nullish(),
+  isActive: z.boolean().optional(),
+}).passthrough();
+
 foodRouter.put("/agency-locations/:id", authenticate, authorize("FOOD_ORG", "edit"), async (req, res) => {
   try {
+    if (!validateBody(updateAgencyLocationSchema, req, res)) return;
     const b = req.body || {};
     const u: Record<string, unknown> = { updatedAt: new Date() };
     for (const k of ["name", "address", "city", "state", "pincode", "contactName", "contactPhone", "isActive"]) if (b[k] !== undefined) u[k] = b[k];
@@ -1801,8 +2096,16 @@ foodRouter.delete("/agency-locations/:id", authenticate, authorize("FOOD_ORG", "
 });
 
 // Nested vehicles
+const createAgencyVehicleSchema = z.object({
+  vehicleNumber: z.string().min(1).max(64),
+  vehicleType: z.string().max(64).nullish(),
+  locationId: zId.nullish(),
+  isActive: z.boolean().optional(),
+}).passthrough();
+
 foodRouter.post("/agencies/:id/vehicles", authenticate, authorize("FOOD_ORG", "create"), async (req, res) => {
   try {
+    if (!validateBody(createAgencyVehicleSchema, req, res)) return;
     const b = req.body || {};
     if (!b.vehicleNumber) { res.status(400).json({ success: false, error: "vehicleNumber required" }); return; }
     const [row] = await db.insert(agencyVehiclesTable).values({
@@ -1813,8 +2116,16 @@ foodRouter.post("/agencies/:id/vehicles", authenticate, authorize("FOOD_ORG", "c
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
+const updateAgencyVehicleSchema = z.object({
+  vehicleNumber: z.string().max(64).optional(),
+  vehicleType: z.string().max(64).nullish(),
+  locationId: zId.nullish(),
+  isActive: z.boolean().optional(),
+}).passthrough();
+
 foodRouter.put("/agency-vehicles/:id", authenticate, authorize("FOOD_ORG", "edit"), async (req, res) => {
   try {
+    if (!validateBody(updateAgencyVehicleSchema, req, res)) return;
     const b = req.body || {};
     const u: Record<string, unknown> = { updatedAt: new Date() };
     for (const k of ["vehicleNumber", "vehicleType", "locationId", "isActive"]) if (b[k] !== undefined) u[k] = b[k];
@@ -1842,8 +2153,15 @@ foodRouter.get("/zones", authenticate, authorize("FOOD_ORG", "view"), async (req
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
+const createZoneSchema = z.object({
+  name: zText,
+  code: z.string().max(64).nullish(),
+  isActive: z.boolean().optional(),
+}).passthrough();
+
 foodRouter.post("/zones", authenticate, authorize("FOOD_ORG", "create"), async (req, res) => {
   try {
+    if (!validateBody(createZoneSchema, req, res)) return;
     const b = req.body || {};
     if (!b.name) { res.status(400).json({ success: false, error: "name required" }); return; }
     const [row] = await db.insert(zonesTable).values({
@@ -1853,8 +2171,15 @@ foodRouter.post("/zones", authenticate, authorize("FOOD_ORG", "create"), async (
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
+const updateZoneSchema = z.object({
+  name: zText.optional(),
+  code: z.string().max(64).nullish(),
+  isActive: z.boolean().optional(),
+}).passthrough();
+
 foodRouter.put("/zones/:id", authenticate, authorize("FOOD_ORG", "edit"), async (req, res) => {
   try {
+    if (!validateBody(updateZoneSchema, req, res)) return;
     const b = req.body || {};
     const u: Record<string, unknown> = { updatedAt: new Date() };
     for (const k of ["name", "code", "isActive"]) if (b[k] !== undefined) u[k] = b[k];
@@ -1880,8 +2205,15 @@ foodRouter.get("/cities", authenticate, authorize("FOOD_ORG", "view"), async (re
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
+const createCitySchema = z.object({
+  name: zText,
+  zoneId: zId.nullish(),
+  isActive: z.boolean().optional(),
+}).passthrough();
+
 foodRouter.post("/cities", authenticate, authorize("FOOD_ORG", "create"), async (req, res) => {
   try {
+    if (!validateBody(createCitySchema, req, res)) return;
     const b = req.body || {};
     if (!b.name) { res.status(400).json({ success: false, error: "name required" }); return; }
     const [row] = await db.insert(citiesTable).values({
@@ -1891,8 +2223,15 @@ foodRouter.post("/cities", authenticate, authorize("FOOD_ORG", "create"), async 
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
+const updateCitySchema = z.object({
+  name: zText.optional(),
+  zoneId: zId.nullish(),
+  isActive: z.boolean().optional(),
+}).passthrough();
+
 foodRouter.put("/cities/:id", authenticate, authorize("FOOD_ORG", "edit"), async (req, res) => {
   try {
+    if (!validateBody(updateCitySchema, req, res)) return;
     const b = req.body || {};
     const u: Record<string, unknown> = { updatedAt: new Date() };
     for (const k of ["name", "zoneId", "isActive"]) if (b[k] !== undefined) u[k] = b[k];
@@ -1918,8 +2257,16 @@ foodRouter.get("/clusters", authenticate, authorize("FOOD_ORG", "view"), async (
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
+const createClusterSchema = z.object({
+  name: zText,
+  cityId: zId,
+  managerId: zId.nullish(),
+  isActive: z.boolean().optional(),
+}).passthrough();
+
 foodRouter.post("/clusters", authenticate, authorize("FOOD_ORG", "create"), async (req, res) => {
   try {
+    if (!validateBody(createClusterSchema, req, res)) return;
     const b = req.body || {};
     if (!b.name || !b.cityId) { res.status(400).json({ success: false, error: "name, cityId required" }); return; }
     const [row] = await db.insert(clustersTable).values({
@@ -1929,8 +2276,16 @@ foodRouter.post("/clusters", authenticate, authorize("FOOD_ORG", "create"), asyn
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
+const updateClusterSchema = z.object({
+  name: zText.optional(),
+  cityId: zId.optional(),
+  managerId: zId.nullish(),
+  isActive: z.boolean().optional(),
+}).passthrough();
+
 foodRouter.put("/clusters/:id", authenticate, authorize("FOOD_ORG", "edit"), async (req, res) => {
   try {
+    if (!validateBody(updateClusterSchema, req, res)) return;
     const b = req.body || {};
     const u: Record<string, unknown> = { updatedAt: new Date() };
     for (const k of ["name", "cityId", "managerId", "isActive"]) if (b[k] !== undefined) u[k] = b[k];
@@ -1947,8 +2302,11 @@ foodRouter.delete("/clusters/:id", authenticate, authorize("FOOD_ORG", "delete")
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
+const assignClusterSchema = z.object({ clusterId: zId.nullish() }).passthrough();
+
 foodRouter.post("/properties/:id/assign-cluster", authenticate, authorize("FOOD_ORG", "edit"), async (req, res) => {
   try {
+    if (!validateBody(assignClusterSchema, req, res)) return;
     const clusterId = req.body?.clusterId ?? null;
     const [row] = await db.update(propertiesTable).set({ clusterId, updatedAt: new Date() }).where(eq(propertiesTable.id, req.params["id"]!)).returning();
     if (!row) { res.status(404).json({ success: false, error: "Not found" }); return; }
@@ -1969,8 +2327,21 @@ foodRouter.get("/scopes", authenticate, authorize("FOOD_ORG", "view"), async (re
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
+// scopeLevel is kept a bounded string (not enum) so the handler's own
+// "Invalid scopeLevel" / per-level-id checks still produce their specific messages.
+const createScopeSchema = z.object({
+  userId: zId,
+  scopeLevel: z.string().min(1).max(32),
+  zoneId: zId.nullish(),
+  cityId: zId.nullish(),
+  kitchenId: zId.nullish(),
+  clusterId: zId.nullish(),
+  propertyId: zId.nullish(),
+}).passthrough();
+
 foodRouter.post("/scopes", authenticate, authorize("FOOD_ORG", "edit"), async (req, res) => {
   try {
+    if (!validateBody(createScopeSchema, req, res)) return;
     const b = req.body || {};
     if (!b.userId || !b.scopeLevel) { res.status(400).json({ success: false, error: "userId, scopeLevel required" }); return; }
     // This is the org's access-control plane: forbid granting a scope to yourself

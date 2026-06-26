@@ -11,6 +11,7 @@ import { authorize } from "../middlewares/authorize.js";
 import { pick, forbidden } from "../lib/authz.js";
 import { getPagination, buildMeta } from "../lib/paginate.js";
 import { newId, withUniqueRetry } from "../lib/id.js";
+import { csvEsc } from "../lib/export-service.js";
 
 const router = Router();
 
@@ -355,11 +356,11 @@ attendanceRouter.get("/export-csv", authenticate, authorize("EMPLOYEES", "view")
       map[r.employeeId][day] = r.status;
     }
     const headers = ["Employee Code", "Name", "Department", ...Array.from({ length: daysInMonth }, (_, i) => String(i + 1))];
-    const lines = [headers.join(",")];
+    const lines = [headers.map(csvEsc).join(",")];
     for (const e of employees) {
-      const row = [e.employeeCode, `"${e.name}"`, e.department];
+      const row = [e.employeeCode, e.name, e.department];
       for (let i = 1; i <= daysInMonth; i++) row.push((map[e.id]?.[i] || "").charAt(0) || "-");
-      lines.push(row.join(","));
+      lines.push(row.map(csvEsc).join(","));
     }
     res.setHeader("Content-Type", "text/csv");
     res.setHeader("Content-Disposition", `attachment; filename=attendance-${year}-${month}.csv`);

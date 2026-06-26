@@ -117,10 +117,22 @@ docker compose run --rm tools "pnpm --filter @workspace/scripts run seed && \
 > `system_config` for OTP and the meal **cut-off windows** the app relies on).
 > Seeded logins use password `Admin@123` — change them immediately.
 >
-> **OTP at login:** without an SMS provider, set `DEV_OTP=000000` in `.env.docker`
-> (a fixed code that always passes) — or read the real per-login code from
-> `docker compose logs api --since 2m | grep -i "OTP to"`. Unset `DEV_OTP` once
-> Twilio is wired for real production.
+> **OTP at login (production):** Twilio is the real OTP delivery provider — set
+> `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, and `TWILIO_FROM` in `.env.docker`
+> and login codes are sent as SMS. With Twilio unset the code is only logged
+> (`docker compose logs api --since 2m | grep -i "OTP to"`), so a real production
+> deployment must wire Twilio.
+>
+> The fixed `DEV_OTP` master code and the `devOtp` echo in API responses are a
+> **development-only** convenience: they are honoured ONLY when
+> `NODE_ENV=development` **and** `ALLOW_DEV_OTP=true`. In production they are
+> always disabled — and **`DEV_OTP` must be unset**, or the API refuses to boot.
+>
+> **Required production env (fail-closed):** `NODE_ENV=production`, a strong
+> `SESSION_SECRET` (`openssl rand -hex 48`), `ENCRYPTION_KEY` for KYC field
+> encryption (`openssl rand -hex 32`), and `SES_SNS_TOPIC_ARN` for the SES
+> bounce/complaint webhook (the webhook rejects all events in production when it
+> is unset).
 
 ## 5. Start
 

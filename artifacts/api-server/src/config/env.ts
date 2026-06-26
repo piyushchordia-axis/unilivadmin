@@ -22,6 +22,41 @@ export const IS_PRODUCTION = NODE_ENV === "production";
 /** True in production OR when NODE_ENV is unset/unknown — used to fail closed. */
 export const ENFORCE_PROD_SECURITY = !IS_DEVELOPMENT;
 
+/**
+ * Whether the static DEV_OTP master code and the `devOtp` echo in OTP responses
+ * are permitted. FAIL CLOSED: this is only ever true in REAL development
+ * (NODE_ENV=development) AND with the explicit `ALLOW_DEV_OTP=true` opt-in. Any
+ * non-development NODE_ENV (incl. unset/staging) forces it false, so an
+ * accidentally-unset NODE_ENV can never open the OTP backdoor.
+ */
+export const ALLOW_DEV_OTP =
+  !ENFORCE_PROD_SECURITY && IS_DEVELOPMENT && process.env["ALLOW_DEV_OTP"] === "true";
+
+// Boot-time guard: a static DEV_OTP master code must never exist in a hardened
+// (non-development) environment, regardless of ALLOW_DEV_OTP. Fail loudly at
+// startup rather than silently shipping an OTP backdoor.
+if (ENFORCE_PROD_SECURITY && process.env["DEV_OTP"]) {
+  throw new Error(
+    "FATAL: DEV_OTP must not be set in production. Unset DEV_OTP before starting " +
+      "(it is a development-only master OTP and only honoured when NODE_ENV=development).",
+  );
+}
+
+/**
+ * Symmetric key used for KYC field-level encryption. Consumed directly via
+ * process.env by another workstream; exported here for documentation and the
+ * boot-time warning below. Generate with: openssl rand -hex 32
+ * Not thrown-on-missing to avoid breaking local dev — only warned in hardened envs.
+ */
+export const ENCRYPTION_KEY: string | undefined = process.env["ENCRYPTION_KEY"];
+if (ENFORCE_PROD_SECURITY && !ENCRYPTION_KEY) {
+  // eslint-disable-next-line no-console
+  console.warn(
+    "[config] ENCRYPTION_KEY is not set — KYC field encryption will be unavailable. " +
+      "Set it before handling KYC data in production. Generate with: openssl rand -hex 32",
+  );
+}
+
 /** Known placeholder/weak values that must never be accepted as a real secret. */
 const WEAK_SECRETS = new Set([
   "",

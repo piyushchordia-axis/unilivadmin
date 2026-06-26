@@ -1,7 +1,7 @@
 import * as React from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMarkAttendance, useUpdateAttendance } from "@workspace/api-client-react";
-import { apiFetch } from "@/lib/api-fetch";
+import { apiFetch, apiDownload } from "@/lib/api-fetch";
 import { usePermissions } from "@/lib/use-permissions";
 import { PageHeader } from "@/components/page-header";
 import { StatCard } from "@/components/stat-card";
@@ -110,18 +110,12 @@ export default function Attendance() {
   const exportCsv = async () => {
     try {
       const d = new Date(date);
-      const token = localStorage.getItem("uniliv_token");
-      const r = await fetch(`/api/attendance/export-csv?year=${d.getFullYear()}&month=${d.getMonth() + 1}`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      });
-      if (!r.ok) throw new Error("Export failed");
-      const blob = await r.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `attendance-${d.getFullYear()}-${d.getMonth() + 1}.csv`;
-      a.click();
-      URL.revokeObjectURL(url);
+      // Authenticated download via apiDownload: attaches the in-memory token
+      // (with 401→refresh→retry) and saves the returned blob.
+      await apiDownload(
+        `/api/attendance/export-csv?year=${d.getFullYear()}&month=${d.getMonth() + 1}`,
+        `attendance-${d.getFullYear()}-${d.getMonth() + 1}.csv`,
+      );
     } catch (e: any) {
       toast({ title: e?.message || "Export failed", variant: "destructive" });
     }

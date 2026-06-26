@@ -12,6 +12,7 @@ import { getPagination, buildMeta } from "../lib/paginate.js";
 import { newId } from "../lib/id.js";
 
 const VENDOR_FIELDS = ["name", "gstin", "pan", "phone", "email", "address", "categories", "bankAccount", "ifscCode", "rating", "status"] as const;
+const RATE_CONTRACT_FIELDS = ["itemName", "unit", "rate", "validFrom", "validTo", "notes"] as const;
 
 const num = (v: unknown) => v === null || v === undefined || v === "" ? null : Number(v);
 
@@ -116,7 +117,8 @@ vendorRouter.post("/:id/rate-contracts", authenticate, authorize("VENDORS", "edi
 
 vendorRouter.put("/rate-contracts/:rcId", authenticate, authorize("VENDORS", "edit"), async (req, res) => {
   try {
-    const b = { ...req.body };
+    // Allow-list writable columns only (block mass-assignment of id/vendorId/createdAt).
+    const b = pick(req.body, RATE_CONTRACT_FIELDS);
     if (b.rate !== undefined) b.rate = String(b.rate);
     if (b.validFrom) b.validFrom = new Date(b.validFrom);
     if (b.validTo) b.validTo = new Date(b.validTo);

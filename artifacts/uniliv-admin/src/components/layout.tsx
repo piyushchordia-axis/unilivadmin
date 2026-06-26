@@ -237,7 +237,7 @@ function SidebarContent({
             <div className="flex-1 min-w-0">
               <p className="text-sm font-medium truncate text-sidebar-foreground">{me?.name || "Admin User"}</p>
               <p className="text-[11px] text-sidebar-foreground/60 truncate">
-                {(me?.role || "ADMIN").replace(/_/g, " ")}
+                {me?.designation || (me?.role || "ADMIN").replace(/_/g, " ")}
               </p>
             </div>
             <Button

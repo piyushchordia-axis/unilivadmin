@@ -52,12 +52,45 @@ import {
   FOOD_DEFAULT_CUTOFF_KEY,
   FOOD_WASTE_WINDOW_KEY,
 } from "../lib/food-service.js";
-import { notifyOrderEvent } from "../lib/notification-service.js";
-import { toCsv, toPdf, fmtDate, fmtDateTime, fileDateStamp, sanitizeForFilename } from "../lib/export-service.js";
+import { notify, notifyOrderEvent } from "../lib/notification-service.js";
+import { toCsv, toPdf, toXls, fmtDate, fmtDateTime, fileDateStamp, sanitizeForFilename } from "../lib/export-service.js";
+import { blindIndex } from "../lib/field-crypto.js";
+import { z } from "zod";
 
 export const foodOpsRouter: Router = Router();
 
 const MEAL_TYPES = ["BREAKFAST", "LUNCH", "SNACKS", "DINNER"] as const;
+
+/** Base for public/share links (mirrors auth.ts; trailing slashes trimmed). */
+const APP_BASE_URL = (process.env["APP_BASE_URL"] || "").replace(/\/+$/, "");
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * Request-body validation (WS6)
+ *
+ * Additive zod gates on the mutating handlers below. Each runs BEFORE the
+ * handler's existing body logic and only 400s malformed/missing-required input;
+ * valid requests parse and flow through the unchanged code. Schemas are kept
+ * permissive (bounded free-text/ids, enums only where the handler already
+ * hand-checks them) so no previously-accepted request is newly rejected.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/** Mirror of operations.ts: validate req.body, 400 with field details on failure. */
+function validateBody<T>(schema: z.ZodType<T>, req: { body: unknown }, res: {
+  status: (code: number) => { json: (body: unknown) => void };
+}): boolean {
+  const p = schema.safeParse(req.body);
+  if (!p.success) {
+    res.status(400).json({ success: false, error: "Invalid request", details: p.error.flatten() });
+    return false;
+  }
+  return true;
+}
+
+const zId = z.string().min(1).max(128);
+const zText = z.string().max(1000);
+const zMealType = z.enum(MEAL_TYPES);
+const zBrand = z.string().min(1).max(128);
+const zDateLike = z.union([z.string(), z.number(), z.coerce.date()]);
 
 function parseDate(v: unknown): Date | undefined {
   if (!v) return undefined;
@@ -169,8 +202,15 @@ foodOpsRouter.get("/meal-config", authenticate, async (_req, res) => {
   } catch (err) { _req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
+const updateMealConfigSchema = z.object({
+  displayLabel: z.string().max(256).optional(),
+  sortOrder: z.coerce.number().optional(),
+  isEnabled: z.boolean().optional(),
+}).passthrough();
+
 foodOpsRouter.put("/meal-config/:mealType", authenticate, authorize("FOOD_SETTINGS", "edit"), async (req, res) => {
   try {
+    if (!validateBody(updateMealConfigSchema, req, res)) return;
     const b = req.body || {};
     const u: Record<string, unknown> = { updatedAt: new Date() };
     if (b.displayLabel !== undefined) u["displayLabel"] = b.displayLabel;
@@ -195,8 +235,19 @@ foodOpsRouter.get("/meal-windows", authenticate, async (req, res) => {
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
+const createMealWindowSchema = z.object({
+  brand: zBrand,
+  mealType: zMealType,
+  propertyId: zId.nullish(),
+  cutoffTime: z.string().max(16).nullish(),
+  serviceTime: z.string().max(16).nullish(),
+  leadTimeMinutes: z.coerce.number().nullish(),
+  isActive: z.boolean().optional(),
+}).passthrough();
+
 foodOpsRouter.post("/meal-windows", authenticate, authorize("FOOD_SETTINGS", "create"), async (req, res) => {
   try {
+    if (!validateBody(createMealWindowSchema, req, res)) return;
     const b = req.body || {};
     if (!b.brand || !b.mealType) { res.status(400).json({ success: false, error: "brand and mealType required" }); return; }
     const [row] = await db.insert(foodMealWindowsTable).values({
@@ -209,8 +260,19 @@ foodOpsRouter.post("/meal-windows", authenticate, authorize("FOOD_SETTINGS", "cr
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
+const updateMealWindowSchema = z.object({
+  brand: zBrand.optional(),
+  mealType: zMealType.optional(),
+  cutoffTime: z.string().max(16).nullish(),
+  serviceTime: z.string().max(16).nullish(),
+  isActive: z.boolean().optional(),
+  propertyId: zId.nullish(),
+  leadTimeMinutes: z.coerce.number().optional(),
+}).passthrough();
+
 foodOpsRouter.put("/meal-windows/:id", authenticate, authorize("FOOD_SETTINGS", "edit"), async (req, res) => {
   try {
+    if (!validateBody(updateMealWindowSchema, req, res)) return;
     const b = req.body || {};
     const u: Record<string, unknown> = { updatedAt: new Date() };
     for (const k of ["brand", "mealType", "cutoffTime", "serviceTime", "isActive"]) if (b[k] !== undefined) u[k] = b[k];
@@ -240,8 +302,16 @@ foodOpsRouter.get("/cutoff-config", authenticate, async (req, res) => {
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
+const createCutoffSchema = z.object({
+  brand: zBrand,
+  cutoffTime: z.string().min(1).max(16),
+  propertyId: zId.nullish(),
+  isActive: z.boolean().optional(),
+}).passthrough();
+
 foodOpsRouter.post("/cutoff-config", authenticate, authorize("FOOD_SETTINGS", "create"), async (req, res) => {
   try {
+    if (!validateBody(createCutoffSchema, req, res)) return;
     const b = req.body || {};
     if (!b.brand || !b.cutoffTime) { res.status(400).json({ success: false, error: "brand and cutoffTime required" }); return; }
     const propertyId = b.propertyId ?? null;
@@ -262,8 +332,16 @@ foodOpsRouter.post("/cutoff-config", authenticate, authorize("FOOD_SETTINGS", "c
   }
 });
 
+const updateCutoffSchema = z.object({
+  brand: zBrand.optional(),
+  propertyId: zId.nullish(),
+  cutoffTime: z.string().max(16).optional(),
+  isActive: z.boolean().optional(),
+}).passthrough();
+
 foodOpsRouter.put("/cutoff-config/:id", authenticate, authorize("FOOD_SETTINGS", "edit"), async (req, res) => {
   try {
+    if (!validateBody(updateCutoffSchema, req, res)) return;
     const b = req.body || {};
     const u: Record<string, unknown> = { updatedAt: new Date() };
     for (const k of ["brand", "propertyId", "cutoffTime", "isActive"]) if (b[k] !== undefined) u[k] = b[k];
@@ -333,12 +411,20 @@ foodOpsRouter.get("/system-config/food-defaults", authenticate, async (req, res)
 });
 
 /** Upsert the global food defaults. SUPER_ADMIN only (org-wide setting). */
+// Both fields optional; the handler hand-validates HH:MM / positive-number formats
+// (keep these loose so those specific 400 messages are preserved).
+const foodDefaultsSchema = z.object({
+  defaultCutoff: z.union([z.string(), z.number()]).optional(),
+  wasteWindowMinutes: z.union([z.string(), z.number()]).optional(),
+}).passthrough();
+
 foodOpsRouter.put("/system-config/food-defaults", authenticate, async (req, res) => {
   try {
     if (req.user?.role !== "SUPER_ADMIN") {
       res.status(403).json({ success: false, error: "Forbidden — SUPER_ADMIN only" });
       return;
     }
+    if (!validateBody(foodDefaultsSchema, req, res)) return;
     const b = req.body || {};
     const updates: Array<{ key: string; value: unknown; description: string }> = [];
 
@@ -381,8 +467,25 @@ foodOpsRouter.get("/kitchens", authenticate, async (req, res) => {
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
+const createKitchenSchema = z.object({
+  name: zText,
+  code: z.string().min(1).max(64),
+  brand: zBrand.nullish(),
+  address: z.string().max(1000).nullish(),
+  city: z.string().max(256).nullish(),
+  state: z.string().max(256).nullish(),
+  pincode: z.string().max(16).nullish(),
+  contactName: z.string().max(256).nullish(),
+  contactPhone: z.string().max(32).nullish(),
+  contactEmail: z.string().max(256).nullish(),
+  cityId: zId.nullish(),
+  clusterId: zId.nullish(),
+  isActive: z.boolean().optional(),
+}).passthrough();
+
 foodOpsRouter.post("/kitchens", authenticate, authorize("FOOD_SETTINGS", "create"), async (req, res) => {
   try {
+    if (!validateBody(createKitchenSchema, req, res)) return;
     const b = req.body || {};
     if (!b.name || !b.code) { res.status(400).json({ success: false, error: "name and code required" }); return; }
     const [row] = await db.insert(kitchensTable).values({
@@ -395,8 +498,25 @@ foodOpsRouter.post("/kitchens", authenticate, authorize("FOOD_SETTINGS", "create
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
+const updateKitchenSchema = z.object({
+  name: zText.optional(),
+  code: z.string().max(64).optional(),
+  brand: zBrand.nullish(),
+  address: z.string().max(1000).nullish(),
+  city: z.string().max(256).nullish(),
+  state: z.string().max(256).nullish(),
+  pincode: z.string().max(16).nullish(),
+  contactName: z.string().max(256).nullish(),
+  contactPhone: z.string().max(32).nullish(),
+  contactEmail: z.string().max(256).nullish(),
+  cityId: zId.nullish(),
+  clusterId: zId.nullish(),
+  isActive: z.boolean().optional(),
+}).passthrough();
+
 foodOpsRouter.put("/kitchens/:id", authenticate, authorize("FOOD_SETTINGS", "edit"), async (req, res) => {
   try {
+    if (!validateBody(updateKitchenSchema, req, res)) return;
     const b = req.body || {};
     const u: Record<string, unknown> = { updatedAt: new Date() };
     for (const k of ["name", "code", "brand", "address", "city", "state", "pincode", "contactName", "contactPhone", "contactEmail", "cityId", "clusterId", "isActive"]) if (b[k] !== undefined) u[k] = b[k];
@@ -458,8 +578,15 @@ foodOpsRouter.get("/brands", authenticate, async (req, res) => {
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
+const createBrandSchema = z.object({
+  code: z.string().min(1).max(128),
+  name: zText,
+  isActive: z.boolean().optional(),
+}).passthrough();
+
 foodOpsRouter.post("/brands", authenticate, authorize("FOOD_SETTINGS", "create"), async (req, res) => {
   try {
+    if (!validateBody(createBrandSchema, req, res)) return;
     const b = req.body || {};
     if (!b.code || !b.name) { res.status(400).json({ success: false, error: "code and name required" }); return; }
     const code = String(b.code).trim().toUpperCase().replace(/\s+/g, "_");
@@ -471,8 +598,14 @@ foodOpsRouter.post("/brands", authenticate, authorize("FOOD_SETTINGS", "create")
   }
 });
 
+const updateBrandSchema = z.object({
+  name: zText.optional(),
+  isActive: z.boolean().optional(),
+}).passthrough();
+
 foodOpsRouter.put("/brands/:id", authenticate, authorize("FOOD_SETTINGS", "edit"), async (req, res) => {
   try {
+    if (!validateBody(updateBrandSchema, req, res)) return;
     const b = req.body || {};
     const u: Record<string, unknown> = { updatedAt: new Date() };
     if (b.name !== undefined) u["name"] = b.name;
@@ -522,16 +655,22 @@ foodOpsRouter.get("/hierarchy", authenticate, authorize("FOOD_DASHBOARD", "view"
   } catch (err) { _req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
+const assignBrandSchema = z.object({ brand: z.union([z.string().max(128), z.null()]).optional() }).passthrough();
+
 foodOpsRouter.post("/properties/:id/assign-brand", authenticate, authorize("FOOD_SETTINGS", "edit"), async (req, res) => {
   try {
+    if (!validateBody(assignBrandSchema, req, res)) return;
     const brand = req.body?.brand ? String(req.body.brand) : null;
     await db.update(propertiesTable).set({ brand, updatedAt: new Date() }).where(eq(propertiesTable.id, req.params["id"]!));
     res.json({ success: true });
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
+const assignKitchenSchema = z.object({ kitchenId: z.union([z.string().max(128), z.null()]).optional() }).passthrough();
+
 foodOpsRouter.post("/properties/:id/assign-kitchen", authenticate, authorize("FOOD_SETTINGS", "edit"), async (req, res) => {
   try {
+    if (!validateBody(assignKitchenSchema, req, res)) return;
     const kitchenId = req.body?.kitchenId ? String(req.body.kitchenId) : null;
     await db.update(propertiesTable).set({ kitchenId, updatedAt: new Date() }).where(eq(propertiesTable.id, req.params["id"]!));
     res.json({ success: true });
@@ -576,8 +715,11 @@ foodOpsRouter.post("/orders/:id/accept", authenticate, authorize("FOOD_KITCHEN_S
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
+const rejectOrderSchema = z.object({ reason: zText.nullish() }).passthrough();
+
 foodOpsRouter.post("/orders/:id/reject", authenticate, authorize("FOOD_KITCHEN_SUMMARY", "edit"), async (req, res) => {
   try {
+    if (!validateBody(rejectOrderSchema, req, res)) return;
     const order = await loadOrderForActor(req, res); if (!order) return;
     if (order.status !== "PLACED" && order.status !== "ACCEPTED") { res.status(422).json({ success: false, error: "Only PLACED/ACCEPTED orders can be rejected" }); return; }
     const reason = req.body?.reason ?? null;
@@ -644,8 +786,24 @@ foodOpsRouter.get("/dispatches/:id", authenticate, authorize("FOOD_DISPATCH", "v
 });
 
 /** Create a dispatch trip and dispatch its orders in one action. */
+const createDispatchSchema = z.object({
+  orderIds: z.array(zId).optional(),
+  // agencyId is the new field; deliveryPartnerId kept as alias (handler resolves either).
+  agencyId: zId.nullish(),
+  deliveryPartnerId: zId.nullish(),
+  vehicleId: zId.nullish(),
+  vehicleNumber: z.string().max(64).nullish(),
+  kitchenId: zId.nullish(),
+  driverName: z.string().max(256).nullish(),
+  driverPhone: z.string().max(32).nullish(),
+  etaMinutes: z.coerce.number().nullish(),
+  estimatedArrivalAt: zDateLike.nullish(),
+  notes: zText.nullish(),
+}).passthrough();
+
 foodOpsRouter.post("/dispatches", authenticate, authorize("FOOD_DISPATCH", "edit"), async (req, res) => {
   try {
+    if (!validateBody(createDispatchSchema, req, res)) return;
     const b = req.body || {};
     const orderIds: string[] = Array.isArray(b.orderIds) ? b.orderIds : [];
     if (!orderIds.length) { res.status(400).json({ success: false, error: "orderIds required" }); return; }
@@ -698,8 +856,13 @@ foodOpsRouter.post("/dispatches", authenticate, authorize("FOOD_DISPATCH", "edit
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
+// status is left a bounded string (not enum) so the handler's own "Invalid status"
+// message is preserved for unknown values.
+const dispatchStatusSchema = z.object({ status: z.string().max(32) }).passthrough();
+
 foodOpsRouter.patch("/dispatches/:id/status", authenticate, authorize("FOOD_DISPATCH", "edit"), async (req, res) => {
   try {
+    if (!validateBody(dispatchStatusSchema, req, res)) return;
     const status = req.body?.status as string;
     if (!["LOADING", "IN_TRANSIT", "DELIVERED", "PARTIAL"].includes(status)) { res.status(400).json({ success: false, error: "Invalid status" }); return; }
     const ids = await resolveAccessiblePropertyIds(req.user!);
@@ -714,8 +877,34 @@ foodOpsRouter.patch("/dispatches/:id/status", authenticate, authorize("FOOD_DISP
  * Multi-meal order batch (Persona st.16)
  * ════════════════════════════════════════════════════════════════════════ */
 
+// meal.mealType is kept a bounded string (not enum): the handler skips invalid
+// meal types internally (`continue`), so over-restricting here would change behavior.
+const zBatchMealItem = z.object({
+  dishId: zId,
+  personsCount: z.coerce.number().nullish(),
+  // Permissive on purpose: the handler itself skips items whose orderedQty is
+  // missing/blank/<=0 (and still returns 201), so the gate must NOT 400 a batch
+  // that the old code would have accepted-and-skipped.
+  orderedQty: z.coerce.number().nullish(),
+  unit: z.string().max(64).nullish(),
+}).passthrough();
+const zBatchMeal = z.object({
+  mealType: z.string().max(32),
+  quantity: z.coerce.number().nullish(),
+  items: z.array(zBatchMealItem).optional(),
+}).passthrough();
+const orderBatchSchema = z.object({
+  propertyId: zId,
+  serviceDate: zDateLike,
+  meals: z.array(zBatchMeal).optional(),
+  persons: z.coerce.number().nullish(),
+  residentsCount: z.coerce.number().nullish(),
+  notes: zText.nullish(),
+}).passthrough();
+
 foodOpsRouter.post("/order-batches", authenticate, authorize("FOOD_PLACE_ORDER", "create"), async (req, res) => {
   try {
+    if (!validateBody(orderBatchSchema, req, res)) return;
     const b = req.body || {};
     const { propertyId, serviceDate } = b;
     const persons = b.persons != null ? Number(b.persons) : (b.residentsCount != null ? Number(b.residentsCount) : 0);
@@ -846,17 +1035,30 @@ foodOpsRouter.get("/menu/full", authenticate, async (req, res) => {
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
+const menuShareSchema = z.object({
+  propertyId: zId,
+  brand: zBrand,
+  channel: z.string().min(1).max(64),
+  recipients: z.array(z.string().max(256)).optional(),
+  recipientType: z.string().max(32).nullish(),
+  mealType: z.string().max(32).nullish(),
+  date: zDateLike.nullish(),
+}).passthrough();
+
 foodOpsRouter.post("/menu/share", authenticate, authorize("FOOD_PLACE_ORDER", "view"), async (req, res) => {
   try {
+    if (!validateBody(menuShareSchema, req, res)) return;
     const b = req.body || {};
     if (!b.propertyId || !b.brand || !b.channel) { res.status(400).json({ success: false, error: "propertyId, brand, channel required" }); return; }
     const ids = await resolveAccessiblePropertyIds(req.user!);
     if (!isAccessible(b.propertyId, ids)) { res.status(403).json({ success: false, error: "Property not accessible" }); return; }
     let recipients: string[] = Array.isArray(b.recipients) ? b.recipients : [];
+    // Resolved active-guest rows (kept for dispatch below); empty for CUSTOM shares.
+    let guestRows: { id: string; name: string; email: string; phone: string }[] = [];
     if (b.recipientType === "GUESTS") {
-      const rows = await db.select({ id: residentsTable.id, name: residentsTable.name, phone: residentsTable.phone })
+      guestRows = await db.select({ id: residentsTable.id, name: residentsTable.name, email: residentsTable.email, phone: residentsTable.phone })
         .from(residentsTable).where(and(eq(residentsTable.propertyId, b.propertyId), eq(residentsTable.status, "ACTIVE")));
-      recipients = rows.map((r) => r.id);
+      recipients = guestRows.map((r) => r.id);
     }
     const shareToken = newId();
     const [row] = await db.insert(foodMenuSharesTable).values({
@@ -864,6 +1066,49 @@ foodOpsRouter.post("/menu/share", authenticate, authorize("FOOD_PLACE_ORDER", "v
       mealType: b.mealType ?? null, menuDate: b.date ? new Date(b.date) : null, channel: b.channel,
       recipientType: b.recipientType ?? "CUSTOM", recipients, shareToken,
     }).returning();
+
+    // #15 — actually dispatch the public menu link to each resolved active guest.
+    // LINK (copy-link) channels keep the prior no-dispatch behavior. Guests aren't
+    // app users, so `notify` (which resolves contact from usersTable) is invoked for
+    // any matching user row (matched by the guest's email); dispatch is best-effort
+    // per recipient — a single failure never fails the share request.
+    const channel = String(b.channel || "").toUpperCase();
+    if (channel !== "LINK" && guestRows.length) {
+      const shareUrl = `${APP_BASE_URL}/m/${shareToken}`;
+      const propName = (await db.select({ name: propertiesTable.name }).from(propertiesTable).where(eq(propertiesTable.id, b.propertyId)))[0]?.name ?? null;
+      const mealLabel = b.mealType ? ` ${String(b.mealType).toLowerCase()}` : "";
+      const summary = `Here's today's${mealLabel} menu${propName ? ` for ${propName}` : ""}.`;
+      const useSms = channel === "SMS" || channel === "WHATSAPP";
+      // Map guest emails → app users so `notify` can resolve a deliverable contact.
+      const emails = [...new Set(guestRows.map((g) => g.email).filter(Boolean))];
+      const userByEmail = new Map<string, string>();
+      if (emails.length) {
+        const users = await db.select({ id: usersTable.id, email: usersTable.email })
+          .from(usersTable).where(inArray(usersTable.email, emails));
+        for (const u of users) userByEmail.set(u.email, u.id);
+      }
+      for (const g of guestRows) {
+        const userId = userByEmail.get(g.email);
+        if (!userId) continue; // no deliverable user-contact for this guest
+        try {
+          await notify({
+            userId,
+            title: "Today's menu is ready",
+            body: `${summary} View it here: ${shareUrl}`,
+            type: "FOOD_MENU_SHARE",
+            link: shareUrl,
+            entityType: "FOOD_MENU_SHARE",
+            entityId: row!.id,
+            ...(useSms
+              ? { sms: `${summary} View the menu: ${shareUrl}` }
+              : { email: { subject: "Today's menu", text: `${summary}\n\nView the full menu here:\n${shareUrl}` } }),
+          });
+        } catch (err) {
+          req.log.error({ err, residentId: g.id }, "menu-share dispatch failed for recipient");
+        }
+      }
+    }
+
     res.status(201).json({ success: true, data: { ...row, recipientCount: recipients.length } });
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
@@ -1261,6 +1506,61 @@ foodOpsRouter.get("/home-analytics", authenticate, authorize("FOOD_REPORTS", "vi
 });
 
 /* ════════════════════════════════════════════════════════════════════════
+ * Ordered-vs-delivered variance report (#26)
+ *
+ * Aggregates delivered/confirmed orders in range, grouped by mealType, summing
+ * ordered / received / wasted qty (variance = ordered − received). Mirrors the
+ * /analytics scoping (resolveAccessiblePropertyIds + optional ?propertyId) and
+ * the periodRange date conventions used by the other food reports. "Delivered/
+ * confirmed" = orders that reached DELIVERED (per-item receivedQty is the proof-
+ * of-receipt captured at Confirm Delivery, same convention as food-order-detail).
+ * ════════════════════════════════════════════════════════════════════════ */
+foodOpsRouter.get("/reports/variance", authenticate, authorize("FOOD_REPORTS", "view"), async (req, res) => {
+  try {
+    const ids = await resolveAccessiblePropertyIds(req.user!);
+    const { from, to } = periodRange(req.query["period"] as string | undefined, req.query as Record<string, unknown>);
+    const propertyId = req.query["propertyId"] as string | undefined;
+    if (propertyId && !isAccessible(propertyId, ids)) {
+      res.status(403).json({ success: false, error: "Property not accessible" }); return;
+    }
+
+    const conds = [
+      gte(foodOrdersTable.serviceDate, from),
+      lte(foodOrdersTable.serviceDate, to),
+      eq(foodOrdersTable.status, "DELIVERED" as never),
+    ] as any[];
+    if (ids !== null) conds.push(ids.length ? inArray(foodOrdersTable.propertyId, ids) : sql`false`);
+    if (propertyId) conds.push(eq(foodOrdersTable.propertyId, propertyId));
+    const where = and(...conds);
+
+    const grouped = await db.select({
+      mealType: foodOrdersTable.mealType,
+      ordered: sql<number>`coalesce(sum(${foodOrderItemsTable.orderedQty}), 0)::float`,
+      received: sql<number>`coalesce(sum(${foodOrderItemsTable.receivedQty}), 0)::float`,
+      wasted: sql<number>`coalesce(sum(${foodOrderItemsTable.wastedQty}), 0)::float`,
+    }).from(foodOrdersTable)
+      .innerJoin(foodOrderItemsTable, eq(foodOrderItemsTable.orderId, foodOrdersTable.id))
+      .where(where).groupBy(foodOrdersTable.mealType);
+
+    const r3 = (n: number) => Math.round(n * 1000) / 1000;
+    const byMeal = new Map(grouped.map((g) => [g.mealType, g]));
+    const rows = MEAL_TYPES.map((mt) => {
+      const g = byMeal.get(mt);
+      const ordered = r3(Number(g?.ordered ?? 0));
+      const received = r3(Number(g?.received ?? 0));
+      const wasted = r3(Number(g?.wasted ?? 0));
+      return { mealType: mt, ordered, received, wasted, variance: r3(ordered - received) };
+    });
+    const totals = rows.reduce((t, r) => ({
+      ordered: r3(t.ordered + r.ordered), received: r3(t.received + r.received),
+      wasted: r3(t.wasted + r.wasted), variance: r3(t.variance + r.variance),
+    }), { ordered: 0, received: 0, wasted: 0, variance: 0 });
+
+    res.json({ success: true, data: { rows, totals } });
+  } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
+});
+
+/* ════════════════════════════════════════════════════════════════════════
  * Exports — orders & guests (Persona st.34, st.47)
  * ════════════════════════════════════════════════════════════════════════ */
 
@@ -1335,6 +1635,16 @@ foodOpsRouter.get("/reports/export.pdf", authenticate, authorize("FOOD_REPORTS",
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `attachment; filename=${ordersFilename(propertyName, "pdf")}`);
     res.send(Buffer.from(pdf));
+  } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
+});
+
+foodOpsRouter.get("/reports/export.xls", authenticate, authorize("FOOD_REPORTS", "view"), async (req, res) => {
+  try {
+    const { rows, propertyName, dateRange } = await fetchOrdersForExport(req);
+    const xls = toXls({ title: "Food Orders Report", headers: ORDER_HEADERS, rows, propertyName, dateRange });
+    res.setHeader("Content-Type", "application/vnd.ms-excel");
+    res.setHeader("Content-Disposition", `attachment; filename=${ordersFilename(propertyName, "xls")}`);
+    res.send(xls);
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
@@ -1477,8 +1787,22 @@ async function fetchGuests(req: any, res: any): Promise<{ where: any } | null> {
     const rmRows = await db.select({ id: roomsTable.id }).from(roomsTable).where(ilike(roomsTable.number, like));
     if (rmRows.length) orParts.push(inArray(residentsTable.roomId, rmRows.map((r) => r.id)));
     // PAN / Aadhaar via KYC id number (Persona st.46) — index + join, no PII on residents.
-    const kycRows = await db.select({ rid: kycRequestsTable.residentId }).from(kycRequestsTable).where(ilike(kycRequestsTable.idNumber, like));
-    if (kycRows.length) orParts.push(inArray(residentsTable.id, kycRows.map((r) => r.rid)));
+    // idNumber is now encrypted at rest (WS5), so substring search is impossible.
+    // Aadhaar/PAN search is EXACT-MATCH by design: we look up the HMAC blind index
+    // of the full normalized search term (spaces/case ignored) against id_number_index.
+    // Guarded: blindIndex() throws when ENCRYPTION_KEY is unset (local dev without a
+    // key) — degrade gracefully to name/phone/email/room search instead of 500ing
+    // the whole guest listing/export.
+    try {
+      const idx = blindIndex(search);
+      const kycRows = await db
+        .select({ rid: kycRequestsTable.residentId })
+        .from(kycRequestsTable)
+        .where(eq(kycRequestsTable.idNumberIndex, idx));
+      if (kycRows.length) orParts.push(inArray(residentsTable.id, kycRows.map((r) => r.rid)));
+    } catch (e) {
+      req.log?.warn?.({ err: e }, "KYC id-number search skipped (encryption key unavailable)");
+    }
     conds.push(or(...orParts));
   }
   return { where: and(...conds) };
@@ -1552,6 +1876,16 @@ foodOpsRouter.get("/guests/export.pdf", authenticate, authorize("FOOD_DASHBOARD"
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `attachment; filename=${guestsFilename(out.propertyName, "pdf")}`);
     res.send(Buffer.from(pdf));
+  } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
+});
+
+foodOpsRouter.get("/guests/export.xls", authenticate, authorize("FOOD_DASHBOARD", "view"), async (req, res) => {
+  try {
+    const out = await guestExportRows(req, res); if (!out) return;
+    const xls = toXls({ title: "Active Guests", headers: GUEST_HEADERS, rows: out.rows, propertyName: out.propertyName });
+    res.setHeader("Content-Type", "application/vnd.ms-excel");
+    res.setHeader("Content-Disposition", `attachment; filename=${guestsFilename(out.propertyName, "xls")}`);
+    res.send(xls);
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 

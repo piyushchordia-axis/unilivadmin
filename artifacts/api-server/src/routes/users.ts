@@ -5,13 +5,25 @@ import { usersTable, announcementsTable } from "@workspace/db";
 import { eq, sql, ilike, and } from "drizzle-orm";
 import { authenticate } from "../middlewares/auth.js";
 import { authorize } from "../middlewares/authorize.js";
-import { pick } from "../lib/authz.js";
+import { pick, assertCanAssignRole, ROLE_RANK } from "../lib/authz.js";
 import { getPagination, buildMeta } from "../lib/paginate.js";
 import { newId } from "../lib/id.js";
 
 function sanitizeUser(u: typeof usersTable.$inferSelect) {
   const { passwordHash: _, ...rest } = u;
   return rest;
+}
+
+/** Render a thrown HttpError (e.g. forbidden() from assertCanAssignRole) with its
+ *  real status instead of letting the local catch mask it as a 500. */
+function sendAuthzError(err: unknown, res: import("express").Response): boolean {
+  const status = (err as { statusCode?: number } | null)?.statusCode;
+  if (typeof status === "number") {
+    const message = (err as { message?: string }).message || "Forbidden";
+    res.status(status).json({ success: false, error: message });
+    return true;
+  }
+  return false;
 }
 
 /** Only these columns may be set from a request body. Never accept auth-state
@@ -38,18 +50,33 @@ usersRouter.get("/", authenticate, authorize("USERS", "view"), async (req, res) 
 usersRouter.post("/", authenticate, authorize("USERS", "create"), async (req, res) => {
   try {
     const fields = pick(req.body, WRITABLE_USER_FIELDS);
+    if (fields.role) assertCanAssignRole(req.user!.role, fields.role);
     const passwordHash = await bcrypt.hash(req.body?.password || "TempPass@123", 12);
     const [row] = await db.insert(usersTable).values({ id: newId(), ...fields, passwordHash, updatedAt: new Date() }).returning();
     res.status(201).json({ success: true, data: sanitizeUser(row) });
-  } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
+  } catch (err) { if (sendAuthzError(err, res)) return; req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 usersRouter.put("/:id", authenticate, authorize("USERS", "edit"), async (req, res) => {
   try {
     const fields = pick(req.body, WRITABLE_USER_FIELDS);
+    const callerRole = req.user!.role;
+    const isSelf = req.params["id"] === req.user!.id;
+    // Load the target so a non-SUPER_ADMIN can't edit a user who out-ranks them.
+    // Editing self or an equal-tier peer is allowed (HR_MANAGER manages peers and
+    // its own profile); only editing a STRICTLY higher-ranked user is blocked.
+    const [target] = await db.select().from(usersTable).where(eq(usersTable.id, req.params["id"]!));
+    if (!target) { res.status(404).json({ success: false, error: "Not found" }); return; }
+    if (callerRole !== "SUPER_ADMIN" && !isSelf) {
+      const callerRank = ROLE_RANK[callerRole] ?? 0;
+      const targetRank = ROLE_RANK[target.role] ?? 0;
+      if (targetRank > callerRank) { res.status(403).json({ success: false, error: "Cannot edit a user above your privilege level" }); return; }
+    }
+    // If the body changes the role, the new role must be one the caller may grant.
+    if (fields.role) assertCanAssignRole(callerRole, fields.role);
     const [row] = await db.update(usersTable).set({ ...fields, updatedAt: new Date() }).where(eq(usersTable.id, req.params["id"]!)).returning();
     if (!row) { res.status(404).json({ success: false, error: "Not found" }); return; }
     res.json({ success: true, data: sanitizeUser(row) });
-  } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
+  } catch (err) { if (sendAuthzError(err, res)) return; req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 usersRouter.delete("/:id", authenticate, authorize("USERS", "delete"), async (req, res) => {
   try {

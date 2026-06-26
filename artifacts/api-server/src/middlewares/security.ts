@@ -85,10 +85,14 @@ export function rateLimit(opts: RateLimitOptions) {
   };
 }
 
-/** Best-effort client IP, honouring a single proxy hop (nginx) via X-Forwarded-For. */
+/**
+ * Best-effort client IP. Relies on Express's `req.ip`, which (with
+ * `app.set('trust proxy', 1)`) resolves the correct rightmost-untrusted hop
+ * behind the single nginx proxy. We deliberately do NOT parse `X-Forwarded-For`
+ * ourselves: taking the leftmost value let an attacker rotate the header to dodge
+ * the rate-limit buckets keyed off this value.
+ */
 export function clientIp(req: Request): string {
-  const xff = req.headers["x-forwarded-for"];
-  if (typeof xff === "string" && xff.length) return xff.split(",")[0]!.trim();
   return req.ip || req.socket?.remoteAddress || "unknown";
 }
 

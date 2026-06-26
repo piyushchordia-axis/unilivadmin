@@ -1,6 +1,6 @@
 import { Router } from "express";
-import { db, slaConfigTable, complaintRoutingTable, integrationStatusTable, auditLogTable, usersTable } from "@workspace/db";
-import { eq, desc } from "drizzle-orm";
+import { db, slaConfigTable, complaintRoutingTable, integrationStatusTable, auditLogTable, usersTable, systemConfigTable } from "@workspace/db";
+import { eq, desc, inArray } from "drizzle-orm";
 import { authenticate } from "../middlewares/auth.js";
 import { authorize } from "../middlewares/authorize.js";
 import { newId } from "../lib/id.js";
@@ -110,4 +110,83 @@ settingsRouter.get("/audit-log", authenticate, authorize("AUDIT_LOG", "view"), a
       .limit(200);
     res.json({ success: true, data: rows });
   } catch (err) { _req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
+});
+
+/* ════════════════════════════════════════════════════════════════════════
+ * OTP / login-security config (system_config) — SUPER_ADMIN only.
+ *
+ * These keys are read live by otp-service.ts (readConfig). Settings exposed
+ * here MUST match the keys otp-service reads, stored as raw JSON scalars under
+ * their canonical keys. OTP code length / lockout-minutes are intentionally
+ * NOT editable here (length is fixed by SMS template; lockout is a separate
+ * concern) — only the resident-facing OTP caps are tunable.
+ * ════════════════════════════════════════════════════════════════════════ */
+
+/** Editable OTP keys with their sane integer bounds and seed defaults. */
+const OTP_CONFIG_FIELDS = [
+  { key: "OTP_MAX_ATTEMPTS", min: 1, max: 10, fallback: 3, description: "Max OTP verification attempts before lock" },
+  { key: "OTP_MAX_RESEND", min: 1, max: 10, fallback: 3, description: "Max OTP resends per challenge" },
+  { key: "OTP_EXPIRY_MINUTES", min: 1, max: 60, fallback: 10, description: "OTP validity window (minutes)" },
+] as const;
+
+/** Coerce a stored JSON scalar (plain or wrapped) to a number, tolerating strings. */
+function configToNumber(raw: unknown, fallback: number): number {
+  if (raw == null) return fallback;
+  if (typeof raw === "number") return raw;
+  if (typeof raw === "object") {
+    const v = Object.values(raw as Record<string, unknown>)[0];
+    return typeof v === "number" ? v : fallback;
+  }
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+async function readOtpConfig(): Promise<Record<string, number>> {
+  const keys = OTP_CONFIG_FIELDS.map((f) => f.key);
+  const rows = await db.select().from(systemConfigTable).where(inArray(systemConfigTable.key, keys));
+  const byKey = new Map(rows.map((r) => [r.key, r.value]));
+  const out: Record<string, number> = {};
+  for (const f of OTP_CONFIG_FIELDS) out[f.key] = configToNumber(byKey.get(f.key), f.fallback);
+  return out;
+}
+
+// Read current OTP caps. SUPER_ADMIN only (sensitive login-security setting).
+settingsRouter.get("/otp-config", authenticate, async (req, res) => {
+  try {
+    if (req.user?.role !== "SUPER_ADMIN") {
+      res.status(403).json({ success: false, error: "Forbidden — SUPER_ADMIN only" });
+      return;
+    }
+    res.json({ success: true, data: await readOtpConfig() });
+  } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
+});
+
+// Upsert OTP caps. SUPER_ADMIN only; validates each value is a positive integer in bounds.
+settingsRouter.put("/otp-config", authenticate, async (req, res) => {
+  try {
+    if (req.user?.role !== "SUPER_ADMIN") {
+      res.status(403).json({ success: false, error: "Forbidden — SUPER_ADMIN only" });
+      return;
+    }
+    const body = (req.body || {}) as Record<string, unknown>;
+    const updates: Array<{ key: string; value: number; description: string }> = [];
+    for (const f of OTP_CONFIG_FIELDS) {
+      if (body[f.key] === undefined) continue;
+      const n = Number(body[f.key]);
+      if (!Number.isInteger(n) || n < f.min || n > f.max) {
+        res.status(400).json({ success: false, error: `${f.key} must be an integer between ${f.min} and ${f.max}` });
+        return;
+      }
+      updates.push({ key: f.key, value: n, description: f.description });
+    }
+    if (!updates.length) { res.status(400).json({ success: false, error: "Nothing to update" }); return; }
+
+    for (const u of updates) {
+      await db.insert(systemConfigTable)
+        .values({ id: newId(), key: u.key, value: u.value as never, description: u.description, updatedAt: new Date() })
+        .onConflictDoUpdate({ target: systemConfigTable.key, set: { value: u.value as never, updatedAt: new Date() } });
+    }
+
+    res.json({ success: true, data: await readOtpConfig() });
+  } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });

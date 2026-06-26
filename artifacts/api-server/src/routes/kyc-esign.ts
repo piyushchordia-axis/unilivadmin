@@ -15,6 +15,7 @@ import { authenticate } from "../middlewares/auth.js";
 import { authorize } from "../middlewares/authorize.js";
 import { newId } from "../lib/id.js";
 import { getKYCProvider } from "../lib/kyc-providers.js";
+import { encryptNullable, decrypt, blindIndex } from "../lib/field-crypto.js";
 
 export const kycRouter: Router = Router();
 export const esignRouter: Router = Router();
@@ -48,15 +49,38 @@ function maskIdNumber(idType: string | null | undefined, idNumber: string | null
 
 type KycRow = typeof kycRequestsTable.$inferSelect;
 
-/** List projection: mask the id number and drop raw document/selfie images. */
+/**
+ * List projection: mask the id number and drop raw document/selfie images.
+ * The id number is decrypted first (legacy-tolerant) so masking always runs on
+ * plaintext; the blind index is internal and never leaves the API.
+ */
 function kycListView(row: KycRow) {
-  const { idImageFront: _f, idImageBack: _b, selfieImage: _s, providerData: _p, ...rest } = row;
-  return { ...rest, idNumber: maskIdNumber(row.idType, row.idNumber) };
+  const {
+    idImageFront: _f,
+    idImageBack: _b,
+    selfieImage: _s,
+    providerData: _p,
+    idNumberIndex: _ix,
+    ...rest
+  } = row;
+  return { ...rest, idNumber: maskIdNumber(row.idType, decrypt(row.idNumber)) };
 }
 
-/** Detail/create projection: mask the id number but keep document images. */
+/**
+ * Detail/create projection: mask the id number but keep document images.
+ * All sensitive fields are decrypted on the way out (legacy plaintext passes
+ * through unchanged), so the response shape is identical to before: masked
+ * idNumber + decrypted image data URLs. The blind index is stripped.
+ */
 function kycDetailView(row: KycRow) {
-  return { ...row, idNumber: maskIdNumber(row.idType, row.idNumber) };
+  const { idNumberIndex: _ix, ...rest } = row;
+  return {
+    ...rest,
+    idNumber: maskIdNumber(row.idType, decrypt(row.idNumber)),
+    idImageFront: decrypt(row.idImageFront),
+    idImageBack: decrypt(row.idImageBack),
+    selfieImage: decrypt(row.selfieImage),
+  };
 }
 
 // =====================================================================
@@ -101,16 +125,19 @@ kycRouter.post("/residents/:id/kyc", authenticate, authorize("RESIDENTS", "edit"
       selfieImage,
       residentName: resident.name,
     });
+    // Encrypt sensitive fields at rest (WS5). idNumber is required, so its
+    // envelope is always non-null; the blind index enables exact-match search.
     const [row] = await db
       .insert(kycRequestsTable)
       .values({
         id: newId(),
         residentId,
         idType,
-        idNumber,
-        idImageFront: idImageFront || null,
-        idImageBack: idImageBack || null,
-        selfieImage: selfieImage || null,
+        idNumber: encryptNullable(idNumber)!,
+        idNumberIndex: blindIndex(idNumber),
+        idImageFront: encryptNullable(idImageFront),
+        idImageBack: encryptNullable(idImageBack),
+        selfieImage: encryptNullable(selfieImage),
         status: verifyResult.status,
         provider: adapter.name,
         providerRef: verifyResult.providerRef || null,
@@ -287,7 +314,8 @@ esignRouter.post("/residents/:id/esign", authenticate, authorize("RESIDENTS", "e
         id: newId(),
         residentId,
         documentName,
-        documentBody,
+        // documentBody is encrypted at rest (WS5); decrypted on every read path.
+        documentBody: encryptNullable(documentBody)!,
         signerEmail: signerEmail || resident.email || null,
         signerPhone: signerPhone || resident.phone || null,
         signerToken: token,
@@ -336,7 +364,14 @@ esignRouter.get("/esign/:id", authenticate, authorize("RESIDENTS", "view"), asyn
     const { signerToken: _t, signedPdf: _pdf, ...safeRow } = row;
     res.json({
       success: true,
-      data: { ...safeRow, signerUrl: `${origin}/esign/sign/${row.signerToken}`, events },
+      data: {
+        ...safeRow,
+        // documentBody is encrypted at rest (WS5); decrypt so the admin detail
+        // view sees plaintext exactly as before. Legacy rows pass through.
+        documentBody: decrypt(safeRow.documentBody),
+        signerUrl: `${origin}/esign/sign/${row.signerToken}`,
+        events,
+      },
     });
   } catch (err) {
     req.log.error(err);
@@ -353,7 +388,9 @@ esignRouter.get("/esign/:id/pdf", authenticate, authorize("RESIDENTS", "view"), 
       res.status(404).json({ success: false, error: "No signed PDF available" });
       return;
     }
-    const m = row.signedPdf.match(/^data:application\/pdf;base64,(.+)$/);
+    // Decrypt at rest (WS5); legacy plaintext data URLs pass through unchanged.
+    const signedPdf = decrypt(row.signedPdf) ?? "";
+    const m = signedPdf.match(/^data:application\/pdf;base64,(.+)$/);
     if (!m) {
       res.status(500).json({ success: false, error: "Stored PDF malformed" });
       return;
@@ -406,7 +443,7 @@ esignPublicRouter.get("/sign/:token", async (req, res) => {
         success: true,
         data: {
           documentName: row.documentName,
-          documentBody: row.documentBody,
+          documentBody: decrypt(row.documentBody),
           status: row.status,
           signedAt: row.signedAt,
           signerName: row.signerName,
@@ -439,7 +476,7 @@ esignPublicRouter.get("/sign/:token", async (req, res) => {
       success: true,
       data: {
         documentName: row.documentName,
-        documentBody: row.documentBody,
+        documentBody: decrypt(row.documentBody),
         status: row.status === "PENDING" ? "VIEWED" : row.status,
         expiresAt: row.expiresAt,
       },
@@ -542,7 +579,8 @@ esignPublicRouter.post("/sign/:token", async (req, res) => {
     try {
       const pdfBytes = await buildSignedPdf({
         documentName: row.documentName,
-        documentBody: row.documentBody,
+        // documentBody is stored encrypted (WS5); decrypt before rendering the PDF.
+        documentBody: decrypt(row.documentBody) ?? "",
         signerName,
         signedAt: now,
         signerIp: ip,
@@ -561,7 +599,8 @@ esignPublicRouter.post("/sign/:token", async (req, res) => {
         signatureSvg,
         signerIp: ip,
         signerUserAgent: ua,
-        signedPdf: signedPdfDataUrl,
+        // Encrypt the signed PDF data URL at rest (WS5); decrypted on the stream path.
+        signedPdf: encryptNullable(signedPdfDataUrl),
         updatedAt: now,
       })
       .where(eq(esignRequestsTable.id, row.id))

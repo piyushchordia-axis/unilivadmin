@@ -13,6 +13,7 @@ import { otpChallengesTable, systemConfigTable, usersTable } from "@workspace/db
 import { eq } from "drizzle-orm";
 import { newId } from "./id.js";
 import { notify } from "./notification-service.js";
+import { ALLOW_DEV_OTP, IS_PRODUCTION } from "../config/env.js";
 
 export type OtpPurpose =
   | "LOGIN"
@@ -34,8 +35,6 @@ const OTP_BCRYPT_COST = 10;
 const RESEND_COOLDOWN_MS = 30_000;
 /** TTL for a verification token once a challenge is VERIFIED (independent of OTP TTL). */
 const VERIFICATION_TOKEN_TTL_MS = 15 * 60_000;
-
-const isProd = () => process.env["NODE_ENV"] === "production";
 
 /** Reads numeric config from system_config, tolerating plain or wrapped values. */
 async function readConfig(): Promise<typeof DEFAULTS> {
@@ -138,7 +137,7 @@ export async function createChallenge(args: {
   return {
     challengeId: id,
     maskedPhone: maskPhone(args.phone),
-    ...(isProd() ? {} : { devOtp: code }),
+    ...(ALLOW_DEV_OTP ? { devOtp: code } : {}),
     expiresInSeconds: cfg.ttlMinutes * 60,
   };
 }
@@ -174,7 +173,9 @@ export async function resendChallenge(challengeId: string): Promise<
       codeHash,
       expiresAt,
       resendCount: ch.resendCount + 1,
-      attemptCount: 0,
+      // Attempt budget is cumulative across the whole challenge lifecycle: a
+      // resend issues a new code but does NOT reset attemptCount, so an attacker
+      // cannot reset their guess budget to 0 by repeatedly resending.
       lastSentAt: new Date(),
       status: "PENDING",
     })
@@ -186,7 +187,7 @@ export async function resendChallenge(challengeId: string): Promise<
     ok: true,
     challengeId,
     maskedPhone: maskPhone(ch.phone),
-    ...(isProd() ? {} : { devOtp: code }),
+    ...(ALLOW_DEV_OTP ? { devOtp: code } : {}),
     expiresInSeconds: cfg.ttlMinutes * 60,
     resendsLeft: ch.maxResend - (ch.resendCount + 1),
   };
@@ -216,11 +217,13 @@ export async function verifyChallenge(
     return { ok: false, error: "This code has expired. Please request a new one." };
   }
 
-  // Opt-in dev/staging master OTP: when DEV_OTP is set, that fixed code always
-  // verifies (in addition to the real one). Never set this in real production.
+  // Opt-in development master OTP: when DEV_OTP is set, that fixed code always
+  // verifies (in addition to the real one). Gated on ALLOW_DEV_OTP, which is only
+  // ever true in real development (NODE_ENV=development) with an explicit opt-in,
+  // and is forced false in any hardened (non-development) environment.
   const masterOtp = process.env["DEV_OTP"];
   const valid =
-    (!isProd() && !!masterOtp && String(code) === masterOtp) ||
+    (ALLOW_DEV_OTP && !IS_PRODUCTION && !!masterOtp && String(code) === masterOtp) ||
     (await bcrypt.compare(String(code), ch.codeHash));
   if (!valid) {
     const attempts = ch.attemptCount + 1;

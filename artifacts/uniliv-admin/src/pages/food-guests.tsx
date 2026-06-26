@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { format } from "date-fns";
 import {
   Search, Download, Users, Building2, BedDouble, IndianRupee,
-  UsersRound, ChevronLeft, ChevronRight, FileDown, FileText, MapPin,
+  UsersRound, ChevronLeft, ChevronRight, FileDown, FileText, FileSpreadsheet, MapPin,
 } from "lucide-react";
 import { PageHeader } from "@/components/page-header";
 import { StatCard } from "@/components/stat-card";
@@ -92,7 +92,7 @@ export default function FoodGuests() {
   const meta = guestsRes?.meta;
   const totalPages = Math.max(1, meta?.totalPages ?? 1);
 
-  const [exporting, setExporting] = React.useState<"csv" | "pdf" | null>(null);
+  const [exporting, setExporting] = React.useState<"csv" | "pdf" | "xls" | null>(null);
 
   // Property name embedded in the export filename (and document header server-side).
   const exportFilename = (ext: string) => {
@@ -103,12 +103,14 @@ export default function FoodGuests() {
     return `active-guests${prop}-${format(new Date(), "yyyy-MM-dd")}.${ext}`;
   };
 
-  async function handleExport(kind: "csv" | "pdf") {
+  async function handleExport(kind: "csv" | "pdf" | "xls") {
     const exportParams = { propertyId: propertyId ?? undefined, search: search || undefined };
     setExporting(kind);
     try {
       if (kind === "csv") {
         await apiDownload(foodApi.guestsExportCsvUrl(exportParams), exportFilename("csv"));
+      } else if (kind === "xls") {
+        await apiDownload(foodApi.guestsExportXlsUrl(exportParams), exportFilename("xls"));
       } else {
         await apiDownload(foodApi.guestsExportPdfUrl(exportParams), exportFilename("pdf"));
       }
@@ -134,6 +136,10 @@ export default function FoodGuests() {
         <DropdownMenuItem onClick={() => handleExport("csv")}>
           <FileDown className="h-4 w-4 mr-2 text-muted-foreground" />
           CSV
+        </DropdownMenuItem>
+        <DropdownMenuItem onClick={() => handleExport("xls")}>
+          <FileSpreadsheet className="h-4 w-4 mr-2 text-success" />
+          Excel (.xls)
         </DropdownMenuItem>
         <DropdownMenuItem onClick={() => handleExport("pdf")}>
           <FileText className="h-4 w-4 mr-2 text-destructive" />

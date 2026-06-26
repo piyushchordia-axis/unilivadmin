@@ -480,10 +480,79 @@ function ElectricityTariffsTab({ canEdit }: { canEdit: boolean }) {
   );
 }
 
+// OTP / login-security caps (#5/#6) — SUPER_ADMIN only. Mirrors the system_config
+// keys read live by the OTP service. Bounds match the backend validation.
+const OTP_FIELDS = [
+  { key: "OTP_MAX_ATTEMPTS", label: "Max verification attempts", help: "Wrong-code guesses allowed before a challenge locks.", min: 1, max: 10 },
+  { key: "OTP_MAX_RESEND", label: "Max resends per challenge", help: "How many times a resident can request a new code.", min: 1, max: 10 },
+  { key: "OTP_EXPIRY_MINUTES", label: "Code validity (minutes)", help: "How long an OTP stays valid after it is sent.", min: 1, max: 60 },
+] as const;
+
+function OtpSecurityTab() {
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  const { data } = useQuery<{ data: Record<string, number> }>({
+    queryKey: ["/settings/otp-config"], queryFn: () => apiFetch("/settings/otp-config"),
+  });
+  const [form, setForm] = React.useState<Record<string, string>>({});
+  React.useEffect(() => {
+    if (data?.data) {
+      setForm(Object.fromEntries(OTP_FIELDS.map((f) => [f.key, String(data.data[f.key] ?? "")])));
+    }
+  }, [data]);
+
+  const save = useMutation({
+    mutationFn: () => apiFetch("/settings/otp-config", {
+      method: "PUT",
+      body: JSON.stringify(Object.fromEntries(OTP_FIELDS.map((f) => [f.key, Number(form[f.key])]))),
+    }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["/settings/otp-config"] }); toast({ title: "OTP settings saved" }); },
+    onError: (e: Error) => toast({ title: e.message, variant: "destructive" }),
+  });
+
+  const dirty = !!data?.data && OTP_FIELDS.some((f) => Number(form[f.key]) !== data.data[f.key]);
+  const valid = OTP_FIELDS.every((f) => {
+    const n = Number(form[f.key]);
+    return Number.isInteger(n) && n >= f.min && n <= f.max;
+  });
+
+  return (
+    <Card>
+      <CardHeader><CardTitle>OTP / Login Security</CardTitle></CardHeader>
+      <CardContent className="space-y-4">
+        <p className="text-sm text-muted-foreground">
+          Caps applied to every login and account-recovery OTP challenge. Changes take effect immediately for
+          newly issued codes.
+        </p>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          {OTP_FIELDS.map((f) => (
+            <div key={f.key}>
+              <Label>{f.label}</Label>
+              <Input
+                type="number"
+                min={f.min}
+                max={f.max}
+                value={form[f.key] ?? ""}
+                onChange={(e) => setForm((s) => ({ ...s, [f.key]: e.target.value }))}
+                data-testid={`input-otp-${f.key}`}
+              />
+              <p className="text-xs text-muted-foreground mt-1">{f.help} (Allowed {f.min}–{f.max}.)</p>
+            </div>
+          ))}
+        </div>
+        <Button onClick={() => save.mutate()} disabled={!dirty || !valid || save.isPending} data-testid="button-save-otp-config">
+          {save.isPending ? "Saving…" : "Save OTP Settings"}
+        </Button>
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function Settings() {
-  const { can } = usePermissions();
+  const { can, role } = usePermissions();
   const canEdit = can("SETTINGS", "edit");
   const canEditElectricity = can("ELECTRICITY", "edit");
+  const isSuperAdmin = role === "SUPER_ADMIN";
   return (
     <>
       <PageHeader title="Settings" subtitle="System configuration, integrations, and audit" />
@@ -497,6 +566,7 @@ export default function Settings() {
           <TabsTrigger value="kyc-gate" data-testid="tab-kyc-gate">KYC Gate</TabsTrigger>
           <TabsTrigger value="electricity-tariffs" data-testid="tab-electricity-tariffs">Electricity Tariffs</TabsTrigger>
           <TabsTrigger value="wallet" data-testid="tab-wallet-settings">Wallet</TabsTrigger>
+          {isSuperAdmin && <TabsTrigger value="otp-security" data-testid="tab-otp-security">OTP / Login Security</TabsTrigger>}
         </TabsList>
         <TabsContent value="general"><GeneralTab canEdit={canEdit} /></TabsContent>
         <TabsContent value="sla"><SLATab canEdit={canEdit} /></TabsContent>
@@ -506,6 +576,7 @@ export default function Settings() {
         <TabsContent value="kyc-gate"><KycGateTab canEdit={canEdit} /></TabsContent>
         <TabsContent value="electricity-tariffs"><ElectricityTariffsTab canEdit={canEditElectricity} /></TabsContent>
         <TabsContent value="wallet"><WalletConfigTab canEdit={canEdit} /></TabsContent>
+        {isSuperAdmin && <TabsContent value="otp-security"><OtpSecurityTab /></TabsContent>}
       </Tabs>
     </>
   );

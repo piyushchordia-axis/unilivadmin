@@ -14,6 +14,7 @@ import { authorize } from "../middlewares/authorize.js";
 import { pick } from "../lib/authz.js";
 import { getPagination, buildMeta } from "../lib/paginate.js";
 import { newId } from "../lib/id.js";
+import { csvEsc } from "../lib/export-service.js";
 
 export const leadsRouter: Router = Router();
 
@@ -111,9 +112,9 @@ leadsRouter.get("/export-csv", authenticate, authorize("SALES_LEADS", "view"), a
   try {
     const rows = await db.select().from(leadsTable).orderBy(desc(leadsTable.createdAt));
     const header = ["Name", "Phone", "Email", "Source", "Stage", "Property", "Created"];
-    const lines = [header.join(",")];
+    const lines = [header.map(csvEsc).join(",")];
     for (const l of rows) {
-      lines.push([l.name, l.phone, l.email || "", l.source, l.stage, l.propertyId || "", l.createdAt.toISOString().slice(0, 10)].map((v) => `"${String(v).replace(/"/g, '""')}"`).join(","));
+      lines.push([l.name, l.phone, l.email || "", l.source, l.stage, l.propertyId || "", l.createdAt.toISOString().slice(0, 10)].map(csvEsc).join(","));
     }
     res.setHeader("Content-Type", "text/csv");
     res.setHeader("Content-Disposition", `attachment; filename="leads-${new Date().toISOString().slice(0, 10)}.csv"`);

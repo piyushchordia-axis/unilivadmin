@@ -11,6 +11,19 @@ import { isKycGateEnabled, residentMeetsActivationRequirements } from "./kyc-esi
 
 const router = Router();
 
+// Render typed authz errors (e.g. assertPropertyAccess -> 403) with their
+// intended status instead of letting the generic catch mask them as 500.
+// Returns true if it handled the error.
+function sendAuthzError(err: unknown, res: import("express").Response): boolean {
+  const status = (err as { statusCode?: number } | null)?.statusCode;
+  if (typeof status === "number") {
+    const message = (err as { message?: string }).message || "Forbidden";
+    res.status(status).json({ success: false, error: message });
+    return true;
+  }
+  return false;
+}
+
 async function enrichResident(r: typeof residentsTable.$inferSelect) {
   let propertyName: string | null = null;
   let roomNumber: string | null = null;
@@ -54,6 +67,12 @@ router.get("/", authenticate, authorize("RESIDENTS", "view"), async (req, res) =
 router.post("/", authenticate, authorize("RESIDENTS", "create"), async (req, res) => {
   try {
     const body = req.body;
+    // Property scoping: a scoped caller (WARDEN/UNIT_LEAD) can only create within
+    // their own property; org-wide callers must target a property they may access.
+    const scope = scopedPropertyId(req);
+    if (scope) body.propertyId = scope;
+    if (!body.propertyId) { res.status(400).json({ success: false, error: "propertyId is required" }); return; }
+    assertPropertyAccess(req, body.propertyId);
     const requestedStatus = body.status || "ACTIVE";
     if (requestedStatus === "ACTIVE" && (await isKycGateEnabled())) {
       res.status(400).json({
@@ -88,6 +107,7 @@ router.post("/", authenticate, authorize("RESIDENTS", "create"), async (req, res
     }).returning();
     res.status(201).json({ success: true, data: await enrichResident(row) });
   } catch (err) {
+    if (sendAuthzError(err, res)) return;
     req.log.error(err);
     res.status(500).json({ success: false, error: "Internal server error" });
   }
@@ -100,6 +120,7 @@ router.get("/:id", authenticate, authorize("RESIDENTS", "view"), async (req, res
     assertPropertyAccess(req, row.propertyId);
     res.json({ success: true, data: await enrichResident(row) });
   } catch (err) {
+    if (sendAuthzError(err, res)) return;
     req.log.error(err);
     res.status(500).json({ success: false, error: "Internal server error" });
   }
@@ -117,6 +138,11 @@ router.put("/:id", authenticate, authorize("RESIDENTS", "edit"), async (req, res
       "checkInDate", "checkOutDate", "planType", "monthlyRent", "securityDeposit",
       "roomId", "status", "propertyId",
     ]);
+    // Block a scoped warden from moving a resident into another property: the
+    // target propertyId (when changed) must also be within their scope.
+    if (body.propertyId !== undefined && body.propertyId !== existing.propertyId) {
+      assertPropertyAccess(req, body.propertyId);
+    }
     if (body?.status === "ACTIVE" && (await isKycGateEnabled())) {
       const check = await residentMeetsActivationRequirements(req.params["id"]!);
       if (!check.ok) {
@@ -134,6 +160,7 @@ router.put("/:id", authenticate, authorize("RESIDENTS", "edit"), async (req, res
     if (!row) { res.status(404).json({ success: false, error: "Not found" }); return; }
     res.json({ success: true, data: await enrichResident(row) });
   } catch (err) {
+    if (sendAuthzError(err, res)) return;
     req.log.error(err);
     res.status(500).json({ success: false, error: "Internal server error" });
   }
@@ -147,6 +174,7 @@ router.delete("/:id", authenticate, authorize("RESIDENTS", "delete"), async (req
     await db.delete(residentsTable).where(eq(residentsTable.id, req.params["id"]!));
     res.json({ success: true, message: "Deleted" });
   } catch (err) {
+    if (sendAuthzError(err, res)) return;
     req.log.error(err);
     res.status(500).json({ success: false, error: "Internal server error" });
   }
@@ -155,9 +183,13 @@ router.delete("/:id", authenticate, authorize("RESIDENTS", "delete"), async (req
 // Ledger
 router.get("/:id/ledger", authenticate, authorize("RESIDENTS", "view"), async (req, res) => {
   try {
+    const [resident] = await db.select().from(residentsTable).where(eq(residentsTable.id, req.params["id"]!));
+    if (!resident) { res.status(404).json({ success: false, error: "Not found" }); return; }
+    assertPropertyAccess(req, resident.propertyId);
     const rows = await db.select().from(ledgerEntriesTable).where(eq(ledgerEntriesTable.residentId, req.params["id"]!)).orderBy(ledgerEntriesTable.createdAt);
     res.json({ success: true, data: rows.map(r => ({ ...r, amount: Number(r.amount) })) });
   } catch (err) {
+    if (sendAuthzError(err, res)) return;
     req.log.error(err);
     res.status(500).json({ success: false, error: "Internal server error" });
   }
@@ -165,6 +197,9 @@ router.get("/:id/ledger", authenticate, authorize("RESIDENTS", "view"), async (r
 
 router.post("/:id/ledger", authenticate, authorize("RESIDENTS", "edit"), async (req, res) => {
   try {
+    const [resident] = await db.select().from(residentsTable).where(eq(residentsTable.id, req.params["id"]!));
+    if (!resident) { res.status(404).json({ success: false, error: "Not found" }); return; }
+    assertPropertyAccess(req, resident.propertyId);
     const body = req.body;
     if (body?.amount == null || Number.isNaN(Number(body.amount))) {
       res.status(400).json({ success: false, error: "amount is required and must be a number" });
@@ -184,6 +219,7 @@ router.post("/:id/ledger", authenticate, authorize("RESIDENTS", "edit"), async (
     }).returning();
     res.status(201).json({ success: true, data: { ...row, amount: Number(row.amount) } });
   } catch (err) {
+    if (sendAuthzError(err, res)) return;
     req.log.error(err);
     res.status(500).json({ success: false, error: "Internal server error" });
   }
@@ -192,9 +228,13 @@ router.post("/:id/ledger", authenticate, authorize("RESIDENTS", "edit"), async (
 // Payments
 router.get("/:id/payments", authenticate, authorize("RESIDENTS", "view"), async (req, res) => {
   try {
+    const [resident] = await db.select().from(residentsTable).where(eq(residentsTable.id, req.params["id"]!));
+    if (!resident) { res.status(404).json({ success: false, error: "Not found" }); return; }
+    assertPropertyAccess(req, resident.propertyId);
     const rows = await db.select().from(paymentsTable).where(eq(paymentsTable.residentId, req.params["id"]!)).orderBy(paymentsTable.createdAt);
     res.json({ success: true, data: rows.map(r => ({ ...r, amount: Number(r.amount) })) });
   } catch (err) {
+    if (sendAuthzError(err, res)) return;
     req.log.error(err);
     res.status(500).json({ success: false, error: "Internal server error" });
   }
@@ -202,6 +242,9 @@ router.get("/:id/payments", authenticate, authorize("RESIDENTS", "view"), async 
 
 router.post("/:id/payments", authenticate, authorize("RESIDENTS", "edit"), async (req, res) => {
   try {
+    const [resident] = await db.select().from(residentsTable).where(eq(residentsTable.id, req.params["id"]!));
+    if (!resident) { res.status(404).json({ success: false, error: "Not found" }); return; }
+    assertPropertyAccess(req, resident.propertyId);
     const body = req.body;
     if (body?.amount == null || Number.isNaN(Number(body.amount))) {
       res.status(400).json({ success: false, error: "amount is required and must be a number" });
@@ -219,6 +262,7 @@ router.post("/:id/payments", authenticate, authorize("RESIDENTS", "edit"), async
     }).returning();
     res.status(201).json({ success: true, data: { ...row, amount: Number(row.amount) } });
   } catch (err) {
+    if (sendAuthzError(err, res)) return;
     req.log.error(err);
     res.status(500).json({ success: false, error: "Internal server error" });
   }
@@ -271,6 +315,7 @@ router.post("/:id/checkout", authenticate, authorize("RESIDENTS", "edit"), async
     const [row] = await db.select().from(residentsTable).where(eq(residentsTable.id, residentId));
     res.json({ success: true, data: await enrichResident(row!) });
   } catch (err) {
+    if (sendAuthzError(err, res)) return;
     req.log.error(err);
     res.status(500).json({ success: false, error: "Internal server error" });
   }
@@ -305,6 +350,7 @@ router.post("/bulk-rent", authenticate, authorize("RESIDENTS", "edit"), async (r
     }
     res.json({ success: true, data: { success, failed, total: activeResidents.length, month: monthLabel } });
   } catch (err) {
+    if (sendAuthzError(err, res)) return;
     req.log.error(err);
     res.status(500).json({ success: false, error: "Internal server error" });
   }
