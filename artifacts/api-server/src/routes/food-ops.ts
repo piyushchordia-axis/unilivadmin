@@ -55,6 +55,7 @@ import {
 import { notify, notifyOrderEvent } from "../lib/notification-service.js";
 import { toCsv, toPdf, toXls, fmtDate, fmtDateTime, fileDateStamp, sanitizeForFilename } from "../lib/export-service.js";
 import { blindIndex } from "../lib/field-crypto.js";
+import { istDayYmd, addDaysYmd, atIst } from "../lib/tz.js";
 import { z } from "zod";
 
 export const foodOpsRouter: Router = Router();
@@ -100,14 +101,16 @@ function parseDate(v: unknown): Date | undefined {
 function isAccessible(propertyId: string, ids: string[] | null): boolean {
   return ids === null || ids.includes(propertyId);
 }
-/** Sets `HH:MM` time-of-day onto a copy of `base`. */
+/**
+ * Absolute instant for the IST wall-clock `HH:MM` on the IST CALENDAR day that
+ * `base` falls on. Anchored to Asia/Kolkata (fixed UTC+5:30) so the result is the
+ * same correct instant regardless of the server/process timezone.
+ */
 function atTime(base: Date, hhmm: string | null | undefined): Date | null {
   if (!hhmm) return null;
   const [h, m] = hhmm.split(":").map(Number);
   if (h == null || isNaN(h)) return null;
-  const d = new Date(base);
-  d.setHours(h, m || 0, 0, 0);
-  return d;
+  return atIst(istDayYmd(base), `${String(h).padStart(2, "0")}:${String(m || 0).padStart(2, "0")}`);
 }
 
 /** Resolves the applicable meal window (property override → global default). */
@@ -156,22 +159,24 @@ export async function checkOrderCutoff(
   serviceDate: Date,
 ): Promise<string | null> {
   const now = new Date();
-  // 1) No ordering for a day that has already gone by.
-  const today = new Date(now); today.setHours(0, 0, 0, 0);
-  const serviceDay = new Date(serviceDate); serviceDay.setHours(0, 0, 0, 0);
-  if (serviceDay.getTime() < today.getTime()) {
+  // The serviceDate is an IST CALENDAR date. All comparisons below are done on
+  // IST wall-clock days / IST-anchored instants so cut-off logic is correct
+  // regardless of the server/process timezone.
+  const serviceYmd = istDayYmd(serviceDate);
+  const todayYmd = istDayYmd(now);
+  // 1) No ordering for a day that has already gone by (IST calendar comparison).
+  if (serviceYmd < todayYmd) {
     return "Cannot place an order for a past date.";
   }
   // 2) Once the resolved cut-off passes, ordering is closed. The cut-off deadline
   //    is anchored on the DAY BEFORE the service date: an order for tomorrow must
-  //    be placed by today's cut-off time (atTime(serviceDate - 1 day, cutoffTime)).
+  //    be placed by today's cut-off time (atIst(serviceDate - 1 day, cutoffTime)).
   const cutoffTime = await resolveCutoff(brand, propertyId);
-  const prevDay = new Date(serviceDate);
-  prevDay.setDate(prevDay.getDate() - 1);
-  const cutoffAt = cutoffTime ? atTime(prevDay, cutoffTime) : null;
+  const prevDayYmd = addDaysYmd(serviceYmd, -1);
+  const cutoffAt = cutoffTime ? atIst(prevDayYmd, cutoffTime) : null;
   if (cutoffAt && now > cutoffAt) {
-    const d = serviceDay;
-    const label = `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}/${d.getFullYear()}`;
+    const [y, m, d] = serviceYmd.split("-");
+    const label = `${d}/${m}/${y}`;
     return `Ordering for ${label} is closed — the ${cutoffTime} cut-off has passed.`;
   }
   return null;
@@ -369,10 +374,11 @@ foodOpsRouter.get("/cutoffs", authenticate, async (req, res) => {
     // Single cut-off for ALL meals that day (property override → brand default).
     // The deadline is anchored on the DAY BEFORE the service date, matching
     // server-side enforcement in checkOrderCutoff (order tomorrow by today's cut-off).
+    // serviceDate is an IST calendar date; anchor the deadline to the IST
+    // wall-clock cut-off on the DAY BEFORE so it matches checkOrderCutoff.
     const cutoffTime = await resolveCutoff(brand, propertyId);
-    const cutoffDay = new Date(date);
-    cutoffDay.setDate(cutoffDay.getDate() - 1);
-    const cutoffAt = cutoffTime ? atTime(cutoffDay, cutoffTime) : null;
+    const prevDayYmd = addDaysYmd(istDayYmd(date), -1);
+    const cutoffAt = cutoffTime ? atIst(prevDayYmd, cutoffTime) : null;
     const isPastCutoff = cutoffAt ? now > cutoffAt : false;
 
     // Each meal keeps its own service time (for ETAs); the cut-off is shared.
@@ -1705,6 +1711,13 @@ foodOpsRouter.get("/my-properties", authenticate, authorize("FOOD_DASHBOARD", "v
       pendingByProp.set(r.propertyId, e);
     }
 
+    // All-time delivered-order counts per property (for the "delivered" chip).
+    const deliveredRows = await db.select({ propertyId: foodOrdersTable.propertyId, c: sql<number>`count(*)::int` })
+      .from(foodOrdersTable)
+      .where(and(inArray(foodOrdersTable.propertyId, propIds), eq(foodOrdersTable.status, "DELIVERED" as never)))
+      .groupBy(foodOrdersTable.propertyId);
+    const deliveredByProp = new Map(deliveredRows.map((r) => [r.propertyId, r.c]));
+
     const data = props.map((p) => {
       const active = guestCount.get(p.id) ?? 0;
       const pend = pendingByProp.get(p.id) ?? { active: 0, awaitingDelivery: 0 };
@@ -1715,6 +1728,7 @@ foodOpsRouter.get("/my-properties", authenticate, authorize("FOOD_DASHBOARD", "v
         occupancyPct: p.totalBeds ? Math.round((active / p.totalBeds) * 100) : 0,
         monthlyRevenue: revByProp.get(p.id) ?? 0,
         activeOrders: pend.active, awaitingDelivery: pend.awaitingDelivery,
+        deliveredCount: deliveredByProp.get(p.id) ?? 0,
         configured: Boolean(p.brand && p.kitchenId),
       };
     });

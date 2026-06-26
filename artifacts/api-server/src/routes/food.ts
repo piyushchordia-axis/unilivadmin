@@ -37,7 +37,7 @@ import {
   foodDispatchesTable,
   foodBrandsTable,
 } from "@workspace/db";
-import { and, eq, or, ilike, sql, desc, asc, gte, lte, inArray, isNull, isNotNull } from "drizzle-orm";
+import { and, eq, or, ilike, sql, desc, asc, gte, lte, lt, inArray, isNull, isNotNull } from "drizzle-orm";
 import type { AnyColumn } from "drizzle-orm";
 import { z } from "zod";
 import { authenticate } from "../middlewares/auth.js";
@@ -66,6 +66,7 @@ import { toCsv, toPdf, fmtDate, fmtDateTime, fileDateStamp, sanitizeForFilename 
 // Shared order cut-off enforcement (single source of truth lives in food-ops.ts,
 // alongside resolveCutoff()/atTime()) so /orders and /order-batches stay consistent.
 import { checkOrderCutoff } from "./food-ops.js";
+import { ymdToIstDayStart } from "../lib/tz.js";
 
 export const foodRouter: Router = Router();
 
@@ -86,6 +87,21 @@ const FOOD_USER_ROLES = [
 function parseDate(v: unknown): Date | undefined {
   if (!v) return undefined;
   const d = new Date(String(v));
+  return isNaN(d.getTime()) ? undefined : d;
+}
+
+/**
+ * Parses an order serviceDate as an IST CALENDAR date. A bare 'yyyy-MM-dd' is
+ * anchored to 00:00 IST on that day (NOT host-local / UTC midnight) so the stored
+ * serviceDate and the cut-off compare both reflect the intended IST day; values
+ * that already carry a time component are passed through unchanged. Returns
+ * undefined for blank/invalid input.
+ */
+function parseServiceDate(v: unknown): Date | undefined {
+  if (v == null || v === "") return undefined;
+  const s = String(v);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return ymdToIstDayStart(s);
+  const d = new Date(s);
   return isNaN(d.getTime()) ? undefined : d;
 }
 
@@ -333,14 +349,27 @@ foodRouter.get("/orders", authenticate, authorize("FOOD_ALL_ORDERS", "view"), as
     const status = req.query["status"] as string | undefined;
     const from = parseDate(req.query["from"]);
     const to = parseDate(req.query["to"]);
+    // Exact-match service-date filter (yyyy-MM-dd). serviceDate is a timestamp
+    // anchored to IST day-start, so match the half-open IST day window.
+    const serviceDate = req.query["serviceDate"] as string | undefined;
     const propertyId = req.query["propertyId"] as string | undefined;
     const brand = req.query["brand"] as string | undefined;
     const mealType = req.query["mealType"] as string | undefined;
     const search = req.query["search"] as string | undefined;
 
+    // status accepts a single value or a CSV of statuses.
+    const statuses = status ? status.split(",").map((s) => s.trim()).filter(Boolean) : [];
+
     const conds = [] as ReturnType<typeof eq>[];
     if (scope) conds.push(scope);
-    if (status) conds.push(eq(foodOrdersTable.status, status as never));
+    if (statuses.length === 1) conds.push(eq(foodOrdersTable.status, statuses[0] as never));
+    else if (statuses.length > 1) conds.push(inArray(foodOrdersTable.status, statuses as never[]));
+    if (serviceDate && /^\d{4}-\d{2}-\d{2}$/.test(serviceDate)) {
+      const dayStart = ymdToIstDayStart(serviceDate);
+      const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
+      conds.push(gte(foodOrdersTable.serviceDate, dayStart));
+      conds.push(lt(foodOrdersTable.serviceDate, dayEnd));
+    }
     if (from) conds.push(gte(foodOrdersTable.serviceDate, from));
     if (to) conds.push(lte(foodOrdersTable.serviceDate, to));
     if (propertyId) conds.push(eq(foodOrdersTable.propertyId, propertyId));
@@ -392,8 +421,10 @@ foodRouter.post("/orders", authenticate, authorize("FOOD_PLACE_ORDER", "create")
     if (!(MEAL_TYPES as readonly string[]).includes(mealType)) { res.status(400).json({ success: false, error: `Invalid mealType: ${mealType}` }); return; }
     const qty = Number(quantity);
     if (!Number.isFinite(qty) || qty <= 0) { res.status(400).json({ success: false, error: "quantity must be a positive number" }); return; }
-    const sd = new Date(serviceDate);
-    if (isNaN(sd.getTime())) { res.status(400).json({ success: false, error: "Invalid serviceDate" }); return; }
+    // serviceDate is an IST calendar date; anchor a bare 'yyyy-MM-dd' to IST so
+    // the cut-off compare (in checkOrderCutoff) is correct regardless of host tz.
+    const sd = parseServiceDate(serviceDate);
+    if (!sd) { res.status(400).json({ success: false, error: "Invalid serviceDate" }); return; }
 
     const ids = await resolveAccessiblePropertyIds(req.user!);
     if (!isAccessible(propertyId, ids)) { res.status(403).json({ success: false, error: "Property not accessible" }); return; }

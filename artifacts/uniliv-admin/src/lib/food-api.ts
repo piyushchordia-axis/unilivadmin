@@ -173,9 +173,15 @@ export interface City { id: string; name: string; zoneId: string | null; isActiv
 export interface Cluster { id: string; name: string; cityId: string; managerId: string | null; isActive: boolean }
 export interface UserScope { id: string; userId: string; scopeLevel: string; zoneId: string | null; cityId: string | null; clusterId: string | null; kitchenId: string | null; propertyId: string | null }
 export interface FoodUser { id: string; name: string; email: string; role: string; propertyId: string | null }
+/** Assignable unit-leads (UNIT_LEAD/WARDEN) for the property form's tag multi-select. */
+export interface AssignableUnitLead { id: string; name: string; email: string; role: string; propertyId: string | null }
 export interface FoodBrandRow { id: string; code: string; name: string; isActive: boolean }
 /** Result of resolving a kitchen from a pincode. `kitchenId` is null when no kitchen serves it. */
 export interface KitchenByPincode { kitchenId: string | null; kitchenName?: string; kitchenCode?: string }
+/** Forward geocode (address text → coordinates). */
+export interface GeocodeForward { lat: number; lon: number; displayName: string }
+/** Reverse geocode (coordinates → formatted address + pincode). */
+export interface GeocodeReverse { displayName: string; address: string; pincode: string }
 export interface FoodLookups {
   properties: { id: string; name: string; brand: string | null; kitchenId: string | null; clusterId: string | null }[];
   deliveryPartners: { id: string; name: string }[];
@@ -239,7 +245,7 @@ export interface MyPropertyCard {
   id: string; name: string; city: string | null; brand: string | null;
   kitchenId: string | null; kitchenName: string | null;
   totalBeds: number; occupied: number; activeGuests: number; occupancyPct: number; monthlyRevenue: number;
-  activeOrders: number; awaitingDelivery: number; configured: boolean;
+  activeOrders: number; awaitingDelivery: number; deliveredCount: number; configured: boolean;
 }
 export interface RevenueData { months: { month: string; total: number }[] }
 export interface FullMenuMeal { mealType: MealType; label: string; dishes: { dishId: string; dishName: string; component: string; unit: string; slotLabel: string | null; sortOrder: number }[] }
@@ -312,6 +318,8 @@ export const foodKeys = {
   clusters: (cityId?: string) => ["food", "clusters", cityId ?? "all"] as const,
   scopes: (userId?: string) => ["food", "scopes", userId ?? "all"] as const,
   users: () => ["food", "users"] as const,
+  assignableUnitLeads: () => ["properties", "assignable-unit-leads"] as const,
+  propertyDetail: (id: string) => ["properties", "detail", id] as const,
   lookups: () => ["food", "lookups"] as const,
   brands: (p: Record<string, unknown> = {}) => ["food", "brands", p] as const,
   hierarchy: () => ["food", "hierarchy"] as const,
@@ -352,6 +360,8 @@ export const foodApi = {
   reportsExportUrl: (p: Record<string, unknown> = {}) => `/api/food/reports/export${qs(p)}`,
 
   // Orders
+  // Optional filters: serviceDate (exact "yyyy-MM-dd"), status (single e.g. "PLACED"
+  // or CSV e.g. "PLACED,PREPARING"), plus propertyId/brand/mealType/from/to/search/page/limit.
   listOrders: (p: Record<string, unknown> = {}) =>
     apiFetch<Envelope<FoodOrder[]>>(`/food/orders${qs(p)}`),
   getOrder: (id: string) =>
@@ -380,9 +390,21 @@ export const foodApi = {
   kitchenByPincode: (pincode: string) =>
     apiFetch<Envelope<KitchenByPincode>>(`/food/kitchen-by-pincode${qs({ pincode })}`).then((r) => r.data),
 
+  // Bidirectional geocoding (server-side via OSM/Nominatim; provider-swappable).
+  // forward: address text → coordinates; reverse: coordinates → address + pincode.
+  geocodeForward: (q: string) =>
+    apiFetch<Envelope<GeocodeForward>>(`/geocode/forward${qs({ q })}`).then((r) => r.data),
+  geocodeReverse: (lat: number, lon: number) =>
+    apiFetch<Envelope<GeocodeReverse>>(`/geocode/reverse${qs({ lat, lon })}`).then((r) => r.data),
+
   // Lookups + master data
   lookups: () => apiFetch<Envelope<FoodLookups>>(`/food/lookups`).then((r) => r.data),
   foodUsers: () => apiFetch<Envelope<FoodUser[]>>(`/food/food-users`).then((r) => r.data),
+  // Unit-leads taggable to a property (property-form multi-select; /properties scope).
+  assignableUnitLeads: () => apiFetch<Envelope<AssignableUnitLead[]>>(`/properties/assignable-unit-leads`).then((r) => r.data),
+  // Property detail incl. form-prefill extras (tagged unit-leads + cut-off override).
+  propertyDetail: (id: string) =>
+    apiFetch<Envelope<{ code: string | null; unitLeadIds: string[]; cutoffTime: string | null }>>(`/properties/${id}`).then((r) => r.data),
 
   // Brands master (admin-managed list)
   listBrands: (p: Record<string, unknown> = {}) => apiFetch<Envelope<FoodBrandRow[]>>(`/food/brands${qs(p)}`).then((r) => r.data),

@@ -86,6 +86,12 @@ cp .env.docker.example .env.docker
 > `PGHOST=/var/run/postgresql PGUSER=admin PGPASSWORD=… PGDATABASE=uniliv`
 > (no encoding needed). Both are wired through to the api + tools containers.
 
+> **Timezone — keep `TZ=Asia/Kolkata`.** The deployed `.env.docker` **must** set
+> `TZ=Asia/Kolkata` (it ships set in `.env.docker.example`). The app's date logic —
+> most importantly the food Place-Order cut-off — anchors to IST in code regardless
+> of the host clock, so this is defense-in-depth: it keeps the container's wall
+> clock (logs, any host-local `Date` math) in IST too. Do not change it.
+
 ## 3. Build
 
 ```bash

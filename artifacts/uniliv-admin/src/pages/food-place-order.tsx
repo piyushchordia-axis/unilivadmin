@@ -95,6 +95,13 @@ export default function FoodPlaceOrder() {
   // Success state (shown after a batch is placed).
   const [placed, setPlaced] = React.useState<{ batch: OrderBatch; orders: FoodOrder[] } | null>(null);
 
+  // po4 — when an order already exists for tomorrow we lead with an "already placed"
+  // panel instead of the builder. "Place another order" reveals the builder anyway.
+  const [showBuilder, setShowBuilder] = React.useState(false);
+  // Set once the user places in THIS session, so we never bounce them back to the
+  // "already placed" panel after a successful batch.
+  const [placedThisSession, setPlacedThisSession] = React.useState(false);
+
   const [shareOpen, setShareOpen] = React.useState(false);
   const [shareLink, setShareLink] = React.useState<string | null>(null);
 
@@ -159,6 +166,30 @@ export default function FoodPlaceOrder() {
     setActiveMeal(preview.meals[0]?.mealType ?? "");
   }, [preview]);
 
+  // ── po4 — existing orders for this property + tomorrow's service date ──
+  // An order is "already placed" if it is NOT CANCELLED and NOT REJECTED.
+  const { data: existingRes } = useQuery({
+    queryKey: foodKeys.orders({ propertyId, serviceDate: dateStr, scope: "place-order" }),
+    queryFn: () => foodApi.listOrders({
+      propertyId, serviceDate: dateStr,
+      status: "PLACED,PREPARING,DISPATCHED,DELIVERED",
+    }),
+    enabled: !!propertyId,
+  });
+  const existingOrders = existingRes?.data ?? [];
+  const hasExistingOrders = existingOrders.length > 0;
+
+  // Switching property re-evaluates from scratch: collapse the builder and forget
+  // the "placed this session" flag so the other property's existing orders show.
+  React.useEffect(() => {
+    setShowBuilder(false);
+    setPlacedThisSession(false);
+  }, [propertyId]);
+
+  // Show the "already placed" panel when orders exist, the user hasn't placed in
+  // this session, and they haven't explicitly opted into "place another order".
+  const showAlreadyPlaced = hasExistingOrders && !placedThisSession && !showBuilder;
+
   // ── Live full-day menu (for download / share on the success state) ──
   const { data: fullMenu, isLoading: menuLoading } = useQuery({
     queryKey: foodKeys.fullMenu({ propertyId, date: dateStr }),
@@ -201,6 +232,7 @@ export default function FoodPlaceOrder() {
       qc.invalidateQueries({ queryKey: ["food"] });
       const n = res?.orders?.length ?? selection.mealCount;
       toast({ title: `${n} order${n === 1 ? "" : "s"} placed`, description: `${selectedProperty?.name ?? "Property"} • ${brand} • ${dateLabel}` });
+      setPlacedThisSession(true);
       setPlaced({ batch: res.batch, orders: res.orders });
     },
     onError: (e: any) => toast({ title: e?.message || "Failed to place order", variant: "destructive" }),
@@ -384,12 +416,12 @@ export default function FoodPlaceOrder() {
   const MenuDownloadButton = () => (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button type="button" variant="outline" size="sm" disabled={menuLoading || !hasMenu}>
+        <Button type="button" variant="outline" size="sm" disabled={menuLoading || !hasMenu} className="w-[164px] justify-start">
           <Download className="mr-2 h-4 w-4" /> Download menu
-          <ChevronDown className="ml-1.5 h-3.5 w-3.5 opacity-60" />
+          <ChevronDown className="ml-auto h-3.5 w-3.5 opacity-60" />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start">
+      <DropdownMenuContent align="end" sideOffset={6}>
         <DropdownMenuItem onClick={downloadMenuPdf}>
           <FileText className="mr-2 h-4 w-4" /> Download PDF
         </DropdownMenuItem>
@@ -507,13 +539,6 @@ export default function FoodPlaceOrder() {
         title="Place Order"
         subtitle="Set the headcount once — quantities are calculated for every dish."
         breadcrumbs={[{ label: "Food", href: "/food/orders" }, { label: "Place Order" }]}
-        action={
-          <Button onClick={handlePlace} disabled={saving || !canPlace || orderingClosed || selection.mealCount === 0} size="lg">
-            {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <UtensilsCrossed className="mr-2 h-4 w-4" />}
-            Place order
-            {selection.itemCount > 0 && <Badge variant="secondary" className="ml-2 bg-white/20 text-white border-0">{selection.itemCount}</Badge>}
-          </Button>
-        }
       />
 
       {/* ── Cut-off banner ── */}
@@ -536,7 +561,60 @@ export default function FoodPlaceOrder() {
         </div>
       ) : null}
 
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+      {/* ── po4 — "Order already placed for tomorrow" panel (instead of leading with the builder) ── */}
+      {showAlreadyPlaced && (
+        <div className="mx-auto w-full max-w-2xl space-y-4">
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base font-display flex items-center gap-2">
+                <CheckCircle2 className="h-5 w-5 text-success" /> Order already placed for tomorrow
+              </CardTitle>
+              <CardDescription>
+                {selectedProperty?.name ?? "This property"} already has {existingOrders.length} order{existingOrders.length === 1 ? "" : "s"} for {dateLabel}. Track or edit them below.
+              </CardDescription>
+            </CardHeader>
+            <Separator />
+            <CardContent className="p-0">
+              <ul className="divide-y">
+                {existingOrders.map((o) => {
+                  const editable = o.status === "PLACED" || o.status === "PREPARING";
+                  return (
+                    <li key={o.id} className="flex items-center gap-3 px-4 py-3">
+                      <Soup className="h-4 w-4 shrink-0 text-accent" />
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-medium">{MEAL_LABEL[o.mealType] ?? o.mealType}</p>
+                        <p className="truncate font-mono text-xs text-muted-foreground">{o.orderNumber}</p>
+                      </div>
+                      <StatusBadge status={o.status} />
+                      {editable && (
+                        <Button asChild variant="ghost" size="sm">
+                          <Link href={`/food/orders/${o.id}`}>
+                            <Pencil className="mr-1.5 h-3.5 w-3.5" /> Edit
+                          </Link>
+                        </Button>
+                      )}
+                      <Button asChild variant="outline" size="sm">
+                        <Link href={`/food/orders/${o.id}`}>
+                          <Truck className="mr-1.5 h-3.5 w-3.5" /> Track
+                        </Link>
+                      </Button>
+                    </li>
+                  );
+                })}
+              </ul>
+            </CardContent>
+          </Card>
+
+          {/* Secondary action — place an additional order via the existing builder */}
+          <div className="flex items-center justify-end">
+            <Button type="button" variant="outline" size="sm" onClick={() => setShowBuilder(true)} disabled={orderingClosed}>
+              Place another order <ArrowRight className="ml-1.5 h-3.5 w-3.5" />
+            </Button>
+          </div>
+        </div>
+      )}
+
+      <div className={cn("grid grid-cols-1 lg:grid-cols-12 gap-6 items-start", showAlreadyPlaced && "hidden")}>
         {/* ── Left: builder ── */}
         <div className="lg:col-span-7 space-y-5">
           {/* Service context — compact */}
@@ -605,7 +683,7 @@ export default function FoodPlaceOrder() {
                   </button>
                 )}
                 <span className="ml-auto inline-flex items-center gap-1.5 text-xs text-muted-foreground">
-                  <Zap className="h-3.5 w-3.5 text-accent" /> quantities update live
+                  <Zap className="h-3.5 w-3.5 text-accent" /> quantities are updated live
                 </span>
               </div>
             </CardContent>
@@ -769,6 +847,7 @@ export default function FoodPlaceOrder() {
                   <Button onClick={handlePlace} disabled={saving || !canPlace || orderingClosed}>
                     {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <UtensilsCrossed className="mr-2 h-4 w-4" />}
                     Place order
+                    {selection.itemCount > 0 && <Badge variant="secondary" className="ml-2 bg-white/20 text-white border-0">{selection.itemCount}</Badge>}
                   </Button>
                 </div>
               </>

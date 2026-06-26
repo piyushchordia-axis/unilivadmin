@@ -1,9 +1,9 @@
 import * as React from "react";
 import { useLocation } from "wouter";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { format } from "date-fns";
 import {
-  Plus, Search, Utensils, Package, CheckCircle2, XCircle, Truck, Clock, Ban, Pencil,
+  Plus, Search, Utensils, CheckCircle2, Truck, Clock, Pencil,
 } from "lucide-react";
 import { DataTable } from "@/components/data-table";
 import { PageHeader } from "@/components/page-header";
@@ -14,18 +14,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { DatePicker } from "@/components/ui/date-picker";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
-import { Separator } from "@/components/ui/separator";
-import { Skeleton } from "@/components/ui/skeleton";
-import { FormModal } from "@/components/ui/form-modal";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
-import { useToast } from "@/hooks/use-toast";
 import {
   foodApi, foodKeys, MEAL_TYPES, BRANDS, ORDER_STATUSES, MEAL_LABEL, fmtQty,
-  type FoodOrder, type OrderStatus, type OrderDetail, type FoodOrderEvent,
+  type FoodOrder,
 } from "@/lib/food-api";
 import { useQueryParam } from "@/lib/nav-helpers";
 
@@ -34,18 +28,20 @@ const ALL = "ALL";
 export default function FoodOrders() {
   const [, setLocation] = useLocation();
   const paramProperty = useQueryParam("propertyId");
+  const paramStatus = useQueryParam("status");
 
-  const [status, setStatus] = React.useState<string>(ALL);
+  const [status, setStatus] = React.useState<string>(paramStatus || ALL);
   const [propertyId, setPropertyId] = React.useState<string>(paramProperty || ALL);
   // When navigated here scoped to a property (?propertyId=), apply that filter.
   React.useEffect(() => { if (paramProperty) setPropertyId(paramProperty); }, [paramProperty]);
+  // Deep-link can also pre-apply a status filter (e.g. ?status=DELIVERED).
+  React.useEffect(() => { if (paramStatus) setStatus(paramStatus); }, [paramStatus]);
   const [brand, setBrand] = React.useState<string>(ALL);
   const [mealType, setMealType] = React.useState<string>(ALL);
   const [from, setFrom] = React.useState<string>("");
   const [to, setTo] = React.useState<string>("");
   const [searchInput, setSearchInput] = React.useState<string>("");
   const [search, setSearch] = React.useState<string>("");
-  const [detailId, setDetailId] = React.useState<string | null>(null);
 
   // Debounce search by orderNumber.
   React.useEffect(() => {
@@ -140,10 +136,10 @@ export default function FoodOrders() {
       cell: ({ row }: any) => <span className="tabular-nums">{fmtQty(row.original.totalQuantity)}</span>,
     },
     {
-      accessorKey: "serviceDate",
-      header: "Date",
+      accessorKey: "createdAt",
+      header: "Placed at Date",
       cell: ({ row }: any) =>
-        row.original.serviceDate ? format(new Date(row.original.serviceDate), "dd MMM yyyy") : "—",
+        row.original.createdAt ? format(new Date(row.original.createdAt), "dd MMM yyyy") : "—",
     },
     {
       accessorKey: "status",
@@ -252,224 +248,12 @@ export default function FoodOrders() {
         columns={cols as any}
         data={orders}
         isLoading={isLoading}
-        onRowClick={(row: any) => setDetailId(row.id)}
+        onRowClick={(row: any) => setLocation(`/food/orders/${row.id}`)}
         exportFilename="food-orders"
         exportTitle="Food Orders"
         exportFormats="csv+pdf"
         exportPropertyName={scopedPropertyName}
       />
-
-      <OrderDetailSheet id={detailId} onClose={() => setDetailId(null)} propName={propName} />
     </div>
-  );
-}
-
-function MetaItem({ label, value }: { label: string; value: React.ReactNode }) {
-  return (
-    <div>
-      <p className="text-muted-foreground text-xs uppercase tracking-wider">{label}</p>
-      <p className="font-medium mt-0.5">{value ?? "—"}</p>
-    </div>
-  );
-}
-
-function OrderDetailSheet({
-  id, onClose, propName,
-}: {
-  id: string | null;
-  onClose: () => void;
-  propName: (id?: string | null) => string;
-}) {
-  const qc = useQueryClient();
-  const { toast } = useToast();
-  const [cancelOpen, setCancelOpen] = React.useState(false);
-  const [cancelReason, setCancelReason] = React.useState("");
-
-  const { data: order, isLoading } = useQuery<OrderDetail>({
-    queryKey: foodKeys.order(id ?? ""),
-    queryFn: () => foodApi.getOrder(id as string),
-    enabled: !!id,
-  });
-
-  React.useEffect(() => { if (cancelOpen) setCancelReason(""); }, [cancelOpen]);
-
-  const cancelMutation = useMutation({
-    mutationFn: () => foodApi.cancelOrder(id as string, cancelReason.trim() || undefined),
-    onSuccess: () => {
-      toast({ title: "Order cancelled" });
-      qc.invalidateQueries({ queryKey: ["food", "orders"] });
-      qc.invalidateQueries({ queryKey: foodKeys.order(id as string) });
-      setCancelOpen(false);
-    },
-    onError: (e: any) => toast({ title: e?.message || "Failed", variant: "destructive" }),
-  });
-
-  const canCancel = !!order && (order.status === "PLACED" || order.status === "PREPARING");
-
-  // Events oldest -> newest (chronological).
-  const events: FoodOrderEvent[] = React.useMemo(
-    () =>
-      [...(order?.events ?? [])].sort(
-        (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
-      ),
-    [order?.events],
-  );
-
-  const fmtDateTime = (s?: string | null) =>
-    s ? format(new Date(s), "dd MMM yyyy, HH:mm") : "—";
-
-  return (
-    <>
-      <Sheet open={!!id} onOpenChange={(o) => !o && onClose()}>
-        <SheetContent className="sm:max-w-2xl w-full overflow-y-auto">
-          {isLoading || !order ? (
-            <div className="space-y-4 mt-6">
-              <SheetHeader>
-                <SheetTitle className="font-display">Order details</SheetTitle>
-              </SheetHeader>
-              <Skeleton className="h-8 w-2/3" />
-              <Skeleton className="h-32 w-full" />
-              <Skeleton className="h-40 w-full" />
-            </div>
-          ) : (
-            <div className="space-y-6">
-              <SheetHeader>
-                <SheetTitle className="font-display flex items-center gap-3 flex-wrap">
-                  <span className="font-mono text-base">{order.orderNumber}</span>
-                  <StatusBadge status={order.status} />
-                </SheetTitle>
-              </SheetHeader>
-
-              {/* Meta grid */}
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 text-sm border rounded-md p-4 bg-card">
-                <MetaItem label="Property" value={propName(order.propertyId)} />
-                <MetaItem label="Unit Lead" value={order.unitLeadName} />
-                <MetaItem label="Brand" value={order.brand} />
-                <MetaItem label="Meal" value={MEAL_LABEL[order.mealType]} />
-                <MetaItem label="Residents" value={<span className="tabular-nums">{order.residentsCount}</span>} />
-                <MetaItem label="Quantity" value={<span className="tabular-nums">{fmtQty(order.totalQuantity)}</span>} />
-                <MetaItem label="Service Date" value={order.serviceDate ? format(new Date(order.serviceDate), "dd MMM yyyy") : "—"} />
-                <MetaItem label="Delivery Partner" value={order.deliveryPartnerName} />
-                <MetaItem label="Delivered At" value={fmtDateTime(order.deliveredAt)} />
-              </div>
-
-              {order.notes && (
-                <div className="text-sm border rounded-md p-3 bg-muted/30">
-                  <p className="text-muted-foreground text-xs uppercase tracking-wider mb-1">Notes</p>
-                  <p>{order.notes}</p>
-                </div>
-              )}
-              {order.status === "CANCELLED" && order.cancelReason && (
-                <div className="text-sm border border-destructive/30 rounded-md p-3 bg-destructive/5">
-                  <p className="text-destructive text-xs uppercase tracking-wider mb-1 font-medium">Cancellation Reason</p>
-                  <p>{order.cancelReason}</p>
-                </div>
-              )}
-
-              {/* Contextual actions */}
-              {canCancel && (
-                <div className="flex gap-2">
-                  <Button variant="outline" className="text-destructive hover:text-destructive" onClick={() => setCancelOpen(true)}>
-                    <Ban className="w-4 h-4 mr-2" /> Cancel Order
-                  </Button>
-                </div>
-              )}
-
-              {/* Items */}
-              <div>
-                <h4 className="text-sm font-medium mb-3 flex items-center gap-2">
-                  <Package className="w-4 h-4 text-muted-foreground" /> Items ({order.items.length})
-                </h4>
-                {order.items.length === 0 ? (
-                  <p className="text-sm text-muted-foreground p-4 border rounded-md text-center">No items.</p>
-                ) : (
-                  <div className="rounded-md border overflow-hidden">
-                    <table className="w-full text-sm">
-                      <thead className="bg-muted/40">
-                        <tr>
-                          <th className="text-left p-2 font-medium">Dish</th>
-                          <th className="text-right p-2 font-medium">Ordered</th>
-                          <th className="text-right p-2 font-medium">Prepared</th>
-                          <th className="text-right p-2 font-medium">Received</th>
-                          <th className="text-right p-2 font-medium">Wasted</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {order.items.map((it) => (
-                          <tr key={it.id} className="border-t">
-                            <td className="p-2">
-                              <span className="font-medium">{it.dishName || it.dishId}</span>
-                              {it.component && (
-                                <span className="block text-[10px] uppercase tracking-wider text-muted-foreground">{it.component}</span>
-                              )}
-                            </td>
-                            <td className="p-2 text-right tabular-nums">{fmtQty(it.orderedQty, it.unit)}</td>
-                            <td className="p-2 text-right tabular-nums">{fmtQty(it.preparedQty, it.unit)}</td>
-                            <td className="p-2 text-right tabular-nums">{fmtQty(it.receivedQty, it.unit)}</td>
-                            <td className="p-2 text-right tabular-nums">{fmtQty(it.wastedQty, it.unit)}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </div>
-
-              <Separator />
-
-              {/* Timeline */}
-              <div>
-                <h4 className="text-sm font-medium mb-3 flex items-center gap-2">
-                  <Clock className="w-4 h-4 text-muted-foreground" /> Timeline
-                </h4>
-                {events.length === 0 ? (
-                  <p className="text-sm text-muted-foreground p-4 border rounded-md text-center">No events recorded.</p>
-                ) : (
-                  <ol className="relative border-l border-border ml-2 space-y-5">
-                    {events.map((ev) => (
-                      <li key={ev.id} className="ml-4">
-                        <span className="absolute -left-[5px] mt-1.5 h-2.5 w-2.5 rounded-full bg-primary" />
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <StatusBadge status={ev.status} />
-                          <span className="text-xs text-muted-foreground">{fmtDateTime(ev.createdAt)}</span>
-                        </div>
-                        {ev.note && <p className="text-sm mt-1">{ev.note}</p>}
-                        {ev.actorName && <p className="text-xs text-muted-foreground mt-0.5">by {ev.actorName}</p>}
-                      </li>
-                    ))}
-                  </ol>
-                )}
-              </div>
-            </div>
-          )}
-        </SheetContent>
-      </Sheet>
-
-      <FormModal
-        open={cancelOpen}
-        onOpenChange={setCancelOpen}
-        title="Cancel Order"
-        onSave={() => cancelMutation.mutate()}
-        isSaving={cancelMutation.isPending}
-        saveLabel="Cancel Order"
-        cancelLabel="Keep Order"
-      >
-        <div className="space-y-4">
-          <div className="flex items-start gap-2 text-sm text-muted-foreground">
-            <XCircle className="w-4 h-4 mt-0.5 text-destructive shrink-0" />
-            <p>This will cancel the order. This action cannot be undone.</p>
-          </div>
-          <div>
-            <Label>Reason</Label>
-            <Textarea
-              rows={3}
-              placeholder="Reason for cancellation (optional)..."
-              value={cancelReason}
-              onChange={(e) => setCancelReason(e.target.value)}
-            />
-          </div>
-        </div>
-      </FormModal>
-    </>
   );
 }

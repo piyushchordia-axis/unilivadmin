@@ -19,18 +19,33 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Plus, Eye, Users, UserCheck, UserX, AlertTriangle, Search, Download, Receipt } from "lucide-react";
+import { Plus, Eye, Users, UserCheck, UserX, AlertTriangle, Search, Download, Receipt, Upload } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { apiFetch } from "@/lib/api-fetch";
 import { Badge } from "@/components/ui/badge";
 import { useLocation } from "wouter";
 import { ResidentFormModal } from "@/components/resident-form-modal";
 import { BulkRentModal } from "@/components/bulk-rent-modal";
+import { BulkUploadDialog, type BulkColumn } from "@/components/bulk-upload-dialog";
+import { useQueryClient } from "@tanstack/react-query";
 import { useAppStore } from "@/lib/store";
 import { GlobalPropertyScopeBanner } from "@/components/property-scope-banner";
 
+// Column config for the bulk-upload template + header→key mapping. Keys match
+// the backend's verbatim row object keys for POST /bulk/residents.
+const RESIDENT_BULK_COLUMNS: BulkColumn[] = [
+  { key: "name", label: "name", required: true },
+  { key: "email", label: "email", required: true },
+  { key: "phone", label: "phone", required: true },
+  { key: "propertyId", label: "propertyId", required: true },
+  { key: "monthlyRent", label: "monthlyRent" },
+  { key: "gender", label: "gender" },
+  { key: "checkInDate", label: "checkInDate" },
+];
+
 export default function Residents() {
   const [, setLocation] = useLocation();
+  const qc = useQueryClient();
   const { propertyId: globalPropertyId, setPropertyId: setGlobalProperty } = useAppStore();
 
   const [propertyId, setPropertyId] = React.useState(globalPropertyId || "ALL");
@@ -45,6 +60,7 @@ export default function Residents() {
   const [search, setSearch] = React.useState("");
   const [createOpen, setCreateOpen] = React.useState(false);
   const [bulkOpen, setBulkOpen] = React.useState(false);
+  const [bulkUploadOpen, setBulkUploadOpen] = React.useState(false);
 
   // Sync local filter when global property selector changes
   React.useEffect(() => {
@@ -158,6 +174,9 @@ export default function Residents() {
             <Button variant="outline" onClick={() => setBulkOpen(true)} data-testid="button-bulk-rent">
               <Receipt className="w-4 h-4 mr-2" /> Bulk Rent Charge
             </Button>
+            <Button variant="outline" onClick={() => setBulkUploadOpen(true)} data-testid="button-bulk-upload-residents">
+              <Upload className="w-4 h-4 mr-2" /> Bulk Upload
+            </Button>
             <Button className="bg-accent hover:bg-accent/90 text-white" onClick={() => setCreateOpen(true)} data-testid="button-add-resident">
               <Plus className="w-4 h-4 mr-2" /> Add Resident
             </Button>
@@ -207,6 +226,13 @@ export default function Residents() {
 
       <ResidentFormModal open={createOpen} onOpenChange={setCreateOpen} />
       <BulkRentModal open={bulkOpen} onOpenChange={setBulkOpen} />
+      <BulkUploadDialog
+        resource="residents"
+        columns={RESIDENT_BULK_COLUMNS}
+        open={bulkUploadOpen}
+        onOpenChange={setBulkUploadOpen}
+        onDone={() => qc.invalidateQueries({ queryKey: getGetResidentsQueryKey() })}
+      />
     </div>
   );
 }

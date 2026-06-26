@@ -4,7 +4,7 @@ import { useAppStore } from "@/lib/store";
 import { useQuery } from "@tanstack/react-query";
 import {
   Home, Building2, ChefHat, Users, Percent, Wallet, ListOrdered, FilePlus2,
-  Truck, AlertTriangle, Tag, BedDouble,
+  Truck, AlertTriangle, Tag, BedDouble, CheckCircle2,
 } from "lucide-react";
 import { PageHeader } from "@/components/page-header";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -60,6 +60,10 @@ export default function FoodMyProperties() {
   const goHomeScoped = (propertyId: string) => {
     setGlobalProperty(propertyId);
     setLocation("/home");
+  };
+  // Deep-link to this property's delivered orders (orders page reads both params).
+  const goDelivered = (propertyId: string) => {
+    setLocation(withQuery("/food/orders", { propertyId, status: "DELIVERED" }));
   };
 
   return (
@@ -145,6 +149,12 @@ export default function FoodMyProperties() {
                     label="Active orders"
                     value={p.activeOrders}
                     onClick={() => go(p.id, "/food/orders")}
+                  />
+                  <Stat
+                    icon={CheckCircle2}
+                    label="Delivered"
+                    value={p.deliveredCount}
+                    onClick={() => goDelivered(p.id)}
                   />
                 </div>
 

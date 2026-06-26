@@ -27,6 +27,8 @@ import { facilityRouter, electricityRouter, residentAttendanceRouter, outPassRou
 import { walletRouter } from "./wallet.js";
 import foodRouter from "./food.js";
 import foodOpsRouter from "./food-ops.js";
+import geocodeRouter from "./geocode.js";
+import bulkRouter from "./bulk.js";
 
 const router: IRouter = Router();
 
@@ -81,5 +83,7 @@ router.use("/iot", iotIngestionRouter);
 router.use(walletRouter);
 router.use("/food", foodRouter);
 router.use("/food", foodOpsRouter);
+router.use("/geocode", geocodeRouter);
+router.use("/bulk", bulkRouter); // auth + authorize applied per-route inside
 
 export default router;

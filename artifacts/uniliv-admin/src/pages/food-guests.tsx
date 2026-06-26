@@ -2,7 +2,7 @@ import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
 import { format } from "date-fns";
 import {
-  Search, Download, Users, Building2, BedDouble, IndianRupee,
+  Search, Download, Users, Building2, IndianRupee,
   UsersRound, ChevronLeft, ChevronRight, FileDown, FileText, FileSpreadsheet, MapPin,
 } from "lucide-react";
 import { PageHeader } from "@/components/page-header";
@@ -22,6 +22,9 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
   DropdownMenuSeparator, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { useAppStore } from "@/lib/store";
 import { useQueryParam } from "@/lib/nav-helpers";
@@ -53,10 +56,20 @@ export default function FoodGuests() {
   // Scope to ?propertyId= when present (e.g. opened from a property card),
   // otherwise the global property scope from the sidebar.
   const paramProperty = useQueryParam("propertyId");
-  const { propertyId: globalProperty } = useAppStore();
+  const { propertyId: globalProperty, setPropertyId } = useAppStore();
   const propertyId = paramProperty ?? globalProperty ?? null;
   const { me } = usePermissions();
   const { toast } = useToast();
+
+  // Accessible properties for the on-screen scope selector. Switching writes the
+  // GLOBAL property scope (same store the sidebar uses) so it stays consistent
+  // app-wide; an explicit ?propertyId= deep-link still takes precedence above.
+  const { data: lookups } = useQuery({
+    queryKey: foodKeys.lookups(),
+    queryFn: () => foodApi.lookups(),
+  });
+  const properties = lookups?.properties ?? [];
+  const ALL = "__all__";
 
   const [searchInput, setSearchInput] = React.useState("");
   const [search, setSearch] = React.useState("");
@@ -190,7 +203,7 @@ export default function FoodGuests() {
             </div>
           </CardHeader>
           <CardContent>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
               <StatCard
                 title="Active Guests"
                 value={overview.activeGuests.toLocaleString("en-IN")}
@@ -224,11 +237,6 @@ export default function FoodGuests() {
                 </CardContent>
               </Card>
               <StatCard
-                title="Max Occupancy"
-                value={overview.totalBeds.toLocaleString("en-IN")}
-                icon={BedDouble}
-              />
-              <StatCard
                 title="Monthly Revenue"
                 value={`₹${overview.monthlyRevenue.toLocaleString("en-IN")}`}
                 icon={IndianRupee}
@@ -238,15 +246,34 @@ export default function FoodGuests() {
         </Card>
       )}
 
-      {/* Search */}
-      <div className="relative max-w-md">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-        <Input
-          value={searchInput}
-          onChange={(e) => setSearchInput(e.target.value)}
-          placeholder="Search by name, mobile, room, PAN or Aadhaar…"
-          className="pl-9"
-        />
+      {/* Property scope + search */}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+        <Select
+          value={propertyId ?? ALL}
+          onValueChange={(v) => {
+            setPropertyId(v === ALL ? null : v);
+            setPage(1);
+          }}
+        >
+          <SelectTrigger className="w-full sm:w-64">
+            <SelectValue placeholder="Property" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={ALL}>All Properties</SelectItem>
+            {properties.map((p) => (
+              <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <div className="relative w-full sm:max-w-md">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Input
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            placeholder="Search by name, mobile, room, PAN or Aadhaar…"
+            className="pl-9"
+          />
+        </div>
       </div>
 
       {/* Guests table */}

@@ -17,6 +17,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { StatusBadge } from "@/components/status-badge";
 import { OrderTimeline } from "@/components/order-timeline";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { foodApi, foodKeys, MEAL_LABEL, fmtQty, type OrderStatus } from "@/lib/food-api";
 import { useQueryParam } from "@/lib/nav-helpers";
 import { cn } from "@/lib/utils";
@@ -48,13 +49,25 @@ export default function FoodTrack() {
     retry: false,
   });
 
-  const submit = (e?: React.FormEvent) => {
-    e?.preventDefault();
-    const t = input.trim();
+  // The user's ACTIVE orders, offered as a quick-pick instead of typing an id.
+  const { data: activeOrders = [] } = useQuery({
+    queryKey: foodKeys.orders({ status: "PLACED,PREPARING,DISPATCHED", limit: 100, scope: "track-active" }),
+    queryFn: () => foodApi.listOrders({ status: "PLACED,PREPARING,DISPATCHED", limit: 100 }).then((r) => r.data),
+  });
+
+  // Run the tracking lookup for a given order number (shared by the form + picker).
+  const runLookup = (raw: string) => {
+    const t = raw.trim();
     if (!t) return;
+    setInput(t);
     setTerm(t);
     // Reflect the lookup in the URL so it can be shared / refreshed.
     navigate(`/food/track?order=${encodeURIComponent(t)}`, { replace: true });
+  };
+
+  const submit = (e?: React.FormEvent) => {
+    e?.preventDefault();
+    runLookup(input);
   };
 
   const events = order?.events ?? [];
@@ -83,6 +96,25 @@ export default function FoodTrack() {
               Track
             </Button>
           </form>
+
+          {activeOrders.length > 0 && (
+            <div className="mt-3 space-y-1.5">
+              <Label className="text-xs text-muted-foreground">Or pick an active order</Label>
+              <Select value={term || undefined} onValueChange={(v) => runLookup(v)}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select one of your active orders…" />
+                </SelectTrigger>
+                <SelectContent>
+                  {activeOrders.map((o) => (
+                    <SelectItem key={o.id} value={o.orderNumber}>
+                      <span className="font-mono">{o.orderNumber}</span>
+                      {" · "}{MEAL_LABEL[o.mealType] ?? o.mealType}{" · "}{o.status}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
         </CardContent>
       </Card>
 

@@ -111,6 +111,13 @@ const schema = z.object({
   status: z.enum(["ACTIVE", "INACTIVE", "UNDER_RENOVATION"]),
   portfolioType: z.enum(PORTFOLIO_TYPES),
   brand: z.string().min(1, "Brand required"),
+  // Auto-generated on create when blank (PROP-<CITY3>-<NNN>); editable override.
+  code: z.string().optional(),
+  // Per-property kitchen order cut-off (HH:MM, 24h). Optional → brand/global default.
+  cutoffTime: z
+    .string()
+    .optional()
+    .refine((v) => !v || /^([01]?\d|2[0-3]):[0-5]\d$/.test(v), { message: "HH:MM (24h)" }),
 });
 
 type FormValues = z.infer<typeof schema>;
@@ -132,7 +139,10 @@ export function PropertyFormModal({
   const [amenities, setAmenities] = React.useState<string[]>([]);
   const [coords, setCoords] = React.useState<{ lat?: number; lng?: number }>({});
   const [geocoding, setGeocoding] = React.useState(false);
+  const [reverseGeocoding, setReverseGeocoding] = React.useState(false);
   const [attrs, setAttrs] = React.useState<PortfolioAttributes>({});
+  // Unit-leads tagged to this property (users.propertyId set on submit).
+  const [unitLeadIds, setUnitLeadIds] = React.useState<string[]>([]);
 
   const {
     register,
@@ -155,7 +165,34 @@ export function PropertyFormModal({
       status: "ACTIVE",
       portfolioType: "CO_LIVING",
       brand: "",
+      code: "",
+      cutoffTime: "",
     },
+  });
+
+  const createMut = useCreateProperty();
+  const updateMut = useUpdateProperty();
+
+  // Brand options come from the admin-managed master (active brands only).
+  const { data: brands = [] } = useQuery({
+    queryKey: foodKeys.brands({ active: true }),
+    queryFn: () => foodApi.listBrands({ active: true }),
+    enabled: open,
+  });
+
+  // Unit-leads (UNIT_LEAD/WARDEN) taggable to this property.
+  const { data: assignableLeads = [] } = useQuery({
+    queryKey: foodKeys.assignableUnitLeads(),
+    queryFn: () => foodApi.assignableUnitLeads(),
+    enabled: open,
+  });
+
+  // On edit, fetch detail extras (current code, tagged unit-leads, cut-off override)
+  // that the list payload doesn't carry, to prefill the form.
+  const { data: detail } = useQuery({
+    queryKey: foodKeys.propertyDetail(property?.id || ""),
+    queryFn: () => foodApi.propertyDetail(property!.id),
+    enabled: open && !!property?.id,
   });
 
   React.useEffect(() => {
@@ -173,6 +210,8 @@ export function PropertyFormModal({
           status: (property.status as any) || "ACTIVE",
           portfolioType: (property.portfolioType as PortfolioType) || "CO_LIVING",
           brand: property.brand || "",
+          code: (property as any).code || detail?.code || "",
+          cutoffTime: detail?.cutoffTime || "",
         });
         setAmenities(property.amenities || []);
         setCoords({
@@ -180,6 +219,7 @@ export function PropertyFormModal({
           lng: property.lng ?? undefined,
         });
         setAttrs((property.portfolioAttributes as PortfolioAttributes) || {});
+        setUnitLeadIds(detail?.unitLeadIds || []);
       } else {
         reset({
           name: "",
@@ -193,23 +233,16 @@ export function PropertyFormModal({
           status: "ACTIVE",
           portfolioType: "CO_LIVING",
           brand: "",
+          code: "",
+          cutoffTime: "",
         });
         setAmenities([]);
         setCoords({});
         setAttrs({});
+        setUnitLeadIds([]);
       }
     }
-  }, [open, property, reset]);
-
-  const createMut = useCreateProperty();
-  const updateMut = useUpdateProperty();
-
-  // Brand options come from the admin-managed master (active brands only).
-  const { data: brands = [] } = useQuery({
-    queryKey: foodKeys.brands({ active: true }),
-    queryFn: () => foodApi.listBrands({ active: true }),
-    enabled: open,
-  });
+  }, [open, property, detail, reset]);
 
   // Kitchen is auto-derived (read-only) from the pincode via kitchen_pincodes.
   const pincode = watch("pincode");
@@ -233,32 +266,62 @@ export function PropertyFormModal({
       prev.includes(a) ? prev.filter((x) => x !== a) : [...prev, a]
     );
 
+  // Forward geocode: build a query from the address fields and resolve coordinates
+  // via the server (OSM/Nominatim proxy — sends the required UA, provider-swappable).
   const handleGeocode = async () => {
-    const address = watch("address");
-    const city = watch("city");
-    const state = watch("state");
-    const q = [address, city, state].filter(Boolean).join(", ");
+    const q = [
+      watch("address"),
+      watch("city"),
+      watch("state"),
+      watch("pincode"),
+    ]
+      .filter(Boolean)
+      .join(", ");
     if (!q) {
       toast({ title: "Enter address first", variant: "destructive" });
       return;
     }
     setGeocoding(true);
     try {
-      const res = await fetch(
-        `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}`,
-        { headers: { "User-Agent": "UnilivAdmin/1.0" } as any }
-      );
-      const json = await res.json();
-      if (json && json[0]) {
-        setCoords({ lat: parseFloat(json[0].lat), lng: parseFloat(json[0].lon) });
-        toast({ title: "Location found" });
-      } else {
-        toast({ title: "Location not found", variant: "destructive" });
-      }
-    } catch (e) {
-      toast({ title: "Geocoding failed", variant: "destructive" });
+      const res = await foodApi.geocodeForward(q);
+      setCoords({ lat: res.lat, lng: res.lon });
+      toast({ title: "Location found", description: res.displayName });
+    } catch (e: any) {
+      toast({
+        title: "Location not found",
+        description: e?.message,
+        variant: "destructive",
+      });
     } finally {
       setGeocoding(false);
+    }
+  };
+
+  // Reverse geocode: turn the current lat/lng into an address + pincode and fill
+  // the form fields (server proxy to OSM/Nominatim).
+  const handleReverseGeocode = async () => {
+    if (coords.lat === undefined || coords.lng === undefined) {
+      toast({ title: "Enter coordinates first", variant: "destructive" });
+      return;
+    }
+    setReverseGeocoding(true);
+    try {
+      const res = await foodApi.geocodeReverse(coords.lat, coords.lng);
+      if (res.address) {
+        setValue("address", res.address, { shouldValidate: true, shouldDirty: true });
+      }
+      if (res.pincode && /^\d{6}$/.test(res.pincode)) {
+        setValue("pincode", res.pincode, { shouldValidate: true, shouldDirty: true });
+      }
+      toast({ title: "Address filled", description: res.displayName });
+    } catch (e: any) {
+      toast({
+        title: "Address not found",
+        description: e?.message,
+        variant: "destructive",
+      });
+    } finally {
+      setReverseGeocoding(false);
     }
   };
 
@@ -297,20 +360,29 @@ export function PropertyFormModal({
       portfolioAttributes: filteredAttrs,
       brand: values.brand,
       kitchenId: derivedKitchenId,
+      // Auto-generated server-side when blank; editable override otherwise.
+      code: values.code?.trim() || undefined,
+      // Per-property kitchen cut-off override (HH:MM) + tagged unit-leads. These
+      // extra fields aren't in the generated body type, hence the cast below.
+      cutoffTime: values.cutoffTime?.trim() || undefined,
+      unitLeadIds,
     };
     try {
       if (isEdit && property) {
-        await updateMut.mutateAsync({ id: property.id, data: body });
+        await updateMut.mutateAsync({ id: property.id, data: body as any });
         toast({ title: "Property updated" });
       } else {
-        await createMut.mutateAsync({ data: body });
+        await createMut.mutateAsync({ data: body as any });
         toast({ title: "Property created" });
       }
       queryClient.invalidateQueries({ queryKey: getGetPropertiesQueryKey() });
+      // Tagging a unit-lead changes users.propertyId — refresh assignable list.
+      queryClient.invalidateQueries({ queryKey: foodKeys.assignableUnitLeads() });
       if (property) {
         queryClient.invalidateQueries({
           queryKey: getGetPropertyQueryKey(property.id),
         });
+        queryClient.invalidateQueries({ queryKey: foodKeys.propertyDetail(property.id) });
       }
       onOpenChange(false);
     } catch (e: any) {
@@ -344,6 +416,26 @@ export function PropertyFormModal({
           {errors.name && (
             <p className="text-xs text-destructive mt-1">{errors.name.message}</p>
           )}
+        </div>
+        <div>
+          <Label className="flex items-center gap-2">
+            Property code
+            {!isEdit && (
+              <Badge variant="outline" className="text-[10px] font-normal">
+                Auto
+              </Badge>
+            )}
+          </Label>
+          <Input
+            data-testid="input-property-code"
+            placeholder="PROP-BLR-001"
+            {...register("code")}
+          />
+          <p className="text-[11px] text-muted-foreground mt-1">
+            {isEdit
+              ? "Editable. Leave unchanged to keep the existing code."
+              : "Auto-generated from the city if left blank. You can override it."}
+          </p>
         </div>
         <div>
           <Label>Portfolio Type *</Label>
@@ -516,6 +608,67 @@ export function PropertyFormModal({
               <SelectItem value="UNDER_RENOVATION">Under Renovation</SelectItem>
             </SelectContent>
           </Select>
+        </div>
+
+        <div>
+          <Label>Kitchen order cut-off time</Label>
+          <Input
+            data-testid="input-property-cutoff"
+            type="time"
+            {...register("cutoffTime")}
+          />
+          {errors.cutoffTime && (
+            <p className="text-xs text-destructive mt-1">{errors.cutoffTime.message}</p>
+          )}
+          <p className="text-[11px] text-muted-foreground mt-1">
+            Per-property override for this property&apos;s brand. Leave blank to use
+            the brand / global default.
+          </p>
+        </div>
+
+        <div>
+          <Label>Unit leads</Label>
+          <p className="text-[11px] text-muted-foreground mt-0.5 mb-2">
+            Tag Unit-Lead / Warden users to this property.
+          </p>
+          {assignableLeads.length === 0 ? (
+            <p className="text-xs text-muted-foreground">No assignable users.</p>
+          ) : (
+            <div className="max-h-40 overflow-y-auto rounded-md border divide-y">
+              {assignableLeads.map((u) => {
+                const checked = unitLeadIds.includes(u.id);
+                // Already tagged to a DIFFERENT property — flag so the admin knows
+                // selecting will move them here.
+                const elsewhere =
+                  !!u.propertyId && property?.id !== u.propertyId && !checked;
+                return (
+                  <label
+                    key={u.id}
+                    className="flex items-center gap-2 px-3 py-2 text-sm cursor-pointer hover:bg-surface"
+                    data-testid={`unit-lead-option-${u.id}`}
+                  >
+                    <Checkbox
+                      checked={checked}
+                      onCheckedChange={(v) =>
+                        setUnitLeadIds((prev) =>
+                          v ? [...prev, u.id] : prev.filter((x) => x !== u.id),
+                        )
+                      }
+                    />
+                    <span className="flex-1">
+                      {u.name}
+                      <span className="text-muted-foreground"> · {u.role}</span>
+                    </span>
+                    {elsewhere && (
+                      <Badge variant="outline" className="text-[10px] font-normal">
+                        Tagged elsewhere
+                      </Badge>
+                    )}
+                  </label>
+                );
+              })}
+            </div>
+          )}
         </div>
 
         {attrFields.length > 0 && (
@@ -701,10 +854,46 @@ export function PropertyFormModal({
           </div>
         </div>
         <div className="border-t pt-4">
-          <div className="flex items-center justify-between mb-2">
-            <Label className="flex items-center gap-1.5">
-              <MapPin className="w-4 h-4" /> Location
-            </Label>
+          <Label className="flex items-center gap-1.5 mb-2">
+            <MapPin className="w-4 h-4" /> Location
+          </Label>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label className="text-xs">Latitude</Label>
+              <Input
+                data-testid="input-property-lat"
+                type="number"
+                step="any"
+                inputMode="decimal"
+                placeholder="12.9716"
+                value={coords.lat ?? ""}
+                onChange={(e) =>
+                  setCoords((c) => ({
+                    ...c,
+                    lat: e.target.value === "" ? undefined : Number(e.target.value),
+                  }))
+                }
+              />
+            </div>
+            <div>
+              <Label className="text-xs">Longitude</Label>
+              <Input
+                data-testid="input-property-lng"
+                type="number"
+                step="any"
+                inputMode="decimal"
+                placeholder="77.5946"
+                value={coords.lng ?? ""}
+                onChange={(e) =>
+                  setCoords((c) => ({
+                    ...c,
+                    lng: e.target.value === "" ? undefined : Number(e.target.value),
+                  }))
+                }
+              />
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2 mt-3">
             <Button
               type="button"
               variant="outline"
@@ -714,11 +903,26 @@ export function PropertyFormModal({
               data-testid="button-geocode-address"
             >
               {geocoding && <Loader2 className="w-3 h-3 mr-1 animate-spin" />}
-              Geocode address
+              Fetch coordinates from address
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={handleReverseGeocode}
+              disabled={
+                reverseGeocoding ||
+                coords.lat === undefined ||
+                coords.lng === undefined
+              }
+              data-testid="button-reverse-geocode"
+            >
+              {reverseGeocoding && <Loader2 className="w-3 h-3 mr-1 animate-spin" />}
+              Use these coordinates to fill address
             </Button>
           </div>
-          {coords.lat && coords.lng ? (
-            <>
+          {coords.lat !== undefined && coords.lng !== undefined ? (
+            <div className="mt-3">
               <p className="text-xs text-muted-foreground mb-2 font-mono">
                 Lat: {coords.lat.toFixed(6)}, Lng: {coords.lng.toFixed(6)}
               </p>
@@ -727,10 +931,10 @@ export function PropertyFormModal({
                 src={`https://www.openstreetmap.org/export/embed.html?bbox=${coords.lng - 0.005}%2C${coords.lat - 0.005}%2C${coords.lng + 0.005}%2C${coords.lat + 0.005}&layer=mapnik&marker=${coords.lat}%2C${coords.lng}`}
                 className="w-full h-48 rounded-lg border"
               />
-            </>
+            </div>
           ) : (
-            <div className="w-full h-32 rounded-lg border border-dashed bg-surface flex items-center justify-center text-xs text-muted-foreground">
-              Click Geocode to fetch coordinates
+            <div className="mt-3 w-full h-32 rounded-lg border border-dashed bg-surface flex items-center justify-center text-xs text-muted-foreground">
+              Enter coordinates or fetch them from the address
             </div>
           )}
         </div>

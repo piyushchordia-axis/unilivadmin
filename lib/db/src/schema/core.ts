@@ -134,6 +134,13 @@ export type PortfolioAttributes = {
 
 export const propertiesTable = pgTable("properties", {
   id: text("id").primaryKey(),
+  /**
+   * Human-readable property code, e.g. PROP-BLR-001 (PROP-<CITY3>-<NNN> where
+   * CITY3 is a 3-letter city abbrev and NNN a zero-padded per-city sequence).
+   * Auto-generated on create when omitted; editable override otherwise. Nullable
+   * so existing rows remain valid until backfilled.
+   */
+  code: text("code"),
   name: text("name").notNull(),
   address: text("address").notNull(),
   city: text("city").notNull(),

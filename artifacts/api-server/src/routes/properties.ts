@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
-import { propertiesTable, residentsTable } from "@workspace/db";
-import { eq, sql, ilike, or } from "drizzle-orm";
+import { propertiesTable, residentsTable, usersTable, foodCutoffsTable } from "@workspace/db";
+import { eq, sql, ilike, or, and, inArray } from "drizzle-orm";
 import { authenticate } from "../middlewares/auth.js";
 import { authorize } from "../middlewares/authorize.js";
 import { pick } from "../lib/authz.js";
@@ -30,7 +30,81 @@ const PROPERTY_FIELDS = [
   "amenities",
   "brand",
   "kitchenId",
+  "code",
 ] as const;
+
+/** Roles that can be tagged as a property's unit-lead in the property form. */
+const UNIT_LEAD_ROLES = ["UNIT_LEAD", "WARDEN"] as const;
+
+/** 3-letter uppercase abbrev of a city (letters only, padded). */
+function cityAbbrev(city: string): string {
+  const letters = (city || "").toUpperCase().replace(/[^A-Z]/g, "");
+  return (letters.slice(0, 3) || "XXX").padEnd(3, "X");
+}
+
+/**
+ * Generate a unique human-readable property code PROP-<CITY3>-<NNN>. The sequence
+ * is per-city: next = (count of existing codes for that city prefix) + 1, then we
+ * bump until the candidate is free (so collisions from manual/edited codes can't
+ * produce a duplicate).
+ */
+async function generatePropertyCode(city: string): Promise<string> {
+  const prefix = `PROP-${cityAbbrev(city)}-`;
+  const [row] = await db
+    .select({ c: sql<number>`count(*)::int` })
+    .from(propertiesTable)
+    .where(ilike(propertiesTable.code, `${prefix}%`));
+  let n = (row?.c ?? 0) + 1;
+  // Bump on collision (existing manual override could already hold the candidate).
+  // Cap the loop defensively; 10k codes per city is far beyond realistic.
+  for (let i = 0; i < 10000; i++) {
+    const candidate = `${prefix}${String(n).padStart(3, "0")}`;
+    const [hit] = await db.select({ id: propertiesTable.id }).from(propertiesTable).where(eq(propertiesTable.code, candidate));
+    if (!hit) return candidate;
+    n++;
+  }
+  // Fallback: suffix a short unique token if we somehow exhausted the range.
+  return `${prefix}${String(n).padStart(3, "0")}-${newId().slice(0, 4)}`;
+}
+
+/**
+ * Re-tag the given users as this property's unit-leads (users.propertyId). Only
+ * UNIT_LEAD/WARDEN rows in the list are moved; ids of other roles are ignored.
+ * We do NOT clear previously-tagged leads not in the list (additive tagging) to
+ * keep behavior predictable and avoid surprising un-assignments.
+ */
+async function assignUnitLeads(propertyId: string, unitLeadIds: unknown): Promise<void> {
+  if (!Array.isArray(unitLeadIds)) return;
+  const ids = unitLeadIds.map((x) => String(x)).filter(Boolean);
+  if (!ids.length) return;
+  await db
+    .update(usersTable)
+    .set({ propertyId, updatedAt: new Date() })
+    .where(and(inArray(usersTable.id, ids), inArray(usersTable.role, UNIT_LEAD_ROLES as unknown as never[])));
+}
+
+/**
+ * Upsert the per-(brand, property) kitchen cut-off override from the property
+ * form. Empty/undefined time → no-op (the brand/global default applies). Mirrors
+ * the dedup logic in food-ops.ts cutoff-config (Postgres treats NULL as distinct,
+ * but here propertyId is always set so the unique index covers it).
+ */
+async function upsertPropertyCutoff(propertyId: string, brand: string | null | undefined, cutoffTime: unknown): Promise<void> {
+  if (cutoffTime === undefined) return; // field not present → don't touch
+  const time = cutoffTime ? String(cutoffTime).trim() : "";
+  if (!time) return; // empty → leave any existing override as-is
+  if (!brand) return; // a property has one brand; without it there's nothing to key on
+  if (!/^\d{1,2}:\d{2}$/.test(time)) return; // ignore malformed HH:MM silently
+  const [existing] = await db
+    .select({ id: foodCutoffsTable.id })
+    .from(foodCutoffsTable)
+    .where(and(eq(foodCutoffsTable.brand, brand), eq(foodCutoffsTable.propertyId, propertyId)));
+  if (existing) {
+    await db.update(foodCutoffsTable).set({ cutoffTime: time, isActive: true, updatedAt: new Date() }).where(eq(foodCutoffsTable.id, existing.id));
+  } else {
+    await db.insert(foodCutoffsTable).values({ id: newId(), brand, propertyId, cutoffTime: time, isActive: true, updatedAt: new Date() });
+  }
+}
 
 router.get("/", authenticate, authorize("PROPERTIES", "view"), async (req, res) => {
   try {
@@ -55,6 +129,26 @@ router.get("/", authenticate, authorize("PROPERTIES", "view"), async (req, res) 
       data: rows.map(p => ({ ...p, occupiedBeds: occupiedMap[p.id] || 0 })),
       meta: buildMeta(countResult.count, page, limit),
     });
+  } catch (err) {
+    req.log.error(err);
+    res.status(500).json({ success: false, error: "Internal server error" });
+  }
+});
+
+/**
+ * Assignable unit-leads for the property form's multi-select. Returns UNIT_LEAD /
+ * WARDEN users (id, name, email, role, current propertyId so the form can preselect
+ * those already tagged to this property). Gated on PROPERTIES view since it's used
+ * exclusively by the property add/edit form.
+ */
+router.get("/assignable-unit-leads", authenticate, authorize("PROPERTIES", "view"), async (req, res) => {
+  try {
+    const rows = await db
+      .select({ id: usersTable.id, name: usersTable.name, email: usersTable.email, role: usersTable.role, propertyId: usersTable.propertyId })
+      .from(usersTable)
+      .where(and(eq(usersTable.isActive, true), inArray(usersTable.role, UNIT_LEAD_ROLES as unknown as never[])))
+      .orderBy(usersTable.name);
+    res.json({ success: true, data: rows });
   } catch (err) {
     req.log.error(err);
     res.status(500).json({ success: false, error: "Internal server error" });
@@ -94,8 +188,15 @@ router.post("/", authenticate, authorize("PROPERTIES", "create"), async (req, re
       return;
     }
 
+    // Property code: use the provided override (editable) if non-empty, else
+    // auto-generate PROP-<CITY3>-<NNN> with a per-city sequence (unique-checked).
+    const providedCode = body.code ? String(body.code).trim() : "";
+    const code = providedCode || (await generatePropertyCode(String(body.city ?? "")));
+
+    const newPropertyId = newId();
     const [row] = await db.insert(propertiesTable).values({
-      id: newId(),
+      id: newPropertyId,
+      code,
       name: body.name,
       address: body.address,
       city: body.city,
@@ -115,6 +216,11 @@ router.post("/", authenticate, authorize("PROPERTIES", "create"), async (req, re
       kitchenId: kitchen.id,
       updatedAt: new Date(),
     }).returning();
+
+    // Tag unit-leads to this property and upsert its kitchen cut-off override.
+    await assignUnitLeads(newPropertyId, req.body?.unitLeadIds);
+    await upsertPropertyCutoff(newPropertyId, brand, req.body?.cutoffTime);
+
     res.status(201).json({ success: true, data: { ...row, occupiedBeds: 0 } });
   } catch (err) {
     req.log.error(err);
@@ -127,7 +233,24 @@ router.get("/:id", authenticate, authorize("PROPERTIES", "view"), async (req, re
     const [row] = await db.select().from(propertiesTable).where(eq(propertiesTable.id, req.params["id"]!));
     if (!row) { res.status(404).json({ success: false, error: "Not found" }); return; }
     const [r] = await db.select({ count: sql<number>`count(*)::int` }).from(residentsTable).where(eq(residentsTable.propertyId, row.id));
-    res.json({ success: true, data: { ...row, occupiedBeds: r.count || 0 } });
+
+    // Form prefill helpers: the unit-leads currently tagged to this property and
+    // the per-(brand, property) kitchen cut-off override (if any).
+    const unitLeadIds = (await db
+      .select({ id: usersTable.id })
+      .from(usersTable)
+      .where(and(eq(usersTable.propertyId, row.id), inArray(usersTable.role, UNIT_LEAD_ROLES as unknown as never[]))))
+      .map((u) => u.id);
+    let cutoffTime: string | null = null;
+    if (row.brand) {
+      const [c] = await db
+        .select({ cutoffTime: foodCutoffsTable.cutoffTime })
+        .from(foodCutoffsTable)
+        .where(and(eq(foodCutoffsTable.brand, row.brand), eq(foodCutoffsTable.propertyId, row.id)));
+      cutoffTime = c?.cutoffTime ?? null;
+    }
+
+    res.json({ success: true, data: { ...row, occupiedBeds: r.count || 0, unitLeadIds, cutoffTime } });
   } catch (err) {
     req.log.error(err);
     res.status(500).json({ success: false, error: "Internal server error" });
@@ -140,6 +263,13 @@ router.put("/:id", authenticate, authorize("PROPERTIES", "edit"), async (req, re
 
     const [existing] = await db.select().from(propertiesTable).where(eq(propertiesTable.id, req.params["id"]!));
     if (!existing) { res.status(404).json({ success: false, error: "Not found" }); return; }
+
+    // Property code is editable. An empty string clears nothing meaningful, so we
+    // drop a blank value (keeps the existing code) and trim a provided one.
+    if (body.code !== undefined) {
+      const code = body.code ? String(body.code).trim() : "";
+      if (!code) delete body.code; else body.code = code;
+    }
 
     // Brand is freely editable, but if supplied it must be a known active brand.
     if (body.brand !== undefined) {
@@ -174,6 +304,11 @@ router.put("/:id", authenticate, authorize("PROPERTIES", "edit"), async (req, re
 
     const [row] = await db.update(propertiesTable).set({ ...body, updatedAt: new Date() }).where(eq(propertiesTable.id, req.params["id"]!)).returning();
     if (!row) { res.status(404).json({ success: false, error: "Not found" }); return; }
+
+    // Re-tag unit-leads and upsert the cut-off override (brand = the just-saved value).
+    await assignUnitLeads(row.id, req.body?.unitLeadIds);
+    await upsertPropertyCutoff(row.id, row.brand, req.body?.cutoffTime);
+
     const [r] = await db.select({ count: sql<number>`count(*)::int` }).from(residentsTable).where(eq(residentsTable.propertyId, row.id));
     res.json({ success: true, data: { ...row, occupiedBeds: r.count || 0 } });
   } catch (err) {
