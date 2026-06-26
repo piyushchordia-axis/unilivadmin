@@ -6,7 +6,7 @@ import {
   Repeat, BellRing, Landmark, Receipt, Wrench, Zap, ClipboardCheck, Radio, Wallet,
   UtensilsCrossed, ListOrdered, FilePlus2, Soup, Send, CheckCircle2, Trash2, SlidersHorizontal,
   Network, Home,
-  DoorOpen, CalendarCheck, CalendarX, LineChart, Recycle,
+  DoorOpen, CalendarCheck, CalendarX, LineChart, Recycle, Database,
   type LucideIcon,
 } from "lucide-react"
 import { type Module } from "@/lib/permissions"
@@ -91,6 +91,7 @@ export const navGroups: NavGroup[] = [
     { title: "Expenses", href: "/expenses", icon: Receipt, module: "EXPENSES" },
   ]},
   { title: "Settings", items: [
+    { title: "Masters", href: "/masters", icon: Database, module: "FOOD_SETTINGS" },
     { title: "Users & Roles", href: "/users", icon: Shield, module: "USERS" },
     { title: "Configuration", href: "/settings", icon: Settings, module: "SETTINGS" },
   ]},

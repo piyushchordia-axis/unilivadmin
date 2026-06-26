@@ -204,6 +204,8 @@ export const PATH_TO_MODULE: Array<[RegExp, Module]> = [
   [/^\/resident-attendance/, "RESIDENT_ATTENDANCE"],
   [/^\/out-passes/, "RESIDENT_ATTENDANCE"],
   [/^\/iot/, "IOT"],
+  // Masters admin (B3-2) — registry-backed reference-data CRUD, gated on food settings.
+  [/^\/masters/, "FOOD_SETTINGS"],
   [/^\/users/, "USERS"],
   [/^\/settings/, "SETTINGS"],
   [/^\/rooms/, "PROPERTIES"],

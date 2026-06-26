@@ -29,6 +29,7 @@ import foodRouter from "./food.js";
 import foodOpsRouter from "./food-ops.js";
 import geocodeRouter from "./geocode.js";
 import bulkRouter from "./bulk.js";
+import { mastersRouter } from "./masters.js";
 
 const router: IRouter = Router();
 
@@ -85,5 +86,6 @@ router.use("/food", foodRouter);
 router.use("/food", foodOpsRouter);
 router.use("/geocode", geocodeRouter);
 router.use("/bulk", bulkRouter); // auth + authorize applied per-route inside
+router.use("/masters", mastersRouter); // auth + authorize(FOOD_SETTINGS) applied per-route inside
 
 export default router;

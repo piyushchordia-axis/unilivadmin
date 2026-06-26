@@ -74,6 +74,8 @@ import UnitLeadHome from "@/pages/unit-lead-home";
 import FoodOrderDetail from "@/pages/food-order-detail";
 import FoodTrack from "@/pages/food-track";
 import FoodGuests from "@/pages/food-guests";
+import Masters from "@/pages/masters";
+import MasterTable from "@/pages/master-table";
 
 const queryClient = new QueryClient({
   // When any query 401s (expired token), recover once: silently refresh and
@@ -190,6 +192,10 @@ function Router() {
       <Route path="/wallet">{() => <ProtectedRoute component={Wallet} />}</Route>
       <Route path="/wallet/:residentId">{() => <ProtectedRoute component={WalletDetail} />}</Route>
       
+      {/* Masters — registry-backed reference-data admin (B3-2) */}
+      <Route path="/masters">{() => <ProtectedRoute component={Masters} />}</Route>
+      <Route path="/masters/:type">{() => <ProtectedRoute component={MasterTable} />}</Route>
+
       <Route path="/users">{() => <ProtectedRoute component={Users} />}</Route>
       <Route path="/settings">{() => <ProtectedRoute component={Settings} />}</Route>
       <Route path="/dashboard/executive">{() => <ProtectedRoute component={ExecutiveDashboard} />}</Route>
