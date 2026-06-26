@@ -5,7 +5,7 @@ import { usersTable, announcementsTable } from "@workspace/db";
 import { eq, sql, ilike, and } from "drizzle-orm";
 import { authenticate } from "../middlewares/auth.js";
 import { authorize } from "../middlewares/authorize.js";
-import { pick, assertCanAssignRole, ROLE_RANK } from "../lib/authz.js";
+import { pick, assertCanAssignRole, ROLE_RANK, isSuperAdmin } from "../lib/authz.js";
 import { getPagination, buildMeta } from "../lib/paginate.js";
 import { newId } from "../lib/id.js";
 
@@ -66,7 +66,7 @@ usersRouter.put("/:id", authenticate, authorize("USERS", "edit"), async (req, re
     // its own profile); only editing a STRICTLY higher-ranked user is blocked.
     const [target] = await db.select().from(usersTable).where(eq(usersTable.id, req.params["id"]!));
     if (!target) { res.status(404).json({ success: false, error: "Not found" }); return; }
-    if (callerRole !== "SUPER_ADMIN" && !isSelf) {
+    if (!isSuperAdmin(callerRole) && !isSelf) {
       const callerRank = ROLE_RANK[callerRole] ?? 0;
       const targetRank = ROLE_RANK[target.role] ?? 0;
       if (targetRank > callerRank) { res.status(403).json({ success: false, error: "Cannot edit a user above your privilege level" }); return; }

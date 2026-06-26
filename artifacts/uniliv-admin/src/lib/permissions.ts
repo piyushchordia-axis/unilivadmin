@@ -91,7 +91,8 @@ export const ROLE_PERMISSIONS: Record<UserRole, Partial<Record<Module, Partial<R
     FOOD_ALL_ORDERS: FULL, FOOD_PLACE_ORDER: VIEW, FOOD_DISPATCH: VIEW,
     FOOD_CONFIRM_DELIVERY: VIEW, FOOD_WASTE_TRACKING: VIEW, FOOD_REPORTS: VIEW,
   },
-  OPS_EXCELLENCE: Object.fromEntries(FOOD_MODULES.map(m => [m, FULL])) as any,
+  // B3-24: OPS_EXCELLENCE = full super-admin parity across every module.
+  OPS_EXCELLENCE: Object.fromEntries(ALL_MODULES.map(m => [m, FULL])) as any,
   SENIOR_VICE_PRESIDENT: {
     FOOD_DELIVERY_TRACKING: VIEW, FOOD_DASHBOARD: VIEW, FOOD_PLACE_ORDER: VIEW,
     FOOD_KITCHEN_SUMMARY: VIEW, FOOD_DISPATCH: VIEW, FOOD_CONFIRM_DELIVERY: VIEW,
@@ -119,6 +120,10 @@ export function can(role: UserRole | undefined, module: Module, perm: Permission
   return ROLE_PERMISSIONS[role]?.[module]?.[perm] === true;
 }
 
+/** B3-24: roles with full super-admin parity (SUPER_ADMIN + OPS_EXCELLENCE). */
+export const isSuperAdminRole = (role: UserRole | undefined): boolean =>
+  role === "SUPER_ADMIN" || role === "OPS_EXCELLENCE";
+
 /**
  * Where a freshly signed-in user should land, based on their role. Each role
  * goes to the module it actually works in, so nobody is dropped onto the
@@ -139,7 +144,7 @@ export function homeForRole(role: UserRole | undefined): string {
     CLUSTER_MANAGER: "/food/dashboard",
     CITY_HEAD: "/food/dashboard",
     ZONAL_HEAD: "/food/dashboard",
-    OPS_EXCELLENCE: "/food/dashboard",
+    // B3-24: OPS_EXCELLENCE = super-admin parity, so it lands on the same "/" overview.
     SENIOR_VICE_PRESIDENT: "/food/dashboard",
     FNB_SUPERVISOR: "/food/dashboard",
     FNB_MANAGER: "/food/dashboard",

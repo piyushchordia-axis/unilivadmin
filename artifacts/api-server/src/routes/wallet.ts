@@ -17,7 +17,7 @@ import {
 import { eq, desc, and, sql, inArray, asc } from "drizzle-orm";
 import { authenticate } from "../middlewares/auth.js";
 import { authorize } from "../middlewares/authorize.js";
-import { assertPropertyAccess, scopedPropertyId, httpError } from "../lib/authz.js";
+import { assertPropertyAccess, scopedPropertyId, httpError, isSuperAdmin } from "../lib/authz.js";
 import { newId } from "../lib/id.js";
 import {
   getOrCreateWallet,
@@ -1031,7 +1031,7 @@ walletRouter.post(
       // O30 wallet debit lock: only SUPER_ADMIN may remove funds. A negative
       // adjustment (ADJUSTMENT_DEBIT) drains the wallet, so reject it for every
       // other role. Credits / add-funds remain available to all permitted roles.
-      if (adjustType === "ADJUSTMENT_DEBIT" && req.user?.role !== "SUPER_ADMIN") {
+      if (adjustType === "ADJUSTMENT_DEBIT" && !isSuperAdmin(req.user?.role)) {
         res.status(403).json({ success: false, error: "Removing funds is not permitted" });
         return;
       }

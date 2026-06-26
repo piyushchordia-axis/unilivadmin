@@ -43,6 +43,7 @@ import { and, eq, or, ilike, sql, desc, gte, lte, inArray, isNull, isNotNull } f
 import { authenticate } from "../middlewares/auth.js";
 import { authorize } from "../middlewares/authorize.js";
 import { getPagination, buildMeta } from "../lib/paginate.js";
+import { isSuperAdmin } from "../lib/authz.js";
 import { newId } from "../lib/id.js";
 import {
   resolveAccessiblePropertyIds,
@@ -435,7 +436,7 @@ const foodDefaultsSchema = z.object({
 
 foodOpsRouter.put("/system-config/food-defaults", authenticate, async (req, res) => {
   try {
-    if (req.user?.role !== "SUPER_ADMIN") {
+    if (!isSuperAdmin(req.user?.role)) {
       res.status(403).json({ success: false, error: "Forbidden — SUPER_ADMIN only" });
       return;
     }
@@ -2365,7 +2366,7 @@ const ontimeToleranceSchema = z.object({ minutes: z.union([z.string(), z.number(
 
 foodOpsRouter.put("/settings/ontime-tolerance", authenticate, async (req, res) => {
   try {
-    if (req.user?.role !== "SUPER_ADMIN") {
+    if (!isSuperAdmin(req.user?.role)) {
       res.status(403).json({ success: false, error: "Forbidden — SUPER_ADMIN only" }); return;
     }
     if (!validateBody(ontimeToleranceSchema, req, res)) return;

@@ -38,6 +38,7 @@ import {
   type Ingredient, type CompositionRule, type FoodDefaults,
 } from "@/lib/food-api";
 import { usePermissions } from "@/lib/use-permissions";
+import { isSuperAdminRole } from "@/lib/permissions";
 
 // ─── Enums (from spec) ────────────────────────────────────────────────────────
 const DISH_COMPONENTS = [
@@ -97,7 +98,7 @@ export default function FoodSettings() {
   const propName = (id?: string | null) =>
     id ? (properties.find((p) => p.id === id)?.name ?? "—") : "—";
   const { role } = usePermissions();
-  const isSuperAdmin = role === "SUPER_ADMIN";
+  const isSuperAdmin = isSuperAdminRole(role);
 
   return (
     <div className="space-y-6">

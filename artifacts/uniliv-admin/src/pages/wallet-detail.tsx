@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { usePermissions } from "@/lib/use-permissions";
+import { isSuperAdminRole } from "@/lib/permissions";
 import { ChevronLeft, ArrowUpCircle, RotateCcw, Download, RefreshCw } from "lucide-react";
 import { format } from "date-fns";
 import { useGetResident, getGetResidentQueryKey } from "@workspace/api-client-react";
@@ -175,7 +176,7 @@ export default function WalletDetail() {
   const projectedBalance = (wallet?.balance ?? 0) + (parseFloat(topupAmount) || 0);
 
   const canTopup = wallet?.walletEnabled;
-  const canReverse = role === "SUPER_ADMIN";
+  const canReverse = isSuperAdminRole(role);
 
   if (residentLoading || walletLoading) {
     return (

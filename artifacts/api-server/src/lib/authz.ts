@@ -65,9 +65,10 @@ export const badRequest = (msg = "Bad request", details?: unknown) => httpError(
 export const ROLE_RANK: Record<string, number> = {
   // ── Tier 4: top of the org ──────────────────────────────────────────────
   SUPER_ADMIN: 100,
+  // B3-24: OPS_EXCELLENCE has full super-admin parity, so it ranks alongside it.
+  OPS_EXCELLENCE: 100,
   // ── Tier 3: org-wide leadership / cross-property heads ───────────────────
   SENIOR_VICE_PRESIDENT: 80,
-  OPS_EXCELLENCE: 80,
   AUDIT_READONLY: 80,
   FINANCE: 80,
   HR_MANAGER: 80,
@@ -99,8 +100,17 @@ export const ROLE_RANK: Record<string, number> = {
  * SUPER_ADMIN impossible for anyone who isn't already SUPER_ADMIN. Unknown roles
  * rank 0 (lowest).
  */
+/**
+ * True for the top-tier admin roles that are treated identically everywhere.
+ * B3-24 granted OPS_EXCELLENCE full parity with SUPER_ADMIN, so every former
+ * `role === "SUPER_ADMIN"` privilege gate should use this instead.
+ */
+export function isSuperAdmin(role: string | undefined | null): boolean {
+  return role === "SUPER_ADMIN" || role === "OPS_EXCELLENCE";
+}
+
 export function assertCanAssignRole(callerRole: string, targetRole: string): void {
-  if (callerRole === "SUPER_ADMIN") return;
+  if (isSuperAdmin(callerRole)) return;
   const callerRank = ROLE_RANK[callerRole] ?? 0;
   const targetRank = ROLE_RANK[targetRole] ?? 0;
   if (targetRank <= callerRank) return;

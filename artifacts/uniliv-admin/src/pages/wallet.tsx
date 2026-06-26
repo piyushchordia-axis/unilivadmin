@@ -15,6 +15,7 @@ import { FormModal } from "@/components/ui/form-modal";
 import { StatusBadge } from "@/components/status-badge";
 import { useToast } from "@/hooks/use-toast";
 import { usePermissions } from "@/lib/use-permissions";
+import { isSuperAdminRole } from "@/lib/permissions";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
@@ -72,7 +73,7 @@ export default function WalletPage() {
   const { can, role } = usePermissions();
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const isSuperAdmin = role === "SUPER_ADMIN";
+  const isSuperAdmin = isSuperAdminRole(role);
 
   const [search, setSearch] = React.useState("");
   const [debouncedSearch, setDebouncedSearch] = React.useState("");

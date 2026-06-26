@@ -14,6 +14,7 @@ import { Badge } from "@/components/ui/badge";
 import { Check, X } from "lucide-react";
 import { apiFetch } from "@/lib/api-fetch";
 import { usePermissions } from "@/lib/use-permissions";
+import { isSuperAdminRole } from "@/lib/permissions";
 import { useToast } from "@/hooks/use-toast";
 import { useGetProperties, getGetPropertiesQueryKey } from "@workspace/api-client-react";
 
@@ -552,7 +553,7 @@ export default function Settings() {
   const { can, role } = usePermissions();
   const canEdit = can("SETTINGS", "edit");
   const canEditElectricity = can("ELECTRICITY", "edit");
-  const isSuperAdmin = role === "SUPER_ADMIN";
+  const isSuperAdmin = isSuperAdminRole(role);
   return (
     <>
       <PageHeader title="Settings" subtitle="System configuration, integrations, and audit" />

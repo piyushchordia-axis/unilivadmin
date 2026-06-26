@@ -3,6 +3,7 @@ import { db, slaConfigTable, complaintRoutingTable, integrationStatusTable, audi
 import { eq, desc, inArray } from "drizzle-orm";
 import { authenticate } from "../middlewares/auth.js";
 import { authorize } from "../middlewares/authorize.js";
+import { isSuperAdmin } from "../lib/authz.js";
 import { newId } from "../lib/id.js";
 
 export const settingsRouter = Router();
@@ -153,7 +154,7 @@ async function readOtpConfig(): Promise<Record<string, number>> {
 // Read current OTP caps. SUPER_ADMIN only (sensitive login-security setting).
 settingsRouter.get("/otp-config", authenticate, async (req, res) => {
   try {
-    if (req.user?.role !== "SUPER_ADMIN") {
+    if (!isSuperAdmin(req.user?.role)) {
       res.status(403).json({ success: false, error: "Forbidden — SUPER_ADMIN only" });
       return;
     }
@@ -164,7 +165,7 @@ settingsRouter.get("/otp-config", authenticate, async (req, res) => {
 // Upsert OTP caps. SUPER_ADMIN only; validates each value is a positive integer in bounds.
 settingsRouter.put("/otp-config", authenticate, async (req, res) => {
   try {
-    if (req.user?.role !== "SUPER_ADMIN") {
+    if (!isSuperAdmin(req.user?.role)) {
       res.status(403).json({ success: false, error: "Forbidden — SUPER_ADMIN only" });
       return;
     }

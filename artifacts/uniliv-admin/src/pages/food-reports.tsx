@@ -25,6 +25,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 import { usePermissions } from "@/lib/use-permissions";
+import { isSuperAdminRole } from "@/lib/permissions";
 import { apiDownload } from "@/lib/api-fetch";
 import {
   foodApi, foodKeys, BRANDS, ORDER_STATUSES,
@@ -172,7 +173,7 @@ export default function FoodReports() {
 
   // O16 — global on-time tolerance (read by any food user, written by SUPER_ADMIN).
   const { role } = usePermissions();
-  const isSuperAdmin = role === "SUPER_ADMIN";
+  const isSuperAdmin = isSuperAdminRole(role);
 
   const { data: tolerance } = useQuery<OnTimeTolerance>({
     queryKey: foodKeys.ontimeTolerance(),

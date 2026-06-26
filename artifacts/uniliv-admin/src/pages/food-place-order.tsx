@@ -39,6 +39,7 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { useAppStore } from "@/lib/store";
 import { usePermissions } from "@/lib/use-permissions";
+import { isSuperAdminRole } from "@/lib/permissions";
 import { useQueryParam } from "@/lib/nav-helpers";
 import { cn } from "@/lib/utils";
 
@@ -75,7 +76,7 @@ export default function FoodPlaceOrder() {
   const { can, role } = usePermissions();
   const canPlace = can("FOOD_PLACE_ORDER", "create");
   // Download menu stays for Unit Lead + FnB roles (only on the success state).
-  const canDownload = role === "UNIT_LEAD" || role === "SUPER_ADMIN" || (role ?? "").startsWith("FNB_");
+  const canDownload = role === "UNIT_LEAD" || isSuperAdminRole(role) || (role ?? "").startsWith("FNB_");
 
   const [propertyId, setPropertyId] = React.useState<string>("");
   const [propertyOpen, setPropertyOpen] = React.useState(false);
