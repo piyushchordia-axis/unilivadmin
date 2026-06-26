@@ -14,7 +14,7 @@ import { apiFetch } from "@/lib/api-fetch";
 export type FoodBrand = string;
 export type MealType = "BREAKFAST" | "LUNCH" | "SNACKS" | "DINNER";
 export type OrderStatus = "PLACED" | "ACCEPTED" | "REJECTED" | "PREPARING" | "DISPATCHED" | "DELIVERED" | "CANCELLED";
-export type DispatchStatus = "LOADING" | "IN_TRANSIT" | "DELIVERED" | "PARTIAL";
+export type DispatchStatus = "LOADING" | "IN_TRANSIT" | "DELIVERED" | "PARTIAL" | "CANCELLED";
 
 export const MEAL_TYPES: MealType[] = ["BREAKFAST", "LUNCH", "SNACKS", "DINNER"];
 export const PREPARATIONS = ["VEG", "NON_VEG", "JAIN"] as const;

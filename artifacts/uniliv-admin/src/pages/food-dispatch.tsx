@@ -5,6 +5,7 @@ import { format } from "date-fns";
 import {
   Truck, Package, Clock, Users, Boxes, MapPin, CheckCircle2, Send, Inbox, X,
   ChefHat, User, Phone, Hash, Timer, Route, ChevronRight, PackageCheck,
+  Check, ChevronsUpDown, History, Ban, AlertCircle,
 } from "lucide-react";
 import { PageHeader } from "@/components/page-header";
 import { GlobalPropertyScopeBanner } from "@/components/property-scope-banner";
@@ -25,6 +26,14 @@ import { BoundedScroll } from "@/components/ui/bounded-scroll";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
+import { Combobox, type ComboboxOption } from "@/components/ui/combobox";
+import {
+  Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList,
+} from "@/components/ui/command";
+import {
+  Popover, PopoverContent, PopoverTrigger,
+} from "@/components/ui/popover";
+import { cn } from "@/lib/utils";
 import {
   Drawer, DrawerContent, DrawerHeader, DrawerTitle, DrawerDescription,
   DrawerFooter, DrawerClose,
@@ -40,21 +49,39 @@ import { useAppStore } from "@/lib/store";
 import {
   foodApi, foodKeys, MEAL_TYPES, BRANDS, MEAL_LABEL, fmtQty,
   type FoodOrder, type FoodBrand, type MealType,
-  type Dispatch, type DispatchStatus,
+  type Dispatch, type DispatchStatus, type DispatchDetailOrder,
 } from "@/lib/food-api";
 
 const ALL = "ALL";
 
-const DISPATCH_STATUSES: DispatchStatus[] = ["LOADING", "IN_TRANSIT", "DELIVERED", "PARTIAL"];
+// Queue rows are FoodOrders that MAY also carry the enriched delivery/contact
+// fields (present on dispatch-detail orders; optional on the list endpoint).
+type QueueOrder = FoodOrder & {
+  deliveryAddress?: string | null;
+  deliveryPincode?: string | null;
+  unitLeadPhone?: string | null;
+};
+
+// Dispatch state machine — legal next states per current status. Terminal
+// states (DELIVERED / CANCELLED) have none. "CANCELLED" is a server status that
+// is not part of the badge-meta union, so it is keyed loosely.
+const DISPATCH_TRANSITIONS: Record<string, DispatchStatus[]> = {
+  LOADING: ["IN_TRANSIT", "CANCELLED" as DispatchStatus],
+  IN_TRANSIT: ["DELIVERED", "PARTIAL", "CANCELLED" as DispatchStatus],
+  PARTIAL: ["DELIVERED", "IN_TRANSIT"],
+  DELIVERED: [],
+  CANCELLED: [],
+};
 
 const DISPATCH_STATUS_META: Record<
-  DispatchStatus,
-  { label: string; variant: "secondary" | "info" | "success" | "warning"; icon: React.ElementType }
+  string,
+  { label: string; variant: "secondary" | "info" | "success" | "warning" | "destructive"; icon: React.ElementType }
 > = {
   LOADING: { label: "Loading", variant: "secondary", icon: Boxes },
   IN_TRANSIT: { label: "In transit", variant: "info", icon: Truck },
   DELIVERED: { label: "Delivered", variant: "success", icon: PackageCheck },
   PARTIAL: { label: "Partial", variant: "warning", icon: Timer },
+  CANCELLED: { label: "Cancelled", variant: "destructive", icon: Ban },
 };
 
 function DispatchStatusBadge({ status }: { status: DispatchStatus }) {
@@ -98,6 +125,10 @@ export default function FoodDispatch() {
     deliveryPartnerId: "", // agency id
     vehicleId: "",
     vehicleNumber: "",
+    // When a vehicle is picked from the list, vehicleNumber is auto-filled and the
+    // free-text field is locked (read-only) to fix the number↔vehicle desync. The
+    // user can explicitly "clear to override" to type a custom number.
+    vehicleLocked: false,
     driverName: "",
     driverPhone: "",
     etaMinutes: "",
@@ -126,6 +157,14 @@ export default function FoodDispatch() {
     queryFn: () => foodApi.listKitchens(),
   });
 
+  // ── Vehicles already on an active (LOADING/IN_TRANSIT) trip — to disable in
+  //    the vehicle picker. Refetch alongside trip mutations via invalidation.
+  const { data: activeVehicleIds = [] } = useQuery({
+    queryKey: foodKeys.activeVehicles(),
+    queryFn: () => foodApi.getActiveVehicles(),
+  });
+  const activeVehicleSet = React.useMemo(() => new Set(activeVehicleIds), [activeVehicleIds]);
+
   // ── Effective property scope: explicit filter wins, else global store ──────
   const effectiveProperty =
     propertyId !== ALL ? propertyId : storeProperty ?? undefined;
@@ -151,8 +190,9 @@ export default function FoodDispatch() {
     queryFn: () => foodApi.listOrders(acceptedParams),
   });
 
-  // Dispatchable board = PREPARING (primary) + ACCEPTED (ready to load).
-  const dispatchable = React.useMemo<FoodOrder[]>(() => {
+  // Dispatchable board = PREPARING (primary) + ACCEPTED (ready to load). Rows may
+  // carry the enriched delivery/unit-lead contact fields when the API provides them.
+  const dispatchable = React.useMemo<QueueOrder[]>(() => {
     const prep = preparingRes?.data ?? [];
     const acc = acceptedRes?.data ?? [];
     const seen = new Set(prep.map((o) => o.id));
@@ -171,6 +211,26 @@ export default function FoodDispatch() {
     queryKey: foodKeys.dispatches(),
     queryFn: () => foodApi.listDispatches(),
   });
+
+  // ── Kitchens implied by the current selection (to filter serving agencies) ──
+  const selectedKitchenIds = React.useMemo(() => {
+    const ids = new Set<string>();
+    for (const o of dispatchable) {
+      if (selected.has(o.id) && o.kitchenId) ids.add(o.kitchenId);
+    }
+    return ids;
+  }, [dispatchable, selected]);
+
+  // Agencies that serve at least one of the selected orders' kitchens. When the
+  // selection has no resolved kitchen (or none match), fall back to all agencies
+  // so the picker is never empty.
+  const servingAgencies = React.useMemo(() => {
+    if (selectedKitchenIds.size === 0) return agencies;
+    const matched = agencies.filter((a) =>
+      (a.kitchenIds ?? []).some((kid) => selectedKitchenIds.has(kid)),
+    );
+    return matched.length > 0 ? matched : agencies;
+  }, [agencies, selectedKitchenIds]);
 
   // Prune stale selection when the queue changes
   React.useEffect(() => {
@@ -217,21 +277,11 @@ export default function FoodDispatch() {
         description: trip?.dispatchNumber ? `Trip ${trip.dispatchNumber} is loading` : undefined,
       });
       setSelected(new Set());
-      setTripForm({ kitchenId: "", deliveryPartnerId: "", vehicleId: "", vehicleNumber: "", driverName: "", driverPhone: "", etaMinutes: "" });
+      setTripForm({ kitchenId: "", deliveryPartnerId: "", vehicleId: "", vehicleNumber: "", vehicleLocked: false, driverName: "", driverPhone: "", etaMinutes: "" });
       setTripOpen(false);
       invalidate();
     },
     onError: (e: any) => toast({ title: e?.message || "Could not create trip", variant: "destructive" }),
-  });
-
-  const updateTripStatus = useMutation({
-    mutationFn: ({ id, status }: { id: string; status: DispatchStatus }) =>
-      foodApi.updateDispatchStatus(id, status),
-    onSuccess: () => {
-      toast({ title: "Trip status updated" });
-      invalidate();
-    },
-    onError: (e: any) => toast({ title: e?.message || "Could not update trip", variant: "destructive" }),
   });
 
   const onDispatchOne = (o: FoodOrder) => {
@@ -423,6 +473,32 @@ export default function FoodDispatch() {
                             <p className="text-muted-foreground text-[10px] uppercase tracking-wider">Total Qty</p>
                             <p className="font-medium">{totalQ(o)}</p>
                           </div>
+                        </div>
+
+                        {/* Delivery destination + unit-lead contact */}
+                        <div className="space-y-1 text-xs">
+                          <p className="flex items-start gap-1.5 text-foreground">
+                            <MapPin className="w-3.5 h-3.5 text-muted-foreground mt-px shrink-0" />
+                            <span className="min-w-0">
+                              {o.deliveryAddress ? (
+                                <>
+                                  {o.deliveryAddress}
+                                  {o.deliveryPincode ? <span className="text-muted-foreground"> · {o.deliveryPincode}</span> : null}
+                                </>
+                              ) : (
+                                <span className="text-muted-foreground">{o.propertyName || propName(o.propertyId)}</span>
+                              )}
+                            </span>
+                          </p>
+                          <p className="flex items-center gap-1.5 text-muted-foreground">
+                            <User className="w-3.5 h-3.5 shrink-0" />
+                            <span className="truncate">{o.unitLeadName || "Unit-lead unassigned"}</span>
+                            {o.unitLeadPhone && (
+                              <a href={`tel:${o.unitLeadPhone}`} className="font-mono text-foreground hover:text-accent inline-flex items-center gap-1">
+                                <Phone className="w-3 h-3" />{o.unitLeadPhone}
+                              </a>
+                            )}
+                          </p>
                         </div>
 
                         <p className="text-xs text-muted-foreground flex items-center gap-1.5">
@@ -632,52 +708,74 @@ export default function FoodDispatch() {
                 <Label className="flex items-center gap-1.5">
                   <Truck className="w-3.5 h-3.5 text-muted-foreground" /> Agency
                 </Label>
-                <Select
-                  value={tripForm.deliveryPartnerId}
-                  onValueChange={(v) => setTripForm((f) => ({ ...f, deliveryPartnerId: v, vehicleId: "", vehicleNumber: "" }))}
-                >
-                  <SelectTrigger><SelectValue placeholder="Select agency" /></SelectTrigger>
-                  <SelectContent>
-                    {agencies.length === 0 ? (
-                      <div className="px-2 py-1.5 text-sm text-muted-foreground">No agencies available</div>
-                    ) : (
-                      agencies.map((a) => (<SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>))
-                    )}
-                  </SelectContent>
-                </Select>
+                <Combobox
+                  options={servingAgencies.map<ComboboxOption>((a) => ({ value: a.id, label: a.name }))}
+                  value={tripForm.deliveryPartnerId || null}
+                  onChange={(v) =>
+                    setTripForm((f) => ({
+                      ...f,
+                      deliveryPartnerId: v ?? "",
+                      vehicleId: "",
+                      vehicleNumber: "",
+                      vehicleLocked: false,
+                    }))
+                  }
+                  placeholder="Select agency"
+                  searchPlaceholder="Search agencies…"
+                  emptyText="No matching agency."
+                  allowClear
+                />
+                {selectedKitchenIds.size > 0 && (
+                  <p className="text-[11px] text-muted-foreground">
+                    Showing agencies that serve the selected orders' kitchen{selectedKitchenIds.size === 1 ? "" : "s"}.
+                  </p>
+                )}
               </div>
 
               <div className="space-y-1.5">
                 <Label className="flex items-center gap-1.5">
                   <Truck className="w-3.5 h-3.5 text-muted-foreground" /> Vehicle
                 </Label>
-                <Select
-                  value={tripForm.vehicleId || "__none"}
-                  onValueChange={(v) => {
-                    const veh = tripAgency?.vehicles.find((x) => x.id === v);
-                    setTripForm((f) => ({ ...f, vehicleId: v === "__none" ? "" : v, vehicleNumber: veh?.vehicleNumber ?? f.vehicleNumber }));
-                  }}
+                <VehiclePicker
+                  vehicles={tripAgency?.vehicles ?? []}
+                  value={tripForm.vehicleId || null}
+                  activeVehicleSet={activeVehicleSet}
                   disabled={!tripAgency}
-                >
-                  <SelectTrigger><SelectValue placeholder={tripAgency ? "Select vehicle" : "Pick an agency first"} /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__none">— No vehicle —</SelectItem>
-                    {(tripAgency?.vehicles ?? []).map((veh) => (
-                      <SelectItem key={veh.id} value={veh.id}>{veh.vehicleNumber} · {veh.vehicleType}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                  onChange={(vehId) => {
+                    const veh = tripAgency?.vehicles.find((x) => x.id === vehId);
+                    setTripForm((f) =>
+                      vehId
+                        ? { ...f, vehicleId: vehId, vehicleNumber: veh?.vehicleNumber ?? f.vehicleNumber, vehicleLocked: true }
+                        : { ...f, vehicleId: "", vehicleLocked: false },
+                    );
+                  }}
+                />
               </div>
 
               <div className="space-y-1.5">
                 <Label className="flex items-center gap-1.5">
                   <Hash className="w-3.5 h-3.5 text-muted-foreground" /> Vehicle number
                 </Label>
-                <Input
-                  placeholder="e.g. DL 1A 2345"
-                  value={tripForm.vehicleNumber}
-                  onChange={(e) => setTripForm((f) => ({ ...f, vehicleNumber: e.target.value }))}
-                />
+                <div className="flex items-center gap-2">
+                  <Input
+                    placeholder="e.g. DL 1A 2345"
+                    value={tripForm.vehicleNumber}
+                    readOnly={tripForm.vehicleLocked}
+                    className={cn(tripForm.vehicleLocked && "bg-muted text-muted-foreground")}
+                    onChange={(e) => setTripForm((f) => ({ ...f, vehicleNumber: e.target.value }))}
+                  />
+                  {tripForm.vehicleLocked && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="shrink-0 text-muted-foreground"
+                      onClick={() => setTripForm((f) => ({ ...f, vehicleId: "", vehicleLocked: false }))}
+                    >
+                      <X className="w-3.5 h-3.5 mr-1" /> Clear to override
+                    </Button>
+                  )}
+                </div>
               </div>
 
               <div className="space-y-1.5">
@@ -742,8 +840,6 @@ export default function FoodDispatch() {
         onClose={() => setOpenTripId(null)}
         propName={propName}
         partnerName={partnerName}
-        onUpdateStatus={(id, status) => updateTripStatus.mutate({ id, status })}
-        updating={updateTripStatus.isPending}
       />
     </div>
   );
@@ -807,20 +903,73 @@ function TripCard({ trip, onOpen }: { trip: Dispatch; onOpen: () => void }) {
 
 /* ── Trip detail sheet (loads full dispatch) ────────────────────────────── */
 function TripDetailSheet({
-  tripId, onClose, propName, partnerName, onUpdateStatus, updating,
+  tripId, onClose, propName, partnerName,
 }: {
   tripId: string | null;
   onClose: () => void;
   propName: (id?: string | null) => string;
   partnerName: (id?: string | null) => string;
-  onUpdateStatus: (id: string, status: DispatchStatus) => void;
-  updating: boolean;
 }) {
+  const qc = useQueryClient();
+  const { toast } = useToast();
+
   const { data: detail, isLoading } = useQuery({
     queryKey: foodKeys.dispatch(tripId ?? ""),
     queryFn: () => foodApi.getDispatch(tripId as string),
     enabled: !!tripId,
   });
+
+  // Audit trail (newest-first).
+  const { data: events = [], isLoading: loadingEvents } = useQuery({
+    queryKey: foodKeys.dispatchEvents(tripId ?? ""),
+    queryFn: () => foodApi.getDispatchEvents(tripId as string),
+    enabled: !!tripId,
+  });
+
+  // Invalidate this trip + the boards (orders/queue/list all live under ["food"]).
+  const invalidate = () => {
+    qc.invalidateQueries({ queryKey: ["food"] });
+    if (tripId) {
+      qc.invalidateQueries({ queryKey: foodKeys.dispatch(tripId) });
+      qc.invalidateQueries({ queryKey: foodKeys.dispatchEvents(tripId) });
+    }
+  };
+  const onErr = (e: any) => toast({ title: e?.message || "Action failed", variant: "destructive" });
+
+  // ── Trip-action mutations ──────────────────────────────────────────────
+  const depart = useMutation({
+    mutationFn: (id: string) => foodApi.departDispatch(id),
+    onSuccess: () => { toast({ title: "Trip departed" }); invalidate(); },
+    onError: onErr,
+  });
+  const transition = useMutation({
+    mutationFn: ({ id, status }: { id: string; status: DispatchStatus }) =>
+      foodApi.updateDispatchStatus(id, status),
+    onSuccess: (_d, vars) => { toast({ title: `Trip marked ${DISPATCH_STATUS_META[vars.status]?.label ?? vars.status}` }); invalidate(); },
+    onError: onErr,
+  });
+  const cancel = useMutation({
+    mutationFn: (id: string) => foodApi.cancelDispatch(id),
+    onSuccess: () => { toast({ title: "Trip cancelled" }); invalidate(); },
+    onError: onErr,
+  });
+  const setDelivered = useMutation({
+    mutationFn: ({ id, orderId, delivered }: { id: string; orderId: string; delivered: boolean }) =>
+      foodApi.setOrderDelivered(id, orderId, { delivered, markTripDelivered: true }),
+    onSuccess: () => { invalidate(); },
+    onError: onErr,
+  });
+
+  const busy = depart.isPending || transition.isPending || cancel.isPending || setDelivered.isPending;
+  const nextStates = detail ? (DISPATCH_TRANSITIONS[detail.status] ?? []) : [];
+
+  // Dispatch one of the legal transitions through the right method.
+  const go = (status: DispatchStatus | "CANCELLED") => {
+    if (!detail) return;
+    if (status === "CANCELLED") { cancel.mutate(detail.id); return; }
+    if (detail.status === "LOADING" && status === "IN_TRANSIT") { depart.mutate(detail.id); return; }
+    transition.mutate({ id: detail.id, status });
+  };
 
   return (
     <Sheet open={!!tripId} onOpenChange={(o) => { if (!o) onClose(); }}>
@@ -862,6 +1011,20 @@ function TripDetailSheet({
                   <InfoTile icon={Phone} label="Driver mobile" value={detail.driverPhone || "—"} mono />
                 </div>
 
+                {/* Kitchen pickup address + contact tiles */}
+                {detail.kitchen && (detail.kitchen.address || detail.kitchen.pincode || detail.kitchen.contactName || detail.kitchen.contactPhone) && (
+                  <div className="grid grid-cols-2 gap-4">
+                    <InfoTile
+                      icon={MapPin}
+                      label="Kitchen address"
+                      value={[detail.kitchen.address, detail.kitchen.city, detail.kitchen.pincode].filter(Boolean).join(", ") || "—"}
+                    />
+                    <InfoTile icon={Hash} label="Kitchen pincode" value={detail.kitchen.pincode || "—"} mono />
+                    <InfoTile icon={User} label="Kitchen contact" value={detail.kitchen.contactName || "—"} />
+                    <InfoTile icon={Phone} label="Kitchen phone" value={detail.kitchen.contactPhone || "—"} mono />
+                  </div>
+                )}
+
                 {detail.dispatchedAt && (
                   <p className="text-xs text-muted-foreground flex items-center gap-1.5">
                     <Send className="w-3.5 h-3.5" />
@@ -869,26 +1032,25 @@ function TripDetailSheet({
                   </p>
                 )}
 
-                {/* Status updater */}
+                {/* State-aware status control: only legal next states are offered. */}
                 <div className="space-y-2">
-                  <Label className="text-xs uppercase tracking-wider text-muted-foreground">Update trip status</Label>
-                  <Select
-                    value={detail.status}
-                    onValueChange={(v) => onUpdateStatus(detail.id, v as DispatchStatus)}
-                    disabled={updating}
-                  >
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      {DISPATCH_STATUSES.map((s) => (
-                        <SelectItem key={s} value={s}>{DISPATCH_STATUS_META[s].label}</SelectItem>
+                  <Label className="text-xs uppercase tracking-wider text-muted-foreground">Trip actions</Label>
+                  {nextStates.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">
+                      This trip is {DISPATCH_STATUS_META[detail.status]?.label.toLowerCase() ?? "closed"} — no further actions.
+                    </p>
+                  ) : (
+                    <div className="flex flex-wrap gap-2">
+                      {nextStates.map((s) => (
+                        <TransitionButton key={s} status={s} disabled={busy} onClick={() => go(s)} />
                       ))}
-                    </SelectContent>
-                  </Select>
+                    </div>
+                  )}
                 </div>
 
                 <Separator />
 
-                {/* Orders on this trip */}
+                {/* Orders on this trip (enriched: address + unit-lead + residents + delivered) */}
                 <div className="space-y-3">
                   <div className="flex items-center justify-between">
                     <h4 className="text-sm font-medium flex items-center gap-1.5">
@@ -899,28 +1061,80 @@ function TripDetailSheet({
                   {!detail.orders || detail.orders.length === 0 ? (
                     <p className="text-sm text-muted-foreground">No orders attached to this trip.</p>
                   ) : (
-                    <div className="rounded-lg border overflow-hidden">
+                    <div className="rounded-lg border overflow-x-auto">
                       <Table>
                         <TableHeader>
                           <TableRow>
+                            <TableHead className="w-10">Done</TableHead>
                             <TableHead>Order</TableHead>
-                            <TableHead>Property</TableHead>
-                            <TableHead>Meal</TableHead>
+                            <TableHead>Address</TableHead>
+                            <TableHead>Unit-lead</TableHead>
+                            <TableHead className="text-right">Residents</TableHead>
                             <TableHead className="text-right">Status</TableHead>
                           </TableRow>
                         </TableHeader>
                         <TableBody>
                           {detail.orders.map((o) => (
-                            <TableRow key={o.id}>
-                              <TableCell className="font-mono text-xs">{o.orderNumber}</TableCell>
-                              <TableCell className="text-sm">{o.propertyName || propName(o.propertyId)}</TableCell>
-                              <TableCell className="text-sm">{MEAL_LABEL[o.mealType]}</TableCell>
-                              <TableCell className="text-right"><StatusBadge status={o.status} /></TableCell>
-                            </TableRow>
+                            <OrderRow
+                              key={o.id}
+                              order={o}
+                              propName={propName}
+                              tripCancelled={detail.status === "CANCELLED"}
+                              disabled={busy}
+                              onToggle={(delivered) =>
+                                setDelivered.mutate({ id: detail.id, orderId: o.id, delivered })
+                              }
+                              pending={setDelivered.isPending && setDelivered.variables?.orderId === o.id}
+                            />
                           ))}
                         </TableBody>
                       </Table>
                     </div>
+                  )}
+                </div>
+
+                <Separator />
+
+                {/* Audit timeline */}
+                <div className="space-y-3">
+                  <h4 className="text-sm font-medium flex items-center gap-1.5">
+                    <History className="w-4 h-4 text-muted-foreground" /> Activity timeline
+                  </h4>
+                  {loadingEvents ? (
+                    <div className="space-y-2">
+                      <Skeleton className="h-8 w-full" />
+                      <Skeleton className="h-8 w-3/4" />
+                    </div>
+                  ) : events.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">No activity recorded yet.</p>
+                  ) : (
+                    <ol className="space-y-3">
+                      {events.map((ev) => {
+                        const meta = DISPATCH_STATUS_META[ev.status as string];
+                        const Icon = meta?.icon ?? Clock;
+                        return (
+                          <li key={ev.id} className="flex gap-3">
+                            <div className="mt-0.5 w-6 h-6 rounded-full bg-muted flex items-center justify-center shrink-0">
+                              <Icon className="w-3.5 h-3.5 text-muted-foreground" />
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <p className="text-sm font-medium flex items-center gap-2">
+                                {meta?.label ?? ev.status}
+                                <span className="text-xs font-normal text-muted-foreground">
+                                  {format(new Date(ev.createdAt), "dd MMM, HH:mm")}
+                                </span>
+                              </p>
+                              {ev.note && <p className="text-xs text-muted-foreground">{ev.note}</p>}
+                              {ev.actorName && (
+                                <p className="text-[11px] text-muted-foreground/80 flex items-center gap-1">
+                                  <User className="w-3 h-3" /> {ev.actorName}
+                                </p>
+                              )}
+                            </div>
+                          </li>
+                        );
+                      })}
+                    </ol>
                   )}
                 </div>
               </>
@@ -929,6 +1143,149 @@ function TripDetailSheet({
         </ScrollArea>
       </SheetContent>
     </Sheet>
+  );
+}
+
+/* ── One trip-action button, styled per target state ────────────────────── */
+function TransitionButton({
+  status, disabled, onClick,
+}: { status: DispatchStatus | "CANCELLED"; disabled?: boolean; onClick: () => void }) {
+  const cfg: Record<string, { label: string; icon: React.ElementType; className: string; variant?: "outline" | "destructive" }> = {
+    IN_TRANSIT: { label: "Depart", icon: Truck, className: "bg-accent hover:bg-accent/90 text-white" },
+    DELIVERED: { label: "Mark delivered", icon: PackageCheck, className: "bg-success hover:bg-success/90 text-white" },
+    PARTIAL: { label: "Mark partial", icon: Timer, className: "", variant: "outline" },
+    CANCELLED: { label: "Cancel trip", icon: Ban, className: "", variant: "destructive" },
+  };
+  const c = cfg[status] ?? { label: status, icon: ChevronRight, className: "", variant: "outline" as const };
+  const Icon = c.icon;
+  return (
+    <Button size="sm" variant={c.variant} className={c.className} disabled={disabled} onClick={onClick}>
+      <Icon className="w-4 h-4 mr-1.5" /> {c.label}
+    </Button>
+  );
+}
+
+/* ── One order row in the trip detail table, with delivered checkbox ────── */
+function OrderRow({
+  order: o, propName, tripCancelled, disabled, pending, onToggle,
+}: {
+  order: DispatchDetailOrder;
+  propName: (id?: string | null) => string;
+  tripCancelled: boolean;
+  disabled?: boolean;
+  pending?: boolean;
+  onToggle: (delivered: boolean) => void;
+}) {
+  const delivered = o.status === "DELIVERED";
+  const terminal = delivered || o.status === "CANCELLED" || tripCancelled;
+  const addr = [o.deliveryAddress, o.deliveryCity, o.deliveryPincode].filter(Boolean).join(", ");
+  return (
+    <TableRow className={delivered ? "bg-success/5" : undefined}>
+      <TableCell>
+        <Checkbox
+          checked={delivered}
+          disabled={disabled || pending || terminal}
+          onCheckedChange={(v) => onToggle(!!v)}
+          aria-label={`Mark ${o.orderNumber} delivered`}
+        />
+      </TableCell>
+      <TableCell className="font-mono text-xs align-top">
+        <div>{o.orderNumber}</div>
+        <div className="text-muted-foreground font-sans">{o.propertyName || propName(o.propertyId)}</div>
+      </TableCell>
+      <TableCell className="text-xs align-top max-w-[180px]">
+        {addr ? <span className="text-foreground">{addr}</span> : <span className="text-muted-foreground">—</span>}
+      </TableCell>
+      <TableCell className="text-xs align-top">
+        <div className="truncate">{o.unitLeadName || "—"}</div>
+        {o.unitLeadPhone && (
+          <a href={`tel:${o.unitLeadPhone}`} className="font-mono text-muted-foreground hover:text-accent inline-flex items-center gap-1">
+            <Phone className="w-3 h-3" />{o.unitLeadPhone}
+          </a>
+        )}
+      </TableCell>
+      <TableCell className="text-right text-sm align-top">{o.residentsCount ?? "—"}</TableCell>
+      <TableCell className="text-right align-top"><StatusBadge status={o.status} /></TableCell>
+    </TableRow>
+  );
+}
+
+/* ── Searchable vehicle picker (disables vehicles already on an active trip) ── */
+function VehiclePicker({
+  vehicles, value, activeVehicleSet, disabled, onChange,
+}: {
+  vehicles: { id: string; vehicleNumber: string; vehicleType: string }[];
+  value: string | null;
+  activeVehicleSet: Set<string>;
+  disabled?: boolean;
+  onChange: (vehicleId: string | null) => void;
+}) {
+  const [open, setOpen] = React.useState(false);
+  const selected = vehicles.find((v) => v.id === value) ?? null;
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          role="combobox"
+          aria-expanded={open}
+          disabled={disabled}
+          className={cn("w-full justify-between font-normal", !selected && "text-muted-foreground")}
+        >
+          <span className="truncate">
+            {selected ? `${selected.vehicleNumber} · ${selected.vehicleType}` : disabled ? "Pick an agency first" : "Select vehicle"}
+          </span>
+          <ChevronsUpDown className="ml-2 size-4 shrink-0 opacity-50" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
+        <Command
+          filter={(itemValue, search, keywords) => {
+            const hay = [itemValue, ...(keywords ?? [])].join(" ").toLowerCase();
+            return hay.includes(search.toLowerCase()) ? 1 : 0;
+          }}
+        >
+          <CommandInput placeholder="Search by vehicle number…" />
+          <CommandList className="max-h-64">
+            <CommandEmpty>No matching vehicle.</CommandEmpty>
+            <CommandGroup>
+              <CommandItem
+                value="__none"
+                keywords={["none", "no vehicle"]}
+                onSelect={() => { onChange(null); setOpen(false); }}
+              >
+                <Check className={cn("size-4", !value ? "opacity-100" : "opacity-0")} />
+                <span className="text-muted-foreground">— No vehicle —</span>
+              </CommandItem>
+              {vehicles.map((veh) => {
+                const isActive = activeVehicleSet.has(veh.id);
+                const isSel = veh.id === value;
+                return (
+                  <CommandItem
+                    key={veh.id}
+                    value={veh.vehicleNumber}
+                    keywords={[veh.vehicleType, veh.id]}
+                    disabled={isActive && !isSel}
+                    onSelect={() => { onChange(veh.id); setOpen(false); }}
+                  >
+                    <Check className={cn("size-4", isSel ? "opacity-100" : "opacity-0")} />
+                    <span className="truncate">{veh.vehicleNumber}</span>
+                    <span className="ml-1 text-xs text-muted-foreground">· {veh.vehicleType}</span>
+                    {isActive && !isSel && (
+                      <Badge variant="secondary" className="ml-auto text-[10px] gap-1">
+                        <AlertCircle className="w-3 h-3" /> On trip
+                      </Badge>
+                    )}
+                  </CommandItem>
+                );
+              })}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
   );
 }
 

@@ -2,7 +2,7 @@ import * as React from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Plus, Pencil, Trash2, ChevronRight, MapPin, ChefHat, Building2, Tag,
-  Users, AlertTriangle, Globe, Network, ShieldCheck, Settings2,
+  Users, AlertTriangle, Globe, Network, ShieldCheck, Settings2, Truck,
 } from "lucide-react";
 import { PageHeader } from "@/components/page-header";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -22,6 +22,7 @@ import {
   type HierarchyTree, type HierarchyKitchen, type HierarchyProperty,
   type FoodBrandRow, type City, type Kitchen, type FoodUser, type UserScope, type FoodLookups,
 } from "@/lib/food-api";
+import { AgenciesTab } from "@/pages/food-agencies";
 
 const cx = (...c: (string | false | undefined)[]) => c.filter(Boolean).join(" ");
 
@@ -39,10 +40,12 @@ export default function FoodOrganization() {
         <TabsList>
           <TabsTrigger value="hierarchy"><Network className="mr-2 h-4 w-4" /> Hierarchy</TabsTrigger>
           <TabsTrigger value="brands"><Tag className="mr-2 h-4 w-4" /> Brands</TabsTrigger>
+          <TabsTrigger value="agencies"><Truck className="mr-2 h-4 w-4" /> Agencies</TabsTrigger>
           <TabsTrigger value="leads"><ShieldCheck className="mr-2 h-4 w-4" /> Unit Leads</TabsTrigger>
         </TabsList>
         <TabsContent value="hierarchy"><HierarchyTab /></TabsContent>
         <TabsContent value="brands"><BrandsTab /></TabsContent>
+        <TabsContent value="agencies"><AgenciesTab /></TabsContent>
         <TabsContent value="leads"><UnitLeadsTab /></TabsContent>
       </Tabs>
     </div>
