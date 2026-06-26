@@ -66,6 +66,7 @@ import FoodDispatch from "@/pages/food-dispatch";
 import FoodConfirmDelivery from "@/pages/food-confirm-delivery";
 import FoodWaste from "@/pages/food-waste";
 import FoodReports from "@/pages/food-reports";
+import FoodWasteAnalytics from "@/pages/food-waste-analytics";
 import FoodSettings from "@/pages/food-settings";
 import FoodOrganization from "@/pages/food-organization";
 import FoodMyProperties from "@/pages/food-my-properties";
@@ -166,6 +167,7 @@ function Router() {
       <Route path="/food/confirm-delivery">{() => <ProtectedRoute component={FoodConfirmDelivery} />}</Route>
       <Route path="/food/waste">{() => <ProtectedRoute component={FoodWaste} />}</Route>
       <Route path="/food/reports">{() => <ProtectedRoute component={FoodReports} />}</Route>
+      <Route path="/food/waste-analytics">{() => <ProtectedRoute component={FoodWasteAnalytics} />}</Route>
       <Route path="/food/settings">{() => <ProtectedRoute component={FoodSettings} />}</Route>
       
       <Route path="/leads">{() => <ProtectedRoute component={Leads} />}</Route>

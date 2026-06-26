@@ -182,6 +182,7 @@ export const PATH_TO_MODULE: Array<[RegExp, Module]> = [
   [/^\/food\/kitchen-summary/, "FOOD_KITCHEN_SUMMARY"],
   [/^\/food\/dispatch/, "FOOD_DISPATCH"],
   [/^\/food\/confirm-delivery/, "FOOD_CONFIRM_DELIVERY"],
+  [/^\/food\/waste-analytics/, "FOOD_REPORTS"],
   [/^\/food\/waste/, "FOOD_WASTE_TRACKING"],
   [/^\/food\/reports/, "FOOD_REPORTS"],
   [/^\/food\/settings/, "FOOD_SETTINGS"],

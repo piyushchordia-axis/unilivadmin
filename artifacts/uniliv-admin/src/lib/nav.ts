@@ -6,7 +6,7 @@ import {
   Repeat, BellRing, Landmark, Receipt, Wrench, Zap, ClipboardCheck, Radio, Wallet,
   UtensilsCrossed, ListOrdered, FilePlus2, Soup, Send, CheckCircle2, Trash2, SlidersHorizontal,
   Network, Home,
-  DoorOpen, CalendarCheck, CalendarX, LineChart,
+  DoorOpen, CalendarCheck, CalendarX, LineChart, Recycle,
   type LucideIcon,
 } from "lucide-react"
 import { type Module } from "@/lib/permissions"
@@ -73,6 +73,7 @@ export const navGroups: NavGroup[] = [
     { title: "Confirm Delivery", href: "/food/confirm-delivery", icon: CheckCircle2, module: "FOOD_CONFIRM_DELIVERY" },
     { title: "Waste Tracking", href: "/food/waste", icon: Trash2, module: "FOOD_WASTE_TRACKING" },
     { title: "Reports", href: "/food/reports", icon: BarChart3, module: "FOOD_REPORTS" },
+    { title: "Waste Analytics", href: "/food/waste-analytics", icon: Recycle, module: "FOOD_REPORTS" },
     { title: "Settings", href: "/food/settings", icon: SlidersHorizontal, module: "FOOD_SETTINGS" },
   ]},
   { title: "Growth", items: [

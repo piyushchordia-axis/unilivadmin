@@ -13,6 +13,7 @@ import {
   kitchensTable,
   kitchenPincodesTable,
   citiesTable,
+  clustersTable,
   foodBrandsTable,
   foodDispatchesTable,
   foodOrderBatchesTable,
@@ -1309,6 +1310,362 @@ foodOpsRouter.get("/analytics", authenticate, authorize("FOOD_REPORTS", "view"),
         },
       },
     });
+  } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
+});
+
+/* ════════════════════════════════════════════════════════════════════════
+ * Cross-property food-waste analytics (B3-17)
+ *
+ * Org-wide waste insight across the geographic hierarchy (Zone → City → Cluster
+ * → Property). Property-scoped roles (CITY_HEAD / CLUSTER) are automatically
+ * narrowed to their geography via resolveAccessiblePropertyIds; org-wide roles
+ * (OPS_EXCELLENCE / SUPER_ADMIN) see everything. All metrics sum numeric
+ * food_order_items quantities (wastedQty / receivedQty / orderedQty), joined to
+ * food_orders for the property/meal/brand/date dimensions and to clusters/cities
+ * for the geography labels (properties.city is the denormalised city name; the
+ * real city/cluster come through properties.clusterId → clusters → cities).
+ *
+ * Dimensions:
+ *   summary     — totals + wastePct (wasted/received) + ordersWithWaste count
+ *   byProperty  — top properties by wasted qty (with property wastePct)
+ *   byDish      — top dishes by wasted qty
+ *   byMealType  — wasted qty per meal
+ *   byMenu      — wasted qty per brand (brand is the menu dimension; orders carry
+ *                 no menu_id, so brand stands in for "menu")
+ *   trend       — wasted qty per period (day|month) across the range
+ *
+ * Filters: from/to (IST calendar days, default last 90 days), propertyId,
+ * clusterId, cityId (resolved via clusters), brand. granularity defaults to
+ * month when the range spans > 60 days, else day.
+ * ════════════════════════════════════════════════════════════════════════ */
+
+/** Number → numeric(…,3) rounding shared by the waste-analytics responses. */
+const wr3 = (n: unknown) => Math.round(Number(n ?? 0) * 1000) / 1000;
+/** wastePct = wasted/received, guarded against /0; one-decimal percentage. */
+const wastePctOf = (wasted: unknown, received: unknown) =>
+  Number(received) > 0 ? Math.round((Number(wasted) / Number(received)) * 1000) / 10 : 0;
+
+/**
+ * Resolve the shared scope + filter conditions for the waste-analytics endpoints.
+ * Returns the order-level WHERE (scope ∩ date-range ∩ filters), the resolved
+ * IST from/to YMD strings, the granularity, and the cityId→clusterId expansion
+ * used to apply the cityId filter without a properties.cityId column.
+ */
+async function wasteAnalyticsScope(req: any): Promise<{
+  where: ReturnType<typeof and>;
+  fromYmd: string; toYmd: string;
+  granularity: "day" | "month";
+}> {
+  const ids = await resolveAccessiblePropertyIds(req.user!);
+
+  // Date range — default last 90 days, anchored on IST calendar days.
+  const todayYmd = istDayYmd(new Date());
+  const toRaw = parseDate(req.query["to"]);
+  const fromRaw = parseDate(req.query["from"]);
+  const toYmd = toRaw ? istDayYmd(toRaw) : todayYmd;
+  const fromYmd = fromRaw ? istDayYmd(fromRaw) : addDaysYmd(toYmd, -89);
+  // Inclusive day bounds → [00:00 IST of from, 00:00 IST of (to + 1 day)).
+  const fromAt = atIst(fromYmd, "00:00");
+  const toAtExclusive = atIst(addDaysYmd(toYmd, 1), "00:00");
+
+  const propertyId = req.query["propertyId"] as string | undefined;
+  const clusterId = req.query["clusterId"] as string | undefined;
+  const cityId = req.query["cityId"] as string | undefined;
+  const brand = req.query["brand"] as string | undefined;
+
+  const conds = [
+    gte(foodOrdersTable.serviceDate, fromAt),
+    lte(foodOrdersTable.serviceDate, toAtExclusive),
+  ] as any[];
+  // Geography scope from the caller's role (null = org-wide; [] = nothing).
+  if (ids !== null) conds.push(ids.length ? inArray(foodOrdersTable.propertyId, ids) : sql`false`);
+  if (propertyId) conds.push(eq(foodOrdersTable.propertyId, propertyId));
+
+  // cityId / clusterId filters resolve to a set of property ids via the
+  // clusters→cities hierarchy (properties has clusterId but no cityId column).
+  if (clusterId || cityId) {
+    const geoConds = [] as any[];
+    if (clusterId) geoConds.push(eq(propertiesTable.clusterId, clusterId));
+    if (cityId) geoConds.push(eq(clustersTable.cityId, cityId));
+    const geoProps = await db.select({ id: propertiesTable.id })
+      .from(propertiesTable)
+      .leftJoin(clustersTable, eq(propertiesTable.clusterId, clustersTable.id))
+      .where(and(...geoConds));
+    const geoIds = geoProps.map((p) => p.id);
+    conds.push(geoIds.length ? inArray(foodOrdersTable.propertyId, geoIds) : sql`false`);
+  }
+
+  if (brand) conds.push(eq(foodOrdersTable.brand, brand as never));
+
+  // Granularity: explicit query wins; else month for ranges > 60 days, else day.
+  const gParam = String(req.query["granularity"] ?? "").toLowerCase();
+  const spanDays = Math.round((atIst(toYmd, "00:00").getTime() - fromAt.getTime()) / 86400000);
+  const granularity: "day" | "month" =
+    gParam === "day" || gParam === "month" ? gParam : spanDays > 60 ? "month" : "day";
+
+  return { where: and(...conds), fromYmd, toYmd, granularity };
+}
+
+foodOpsRouter.get("/waste-analytics", authenticate, authorize("FOOD_REPORTS", "view"), async (req, res) => {
+  try {
+    const { where, fromYmd, toYmd, granularity } = await wasteAnalyticsScope(req);
+
+    // ── Summary — totals across the filtered set ─────────────────────────────
+    const [summaryRow] = await db.select({
+      wasted: sql<number>`coalesce(sum(${foodOrderItemsTable.wastedQty}), 0)::float`,
+      received: sql<number>`coalesce(sum(${foodOrderItemsTable.receivedQty}), 0)::float`,
+      ordered: sql<number>`coalesce(sum(${foodOrderItemsTable.orderedQty}), 0)::float`,
+    }).from(foodOrdersTable)
+      .innerJoin(foodOrderItemsTable, eq(foodOrderItemsTable.orderId, foodOrdersTable.id))
+      .where(where);
+
+    // Orders that recorded any waste (distinct order ids with wasted > 0).
+    const [withWasteRow] = await db.select({
+      n: sql<number>`count(distinct ${foodOrdersTable.id})::int`,
+    }).from(foodOrdersTable)
+      .innerJoin(foodOrderItemsTable, eq(foodOrderItemsTable.orderId, foodOrdersTable.id))
+      .where(and(where, sql`${foodOrderItemsTable.wastedQty} > 0`));
+
+    const totalWasted = wr3(summaryRow?.wasted);
+    const totalReceived = wr3(summaryRow?.received);
+    const totalOrdered = wr3(summaryRow?.ordered);
+
+    // ── byProperty — top properties by wasted qty (with city/cluster labels) ──
+    const byPropertyRows = await db.select({
+      propertyId: foodOrdersTable.propertyId,
+      name: propertiesTable.name,
+      city: citiesTable.name,
+      cluster: clustersTable.name,
+      wasted: sql<number>`coalesce(sum(${foodOrderItemsTable.wastedQty}), 0)::float`,
+      received: sql<number>`coalesce(sum(${foodOrderItemsTable.receivedQty}), 0)::float`,
+    }).from(foodOrdersTable)
+      .innerJoin(foodOrderItemsTable, eq(foodOrderItemsTable.orderId, foodOrdersTable.id))
+      .leftJoin(propertiesTable, eq(foodOrdersTable.propertyId, propertiesTable.id))
+      .leftJoin(clustersTable, eq(propertiesTable.clusterId, clustersTable.id))
+      .leftJoin(citiesTable, eq(clustersTable.cityId, citiesTable.id))
+      .where(where)
+      .groupBy(foodOrdersTable.propertyId, propertiesTable.name, citiesTable.name, clustersTable.name)
+      .orderBy(desc(sql`sum(${foodOrderItemsTable.wastedQty})`))
+      .limit(50);
+
+    // ── byDish — top dishes by wasted qty ────────────────────────────────────
+    const byDishRows = await db.select({
+      dishId: foodOrderItemsTable.dishId,
+      name: dishesTable.name,
+      wasted: sql<number>`coalesce(sum(${foodOrderItemsTable.wastedQty}), 0)::float`,
+    }).from(foodOrdersTable)
+      .innerJoin(foodOrderItemsTable, eq(foodOrderItemsTable.orderId, foodOrdersTable.id))
+      .leftJoin(dishesTable, eq(foodOrderItemsTable.dishId, dishesTable.id))
+      .where(where)
+      .groupBy(foodOrderItemsTable.dishId, dishesTable.name)
+      .orderBy(desc(sql`sum(${foodOrderItemsTable.wastedQty})`))
+      .limit(50);
+
+    // ── byMealType — wasted qty per meal ─────────────────────────────────────
+    const byMealRows = await db.select({
+      mealType: foodOrdersTable.mealType,
+      wasted: sql<number>`coalesce(sum(${foodOrderItemsTable.wastedQty}), 0)::float`,
+    }).from(foodOrdersTable)
+      .innerJoin(foodOrderItemsTable, eq(foodOrderItemsTable.orderId, foodOrdersTable.id))
+      .where(where).groupBy(foodOrdersTable.mealType);
+
+    // ── byMenu — wasted qty per brand (brand stands in for menu) ──────────────
+    const byMenuRows = await db.select({
+      brand: foodOrdersTable.brand,
+      wasted: sql<number>`coalesce(sum(${foodOrderItemsTable.wastedQty}), 0)::float`,
+    }).from(foodOrdersTable)
+      .innerJoin(foodOrderItemsTable, eq(foodOrderItemsTable.orderId, foodOrdersTable.id))
+      .where(where).groupBy(foodOrdersTable.brand)
+      .orderBy(desc(sql`sum(${foodOrderItemsTable.wastedQty})`));
+
+    // ── trend — wasted qty per period (IST day or month) over the range ───────
+    // serviceDate is a UTC timestamp; shift +5:30 before truncating so the bucket
+    // boundaries land on IST calendar days/months (consistent with the rest of food-ops).
+    const periodExpr = granularity === "month"
+      ? sql<string>`to_char(${foodOrdersTable.serviceDate} + interval '330 minutes', 'YYYY-MM')`
+      : sql<string>`to_char(${foodOrdersTable.serviceDate} + interval '330 minutes', 'YYYY-MM-DD')`;
+    const trendRows = await db.select({
+      period: periodExpr,
+      wasted: sql<number>`coalesce(sum(${foodOrderItemsTable.wastedQty}), 0)::float`,
+    }).from(foodOrdersTable)
+      .innerJoin(foodOrderItemsTable, eq(foodOrderItemsTable.orderId, foodOrdersTable.id))
+      .where(where).groupBy(periodExpr).orderBy(periodExpr);
+
+    res.json({
+      success: true,
+      data: {
+        range: { from: fromYmd, to: toYmd },
+        granularity,
+        summary: {
+          totalWasted,
+          totalReceived,
+          totalOrdered,
+          wastePct: wastePctOf(totalWasted, totalReceived),
+          ordersWithWaste: Number(withWasteRow?.n ?? 0),
+        },
+        byProperty: byPropertyRows.map((r) => ({
+          propertyId: r.propertyId,
+          name: r.name ?? "—",
+          city: r.city ?? null,
+          cluster: r.cluster ?? null,
+          wastedQty: wr3(r.wasted),
+          wastePct: wastePctOf(r.wasted, r.received),
+        })),
+        byDish: byDishRows.map((r) => ({
+          dishId: r.dishId,
+          name: r.name ?? "—",
+          wastedQty: wr3(r.wasted),
+        })),
+        byMealType: MEAL_TYPES.map((mt) => ({
+          mealType: mt,
+          wastedQty: wr3(byMealRows.find((r) => r.mealType === mt)?.wasted),
+        })),
+        byMenu: byMenuRows.map((r) => ({
+          brand: r.brand ?? "—",
+          wastedQty: wr3(r.wasted),
+        })),
+        trend: trendRows.map((r) => ({
+          period: r.period,
+          wastedQty: wr3(r.wasted),
+        })),
+      },
+    });
+  } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
+});
+
+/* ── Waste-analytics widget export (CSV / XLSX / PDF) ─────────────────────────
+ * Renders one chosen widget's rows through the shared export-service encoders
+ * (formula-injection-safe CSV, paginated PDF, XLS). `widget` selects the dataset
+ * (property|dish|mealtype|menu|trend); all the same filters/scope as the JSON
+ * endpoint apply, so the file mirrors exactly what the on-screen widget shows.
+ * Accepts `xlsx` as an alias for this codebase's `xls` encoder. */
+const WASTE_EXPORT_WIDGETS = new Set(["property", "dish", "mealtype", "menu", "trend"]);
+
+/** Build the {title, headers, rows} export table for a waste-analytics widget. */
+async function buildWasteWidgetTable(widget: string, req: any): Promise<{
+  title: string; headers: string[]; rows: (string | number | null)[][]; fileBase: string; dateRange: string;
+}> {
+  const { where, fromYmd, toYmd, granularity } = await wasteAnalyticsScope(req);
+  const dateRange = `${fromYmd} → ${toYmd}`;
+
+  if (widget === "property") {
+    const rows = await db.select({
+      name: propertiesTable.name, city: citiesTable.name, cluster: clustersTable.name,
+      wasted: sql<number>`coalesce(sum(${foodOrderItemsTable.wastedQty}), 0)::float`,
+      received: sql<number>`coalesce(sum(${foodOrderItemsTable.receivedQty}), 0)::float`,
+    }).from(foodOrdersTable)
+      .innerJoin(foodOrderItemsTable, eq(foodOrderItemsTable.orderId, foodOrdersTable.id))
+      .leftJoin(propertiesTable, eq(foodOrdersTable.propertyId, propertiesTable.id))
+      .leftJoin(clustersTable, eq(propertiesTable.clusterId, clustersTable.id))
+      .leftJoin(citiesTable, eq(clustersTable.cityId, citiesTable.id))
+      .where(where)
+      .groupBy(foodOrdersTable.propertyId, propertiesTable.name, citiesTable.name, clustersTable.name)
+      .orderBy(desc(sql`sum(${foodOrderItemsTable.wastedQty})`));
+    return {
+      title: "Food Waste by Property", headers: ["Property", "City", "Cluster", "Wasted", "Waste %"],
+      rows: rows.map((r) => [r.name ?? "—", r.city ?? "", r.cluster ?? "", wr3(r.wasted), `${wastePctOf(r.wasted, r.received)}%`]),
+      fileBase: "food-waste-by-property",
+      dateRange,
+    };
+  }
+
+  if (widget === "dish") {
+    const rows = await db.select({
+      name: dishesTable.name,
+      wasted: sql<number>`coalesce(sum(${foodOrderItemsTable.wastedQty}), 0)::float`,
+    }).from(foodOrdersTable)
+      .innerJoin(foodOrderItemsTable, eq(foodOrderItemsTable.orderId, foodOrdersTable.id))
+      .leftJoin(dishesTable, eq(foodOrderItemsTable.dishId, dishesTable.id))
+      .where(where).groupBy(dishesTable.name)
+      .orderBy(desc(sql`sum(${foodOrderItemsTable.wastedQty})`));
+    return {
+      title: "Food Waste by Dish", headers: ["Dish", "Wasted"],
+      rows: rows.map((r) => [r.name ?? "—", wr3(r.wasted)]),
+      fileBase: "food-waste-by-dish",
+      dateRange,
+    };
+  }
+
+  if (widget === "mealtype") {
+    const grouped = await db.select({
+      mealType: foodOrdersTable.mealType,
+      wasted: sql<number>`coalesce(sum(${foodOrderItemsTable.wastedQty}), 0)::float`,
+    }).from(foodOrdersTable)
+      .innerJoin(foodOrderItemsTable, eq(foodOrderItemsTable.orderId, foodOrdersTable.id))
+      .where(where).groupBy(foodOrdersTable.mealType);
+    return {
+      title: "Food Waste by Meal", headers: ["Meal", "Wasted"],
+      rows: MEAL_TYPES.map((mt) => [mt, wr3(grouped.find((r) => r.mealType === mt)?.wasted)]),
+      fileBase: "food-waste-by-meal",
+      dateRange,
+    };
+  }
+
+  if (widget === "menu") {
+    const rows = await db.select({
+      brand: foodOrdersTable.brand,
+      wasted: sql<number>`coalesce(sum(${foodOrderItemsTable.wastedQty}), 0)::float`,
+    }).from(foodOrdersTable)
+      .innerJoin(foodOrderItemsTable, eq(foodOrderItemsTable.orderId, foodOrdersTable.id))
+      .where(where).groupBy(foodOrdersTable.brand)
+      .orderBy(desc(sql`sum(${foodOrderItemsTable.wastedQty})`));
+    return {
+      title: "Food Waste by Menu", headers: ["Menu (Brand)", "Wasted"],
+      rows: rows.map((r) => [r.brand ?? "—", wr3(r.wasted)]),
+      fileBase: "food-waste-by-menu",
+      dateRange,
+    };
+  }
+
+  // trend
+  const periodExpr = granularity === "month"
+    ? sql<string>`to_char(${foodOrdersTable.serviceDate} + interval '330 minutes', 'YYYY-MM')`
+    : sql<string>`to_char(${foodOrdersTable.serviceDate} + interval '330 minutes', 'YYYY-MM-DD')`;
+  const rows = await db.select({
+    period: periodExpr,
+    wasted: sql<number>`coalesce(sum(${foodOrderItemsTable.wastedQty}), 0)::float`,
+  }).from(foodOrdersTable)
+    .innerJoin(foodOrderItemsTable, eq(foodOrderItemsTable.orderId, foodOrdersTable.id))
+    .where(where).groupBy(periodExpr).orderBy(periodExpr);
+  return {
+    title: `Food Waste Trend (${granularity === "month" ? "Monthly" : "Daily"})`,
+    headers: ["Period", "Wasted"],
+    rows: rows.map((r) => [r.period, wr3(r.wasted)]),
+    fileBase: "food-waste-trend",
+    dateRange,
+  };
+}
+
+foodOpsRouter.get("/waste-analytics/export.:fmt", authenticate, authorize("FOOD_REPORTS", "view"), async (req, res) => {
+  try {
+    // Normalise fmt: accept csv | xlsx | pdf (xlsx aliases this codebase's xls encoder).
+    const fmtRaw = String(req.params["fmt"] ?? "").toLowerCase();
+    const fmt = fmtRaw === "xlsx" ? "xls" : fmtRaw;
+    if (!["csv", "xls", "pdf"].includes(fmt)) {
+      res.status(400).json({ success: false, error: "fmt must be csv, xlsx or pdf" }); return;
+    }
+    const widget = String(req.query["widget"] ?? "property").toLowerCase();
+    if (!WASTE_EXPORT_WIDGETS.has(widget)) {
+      res.status(400).json({ success: false, error: "widget must be one of property, dish, mealtype, menu, trend" }); return;
+    }
+    const t = await buildWasteWidgetTable(widget, req);
+    const table = { title: t.title, headers: t.headers, rows: t.rows, dateRange: t.dateRange };
+    const filename = `${t.fileBase}-${fileDateStamp()}.${fmt}`;
+
+    if (fmt === "csv") {
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader("Content-Disposition", `attachment; filename=${filename}`);
+      res.send(toCsv(table));
+    } else if (fmt === "pdf") {
+      const pdf = await toPdf(table);
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `attachment; filename=${filename}`);
+      res.send(Buffer.from(pdf));
+    } else {
+      res.setHeader("Content-Type", "application/vnd.ms-excel");
+      res.setHeader("Content-Disposition", `attachment; filename=${filename}`);
+      res.send(toXls(table));
+    }
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 

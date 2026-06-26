@@ -240,6 +240,19 @@ export interface AnalyticsData {
   delays: { date: string; delayed: number; total: number }[];
   summary: { totalWasted: number; totalOrdered: number; wastePct: number; delayedOrders: number; deliveredOrders: number };
 }
+// B3-17 — cross-property waste analytics (geography-scoped; OPS_EXCELLENCE/SUPER_ADMIN see all).
+export type WasteGranularity = "day" | "month";
+export interface WasteAnalyticsData {
+  range: { from: string; to: string };
+  granularity: WasteGranularity;
+  summary: { totalWasted: number; totalReceived: number; totalOrdered: number; wastePct: number; ordersWithWaste: number };
+  byProperty: { propertyId: string; name: string; city: string | null; cluster: string | null; wastedQty: number; wastePct: number }[];
+  byDish: { dishId: string | null; name: string; wastedQty: number }[];
+  byMealType: { mealType: MealType; wastedQty: number }[];
+  byMenu: { brand: string; wastedQty: number }[];
+  trend: { period: string; wastedQty: number }[];
+}
+
 // WS7 — Unit-Lead Home dashboard analytics (aggregate across accessible properties).
 export interface HomeAnalytics {
   period: string;
@@ -361,6 +374,8 @@ export const foodKeys = {
   cutoffConfig: (p: Record<string, unknown> = {}) => ["food", "cutoff-config", p] as const,
   cutoffs: (p: Record<string, unknown>) => ["food", "cutoffs", p] as const,
   analytics: (p: Record<string, unknown>) => ["food", "analytics", p] as const,
+  // B3-17 — cross-property waste analytics dashboard.
+  wasteAnalytics: (p: Record<string, unknown>) => ["food", "waste-analytics", p] as const,
   homeAnalytics: (p: Record<string, unknown>) => ["food", "home-analytics", p] as const,
   guests: (p: Record<string, unknown>) => ["food", "guests", p] as const,
   propertyOverview: (p: Record<string, unknown>) => ["food", "property-overview", p] as const,
@@ -591,6 +606,8 @@ export const foodApi = {
 
   // Analytics
   analytics: (p: Record<string, unknown> = {}) => apiFetch<Envelope<AnalyticsData>>(`/food/analytics${qs(p)}`).then((r) => r.data),
+  // B3-17 — cross-property waste analytics (geography-scoped). Filters: from/to/propertyId/clusterId/cityId/brand/granularity.
+  wasteAnalytics: (p: Record<string, unknown> = {}) => apiFetch<Envelope<WasteAnalyticsData>>(`/food/waste-analytics${qs(p)}`).then((r) => r.data),
   homeAnalytics: (p: Record<string, unknown> = {}) => apiFetch<Envelope<HomeAnalytics>>(`/food/home-analytics${qs(p)}`).then((r) => r.data),
 
   // Unit-Lead home insights
@@ -612,6 +629,12 @@ export const foodApi = {
   guestsExportXlsUrl: (p: Record<string, unknown> = {}) => `/api/food/guests/export.xls${qs(p)}`,
   rotationExportCsvUrl: (p: Record<string, unknown> = {}) => `/api/food/menu-rotation/export.csv${qs(p)}`,
   rotationExportPdfUrl: (p: Record<string, unknown> = {}) => `/api/food/menu-rotation/export.pdf${qs(p)}`,
+
+  // B3-17 — per-widget waste-analytics export. fmt ∈ csv|xlsx|pdf (xlsx → Excel via
+  // xls encoder); the `widget` param (property|dish|mealtype|menu|trend) selects the
+  // dataset, alongside the same filters as wasteAnalytics().
+  wasteAnalyticsExportUrl: (fmt: "csv" | "xlsx" | "pdf", widget: string, p: Record<string, unknown> = {}) =>
+    `/api/food/waste-analytics/export.${fmt}${qs({ ...p, widget })}`,
 };
 
 // ─── Display helpers ─────────────────────────────────────────────────────────
