@@ -1,4 +1,5 @@
 import * as React from "react";
+import { useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { format } from "date-fns";
 import {
@@ -60,6 +61,7 @@ export default function FoodGuests() {
   const propertyId = paramProperty ?? globalProperty ?? null;
   const { me } = usePermissions();
   const { toast } = useToast();
+  const [, setLocation] = useLocation();
 
   // Accessible properties for the on-screen scope selector. Switching writes the
   // GLOBAL property scope (same store the sidebar uses) so it stays consistent
@@ -326,7 +328,11 @@ export default function FoodGuests() {
                 </TableRow>
               ) : (
                 guests.map((g) => (
-                  <TableRow key={g.id}>
+                  <TableRow
+                    key={g.id}
+                    className="cursor-pointer"
+                    onClick={() => setLocation(`/residents/${g.id}`)}
+                  >
                     <TableCell>
                       <div className="flex items-center gap-3">
                         <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary">

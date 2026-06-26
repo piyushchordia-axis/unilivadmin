@@ -74,6 +74,18 @@ export const ROLE_PERMISSIONS: Record<UserRole, RoleMatrix> = {
   // ── Food Ordering & Kitchen Operations roles (PRD §5 authoritative matrix) ──
   // Ops users
   UNIT_LEAD: {
+    // Full resident suite (Wave-4a): Unit Leads run their property end-to-end,
+    // mirroring WARDEN (the property-scoped resident role) plus finance for
+    // collections. All resident/ledger/payment routes property-scope, so a
+    // UNIT_LEAD with a propertyId is automatically limited to their property.
+    RESIDENTS: FULL, PROPERTIES: VIEW, LAUNDRY: FULL,
+    LEDGER: { view: true, create: true, edit: true, delete: false },
+    PAYMENTS: { view: true, create: true, edit: true, delete: false },
+    WALLET: VIEW,
+    // Complaints (O6 reuse): Unit Leads raise + work property-scoped complaints,
+    // including the auto-created food-variance tickets (O5). Routes already
+    // property-scope. No delete (lifecycle is status-driven, not destructive).
+    COMPLAINTS: { view: true, create: true, edit: true, delete: false },
     FOOD_RECEIVE_UPDATE: VE, FOOD_DELIVERY_TRACKING: VE, FOOD_DASHBOARD: VIEW,
     FOOD_ALL_ORDERS: VIEW, FOOD_PLACE_ORDER: VE,
     FOOD_CONFIRM_DELIVERY: VE, FOOD_WASTE_TRACKING: VE, FOOD_REPORTS: VIEW,

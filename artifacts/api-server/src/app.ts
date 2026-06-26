@@ -53,7 +53,10 @@ const corsOrigin: CorsOptions["origin"] = (origin, cb) => {
 app.use(cors({ origin: corsOrigin, credentials: true }));
 
 app.use(cookieParser());
-app.use(express.json({ limit: BODY_LIMIT }));
+// Capture the raw request bytes (req.rawBody) during JSON parsing so webhook
+// routes that need byte-exact HMAC verification (e.g. Razorpay) can recover the
+// original payload even though the global parser consumes the stream.
+app.use(express.json({ limit: BODY_LIMIT, verify: (req, _res, buf) => { (req as unknown as { rawBody?: Buffer }).rawBody = buf; } }));
 app.use(express.urlencoded({ extended: true, limit: BODY_LIMIT }));
 
 app.use(globalRateLimiter);

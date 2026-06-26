@@ -19,9 +19,6 @@ import {
   Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
-import {
-  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
 import { Button } from "@/components/ui/button"
 import { UserAvatar } from "@/components/ui/user-avatar"
 import { NotificationBell } from "@/components/notification-bell"
@@ -460,25 +457,6 @@ export function Layout({ children }: { children: React.ReactNode }) {
             </button>
             <ThemeToggle />
             <NotificationBell />
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="ghost" className="relative h-8 w-8 rounded-full" aria-label="Account menu">
-                  <UserAvatar name={me?.name} className="h-8 w-8" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuLabel className="font-normal">
-                  <div className="flex flex-col space-y-1">
-                    <p className="text-sm font-medium leading-none">{me?.name}</p>
-                    {me?.designation && <p className="text-xs leading-none text-muted-foreground">{me.designation}</p>}
-                    <p className="text-xs leading-none text-muted-foreground">{me?.email}</p>
-                  </div>
-                </DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={() => setLocation("/settings")}>Settings</DropdownMenuItem>
-                <DropdownMenuItem onClick={handleLogout} className="text-destructive focus:text-destructive">Log out</DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
           </div>
         </header>
         <main className="flex-1 overflow-y-auto p-4 sm:p-6 bg-surface">

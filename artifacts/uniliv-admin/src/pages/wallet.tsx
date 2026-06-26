@@ -21,9 +21,12 @@ import {
 import { useGetProperties, getGetPropertiesQueryKey } from "@workspace/api-client-react";
 import {
   Wallet, ArrowUpCircle, ArrowDownCircle, Search, SlidersHorizontal,
-  RefreshCw, Download, AlertTriangle,
+  RefreshCw, Download, AlertTriangle, Link2, Copy,
 } from "lucide-react";
 import { useLocation } from "wouter";
+
+/** Error message the API returns (via apiFetch) when Razorpay keys are unset (503). */
+const PAYMENTS_NOT_CONFIGURED = "Payments not configured";
 
 interface WalletRow {
   walletId: string;
@@ -66,9 +69,10 @@ function balanceBadge(row: WalletRow) {
 
 export default function WalletPage() {
   const [, setLocation] = useLocation();
-  const { can } = usePermissions();
+  const { can, role } = usePermissions();
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const isSuperAdmin = role === "SUPER_ADMIN";
 
   const [search, setSearch] = React.useState("");
   const [debouncedSearch, setDebouncedSearch] = React.useState("");
@@ -82,6 +86,10 @@ export default function WalletPage() {
   const [topupAmount, setTopupAmount] = React.useState("");
   const [topupDesc, setTopupDesc] = React.useState("Cash top-up by staff");
   const [topupNotes, setTopupNotes] = React.useState("");
+  // O29 — "Top up via payment link" toggles the cash flow into a Razorpay link flow.
+  const [topupMethod, setTopupMethod] = React.useState<"CASH" | "LINK">("CASH");
+  const [topupLinkUrl, setTopupLinkUrl] = React.useState<string | null>(null);
+  const [topupLinkNotConfigured, setTopupLinkNotConfigured] = React.useState(false);
 
   const [adjustType, setAdjustType] = React.useState<"ADJUSTMENT_CREDIT" | "ADJUSTMENT_DEBIT">("ADJUSTMENT_CREDIT");
   const [adjustAmount, setAdjustAmount] = React.useState("");
@@ -146,6 +154,23 @@ export default function WalletPage() {
     onError: (err: Error) => toast({ title: "Top-up failed", description: err.message, variant: "destructive" }),
   });
 
+  // O29 — generate a Razorpay top-up link (expires 24h, partial payment allowed).
+  const topupLinkMut = useMutation({
+    mutationFn: (payload: { residentId: string; amount: number }) =>
+      apiFetch<{ success: boolean; data: { shortUrl: string; id: string } }>(`/wallet/${payload.residentId}/topup-link`, {
+        method: "POST",
+        body: JSON.stringify({ amount: payload.amount }),
+      }),
+    onSuccess: (res) => {
+      setTopupLinkUrl(res?.data?.shortUrl ?? null);
+      toast({ title: "Top-up link sent", description: "Shared with the resident." });
+    },
+    onError: (err: Error) => {
+      if (err?.message === PAYMENTS_NOT_CONFIGURED) { setTopupLinkNotConfigured(true); return; }
+      toast({ title: "Top-up link failed", description: err.message, variant: "destructive" });
+    },
+  });
+
   const adjustMut = useMutation({
     mutationFn: (payload: { residentId: string; type: string; amount: number; description: string }) =>
       apiFetch(`/wallet/residents/${payload.residentId}/adjust`, {
@@ -169,6 +194,9 @@ export default function WalletPage() {
     setTopupDesc("Cash top-up by staff");
     setTopupAmount("");
     setTopupNotes("");
+    setTopupMethod("CASH");
+    setTopupLinkUrl(null);
+    setTopupLinkNotConfigured(false);
     setTopupOpen(true);
   }
 
@@ -370,53 +398,101 @@ export default function WalletPage() {
         open={topupOpen}
         onOpenChange={(o) => { if (!o) { setTopupOpen(false); setSelectedRow(null); } }}
         title={`Top-up — ${selectedRow?.residentName ?? ""}`}
-        onSave={() => {
+        onSave={topupLinkUrl || topupLinkNotConfigured ? undefined : () => {
           const amt = parseFloat(topupAmount);
           if (!selectedRow || isNaN(amt) || amt <= 0) {
             toast({ title: "Enter a valid amount", variant: "destructive" });
             return;
           }
-          topupMut.mutate({ residentId: selectedRow.residentId, amount: amt, description: topupDesc, notes: topupNotes });
+          if (topupMethod === "LINK") {
+            setTopupLinkUrl(null);
+            setTopupLinkNotConfigured(false);
+            topupLinkMut.mutate({ residentId: selectedRow.residentId, amount: amt });
+          } else {
+            topupMut.mutate({ residentId: selectedRow.residentId, amount: amt, description: topupDesc, notes: topupNotes });
+          }
         }}
-        isSaving={topupMut.isPending}
-        saveLabel="Top-up"
+        isSaving={topupMut.isPending || topupLinkMut.isPending}
+        saveLabel={topupMethod === "LINK" ? "Generate & Send Link" : "Top-up"}
       >
         <div className="space-y-4">
-          <p className="text-sm text-muted-foreground">
-            Current balance: ₹{selectedRow?.balance?.toLocaleString("en-IN", { minimumFractionDigits: 2 }) ?? "0.00"}
-          </p>
-          <div className="space-y-1.5">
-            <Label>Amount (₹)</Label>
-            <Input
-              type="number"
-              min="1"
-              step="1"
-              placeholder="500"
-              value={topupAmount}
-              onChange={(e) => setTopupAmount(e.target.value)}
-            />
-          </div>
-          {topupAmount && parseFloat(topupAmount) > 0 && (
-            <div className="p-3 rounded-lg bg-surface border text-sm">
-              Projected balance:{" "}
-              <span className={projectedBalance < 0 ? "text-destructive font-semibold" : "text-green-600 font-semibold"}>
-                ₹{projectedBalance.toLocaleString("en-IN", { minimumFractionDigits: 2 })}
-              </span>
+          {topupLinkNotConfigured ? (
+            <div className="rounded-md bg-surface border p-4 text-sm text-muted-foreground" data-testid="topup-link-not-configured">
+              <p className="font-medium text-primary mb-1">Payments gateway not configured yet</p>
+              Online top-up links aren't available until the Razorpay keys are set up. Please contact your administrator.
             </div>
+          ) : topupLinkUrl ? (
+            <div className="space-y-3" data-testid="topup-link-result">
+              <div className="rounded-md bg-green-50 border border-green-200 p-3 text-sm">
+                <p className="font-medium text-green-700 mb-1">Top-up link created &amp; shared</p>
+                <a href={topupLinkUrl} target="_blank" rel="noreferrer" className="font-mono text-xs text-accent underline break-all">{topupLinkUrl}</a>
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => { navigator.clipboard?.writeText(topupLinkUrl); toast({ title: "Link copied" }); }}
+              >
+                <Copy className="w-3.5 h-3.5 mr-1" /> Copy link
+              </Button>
+            </div>
+          ) : (
+            <>
+              <p className="text-sm text-muted-foreground">
+                Current balance: ₹{selectedRow?.balance?.toLocaleString("en-IN", { minimumFractionDigits: 2 }) ?? "0.00"}
+              </p>
+              <div className="space-y-1.5">
+                <Label>Method</Label>
+                <Select value={topupMethod} onValueChange={(v) => setTopupMethod(v as "CASH" | "LINK")}>
+                  <SelectTrigger data-testid="select-topup-method"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="CASH">Cash / manual top-up</SelectItem>
+                    <SelectItem value="LINK">Top up via payment link</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5">
+                <Label>Amount (₹)</Label>
+                <Input
+                  type="number"
+                  min="1"
+                  step="1"
+                  placeholder="500"
+                  value={topupAmount}
+                  onChange={(e) => setTopupAmount(e.target.value)}
+                />
+              </div>
+              {topupMethod === "CASH" && topupAmount && parseFloat(topupAmount) > 0 && (
+                <div className="p-3 rounded-lg bg-surface border text-sm">
+                  Projected balance:{" "}
+                  <span className={projectedBalance < 0 ? "text-destructive font-semibold" : "text-green-600 font-semibold"}>
+                    ₹{projectedBalance.toLocaleString("en-IN", { minimumFractionDigits: 2 })}
+                  </span>
+                </div>
+              )}
+              {topupMethod === "LINK" ? (
+                <p className="text-xs text-muted-foreground flex items-center gap-1">
+                  <Link2 className="w-3.5 h-3.5" /> A Razorpay link (valid 24h, partial payments allowed) is texted/emailed to the resident. The wallet is credited automatically once they pay.
+                </p>
+              ) : (
+                <>
+                  <div className="space-y-1.5">
+                    <Label>Description</Label>
+                    <Input value={topupDesc} onChange={(e) => setTopupDesc(e.target.value)} />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label>Notes (optional)</Label>
+                    <Textarea
+                      value={topupNotes}
+                      onChange={(e) => setTopupNotes(e.target.value)}
+                      placeholder="Denomination details, reason, etc."
+                      rows={2}
+                    />
+                  </div>
+                </>
+              )}
+            </>
           )}
-          <div className="space-y-1.5">
-            <Label>Description</Label>
-            <Input value={topupDesc} onChange={(e) => setTopupDesc(e.target.value)} />
-          </div>
-          <div className="space-y-1.5">
-            <Label>Notes (optional)</Label>
-            <Textarea
-              value={topupNotes}
-              onChange={(e) => setTopupNotes(e.target.value)}
-              placeholder="Denomination details, reason, etc."
-              rows={2}
-            />
-          </div>
         </div>
       </FormModal>
 
@@ -449,9 +525,13 @@ export default function WalletPage() {
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="ADJUSTMENT_CREDIT">Credit — add funds</SelectItem>
-                <SelectItem value="ADJUSTMENT_DEBIT">Debit — remove funds</SelectItem>
+                {/* O30 — removing funds is SUPER_ADMIN-only (backend also enforces this). */}
+                {isSuperAdmin && <SelectItem value="ADJUSTMENT_DEBIT">Debit — remove funds</SelectItem>}
               </SelectContent>
             </Select>
+            {!isSuperAdmin && (
+              <p className="text-xs text-muted-foreground mt-1">Removing funds requires a Super Admin.</p>
+            )}
           </div>
           <div>
             <Label>Amount (₹)</Label>

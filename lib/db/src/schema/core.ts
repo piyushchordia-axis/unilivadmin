@@ -269,6 +269,12 @@ export const ledgerEntriesTable = pgTable("ledger_entries", {
   dueDate: timestamp("due_date"),
   isPaid: boolean("is_paid").default(false).notNull(),
   paidOn: timestamp("paid_on"),
+  /**
+   * Date cash was collected for a COLLECTION credit entry (O24). Set on CREDIT
+   * entries that record money physically collected from a resident; nullable for
+   * all other (charge/debit) ledger rows.
+   */
+  collectionDate: timestamp("collection_date"),
   reference: text("reference"),
   createdBy: text("created_by"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -297,6 +303,17 @@ export const complaintsTable = pgTable("complaints", {
     .notNull()
     .references(() => propertiesTable.id),
   residentId: text("resident_id"),
+  /**
+   * Food order that triggered this complaint (O5 auto-create on delivery
+   * variance). Nullable — most complaints are resident-raised, not order-bound.
+   * Logical FK to food_orders.id (intended ON DELETE SET NULL). Declared as a
+   * plain text column (not a typed `.references()`) because food.ts imports
+   * core.ts; importing foodOrdersTable here would create a circular module
+   * dependency. Referential integrity is maintained in application code (the
+   * confirm-delivery handler sets a real order id; orders are soft-cancelled,
+   * not hard-deleted, so dangling ids are not expected).
+   */
+  orderId: text("order_id"),
   ticketNo: text("ticket_no").notNull().unique(),
   category: complaintCategoryEnum("category").notNull(),
   subCategory: text("sub_category"),

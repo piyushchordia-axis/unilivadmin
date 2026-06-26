@@ -7,6 +7,7 @@ import {
   esignRequestsTable,
   esignEventsTable,
   residentsTable,
+  propertiesTable,
   integrationStatusTable,
 } from "@workspace/db";
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
@@ -14,8 +15,14 @@ import { eq, desc, and } from "drizzle-orm";
 import { authenticate } from "../middlewares/auth.js";
 import { authorize } from "../middlewares/authorize.js";
 import { newId } from "../lib/id.js";
-import { getKYCProvider } from "../lib/kyc-providers.js";
+import {
+  getKYCProvider,
+  isDigiLockerConfigured,
+  getDigiLockerAuthorizeUrl,
+  exchangeDigiLockerCode,
+} from "../lib/kyc-providers.js";
 import { encryptNullable, decrypt, blindIndex } from "../lib/field-crypto.js";
+import { renderAgreement, type AgreementData } from "../lib/agreement-template.js";
 
 export const kycRouter: Router = Router();
 export const esignRouter: Router = Router();
@@ -217,6 +224,99 @@ kycRouter.get("/kyc/:id/events", authenticate, authorize("RESIDENTS", "view"), a
   }
 });
 
+// ---------------------------------------------------------------------
+// DigiLocker (O27)
+//
+// initiate: returns the OAuth2 authorize URL for an existing KYC request (state
+// carries the kycRequestId). 503 when DigiLocker is not configured.
+// callback:  PUBLIC (DigiLocker redirects the user-agent here with ?code&state,
+// no bearer token). Exchanges the code for a token and marks the KYC request
+// VERIFIED with provider='DIGILOCKER'. Never crashes when unconfigured.
+// ---------------------------------------------------------------------
+
+// GET /kyc/:id/digilocker/initiate  — authenticated
+kycRouter.get("/kyc/:id/digilocker/initiate", authenticate, authorize("RESIDENTS", "edit"), async (req, res) => {
+  try {
+    if (!isDigiLockerConfigured()) {
+      res.status(503).json({ success: false, error: "DigiLocker is not configured" });
+      return;
+    }
+    const id = req.params["id"] as string;
+    const [row] = await db.select().from(kycRequestsTable).where(eq(kycRequestsTable.id, id));
+    if (!row) {
+      res.status(404).json({ success: false, error: "Not found" });
+      return;
+    }
+    const authorizeUrl = getDigiLockerAuthorizeUrl(id);
+    if (!authorizeUrl) {
+      res.status(503).json({ success: false, error: "DigiLocker is not configured" });
+      return;
+    }
+    await logKycEvent(id, "DIGILOCKER_INITIATED", req.user?.id ?? null, clientIp(req), req.headers["user-agent"] ?? null);
+    res.json({ success: true, data: { authorizeUrl } });
+  } catch (err) {
+    req.log.error(err);
+    res.status(500).json({ success: false, error: "Internal server error" });
+  }
+});
+
+// GET /kyc/digilocker/callback  — PUBLIC (no auth; DigiLocker redirect target)
+kycRouter.get("/kyc/digilocker/callback", async (req, res) => {
+  try {
+    if (!isDigiLockerConfigured()) {
+      res.status(503).json({ success: false, error: "DigiLocker is not configured" });
+      return;
+    }
+    const code = req.query["code"] as string | undefined;
+    const state = req.query["state"] as string | undefined; // = kycRequestId
+    const oauthError = req.query["error"] as string | undefined;
+    if (oauthError) {
+      res.status(400).json({ success: false, error: `DigiLocker returned an error: ${oauthError}` });
+      return;
+    }
+    if (!code || !state) {
+      res.status(400).json({ success: false, error: "Missing code or state" });
+      return;
+    }
+    const [row] = await db.select().from(kycRequestsTable).where(eq(kycRequestsTable.id, state));
+    if (!row) {
+      res.status(404).json({ success: false, error: "Unknown KYC request" });
+      return;
+    }
+    let token: { providerRef: string | null; raw: Record<string, unknown> };
+    try {
+      token = await exchangeDigiLockerCode(code);
+    } catch (e) {
+      req.log.error({ err: e }, "DigiLocker token exchange failed");
+      await logKycEvent(state, "DIGILOCKER_FAILED", null, clientIp(req), req.headers["user-agent"] ?? null, {
+        message: (e as Error).message,
+      });
+      res.status(502).json({ success: false, error: "DigiLocker verification failed" });
+      return;
+    }
+    const [updated] = await db
+      .update(kycRequestsTable)
+      .set({
+        status: "VERIFIED",
+        provider: "DIGILOCKER",
+        providerRef: token.providerRef,
+        // Do NOT store the raw access token; keep only a non-sensitive marker.
+        providerData: { source: "DIGILOCKER", verifiedAt: new Date().toISOString() },
+        reviewedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(eq(kycRequestsTable.id, state))
+      .returning();
+    await logKycEvent(state, "VERIFIED", null, clientIp(req), req.headers["user-agent"] ?? null, {
+      provider: "DIGILOCKER",
+    });
+    res.json({ success: true, data: kycDetailView(updated) });
+  } catch (err) {
+    req.log.error(err);
+    res.status(500).json({ success: false, error: "Internal server error" });
+  }
+});
+
 kycRouter.get("/kyc/:id", authenticate, authorize("RESIDENTS", "view"), async (req, res) => {
   try {
     const [row] = await db.select().from(kycRequestsTable).where(eq(kycRequestsTable.id, req.params["id"] as string));
@@ -276,6 +376,126 @@ async function logEvent(
     payload: (payload as object | null) ?? null,
   });
 }
+
+// ---------------------------------------------------------------------
+// Rent Agreement generation (O26)
+//
+// The licensor (operating entity) name + address are sourced from env/config so
+// they can be set per deployment without a code change. Defaults keep the
+// interim document complete in dev.
+// ---------------------------------------------------------------------
+
+const LICENSOR_NAME = process.env["AGREEMENT_LICENSOR_NAME"] || "Uniliv (Operator)";
+const LICENSOR_ADDRESS = process.env["AGREEMENT_LICENSOR_ADDRESS"] || null;
+
+/** Canonical document name for the rent agreement esign request. */
+export const RENT_AGREEMENT_DOC_NAME = "Rent Agreement";
+
+type ResidentRow = typeof residentsTable.$inferSelect;
+type PropertyRow = typeof propertiesTable.$inferSelect;
+
+/** Build AgreementData from a resident + their property + env licensor. */
+function buildAgreementData(resident: ResidentRow, property: PropertyRow): AgreementData {
+  return {
+    resident: {
+      id: resident.id,
+      name: resident.name,
+      phone: resident.phone,
+      email: resident.email,
+      gender: resident.gender,
+      dob: resident.dob,
+      bedOrRoomNo: resident.roomId ?? null,
+      checkInDate: resident.checkInDate,
+      checkOutDate: resident.checkOutDate,
+      monthlyRent: resident.monthlyRent,
+      securityDeposit: resident.securityDeposit,
+    },
+    property: {
+      name: property.name,
+      code: property.code,
+      address: property.address,
+      city: property.city,
+      state: property.state,
+      pincode: property.pincode,
+    },
+    licensorName: LICENSOR_NAME,
+    licensorAddress: LICENSOR_ADDRESS,
+  };
+}
+
+/**
+ * Create a PENDING 'Rent Agreement' esign request for a resident, with a freshly
+ * rendered interim agreement body (encrypted at rest). Idempotent-friendly: the
+ * caller decides whether to skip when an existing draft is present. Returns the
+ * inserted row, or null when the resident has no property (cannot render).
+ *
+ * Reused by the dedicated esign endpoint below AND by resident-create
+ * auto-generation in residents.ts, so signing logic is never duplicated — the
+ * resident still signs via the existing public /sign/:token flow.
+ */
+export async function createRentAgreementEsign(
+  residentId: string,
+  createdBy: string | null,
+  expiresInDays = 14,
+): Promise<typeof esignRequestsTable.$inferSelect | null> {
+  const [resident] = await db.select().from(residentsTable).where(eq(residentsTable.id, residentId));
+  if (!resident || !resident.propertyId) return null;
+  const [property] = await db.select().from(propertiesTable).where(eq(propertiesTable.id, resident.propertyId));
+  if (!property) return null;
+
+  const documentBody = renderAgreement(buildAgreementData(resident, property));
+  const token = crypto.randomBytes(24).toString("base64url");
+  const expiresAt = new Date(Date.now() + expiresInDays * 86400000);
+  const [row] = await db
+    .insert(esignRequestsTable)
+    .values({
+      id: newId(),
+      residentId,
+      documentName: RENT_AGREEMENT_DOC_NAME,
+      documentBody: encryptNullable(documentBody)!,
+      signerEmail: resident.email || null,
+      signerPhone: resident.phone || null,
+      signerToken: token,
+      status: "PENDING",
+      expiresAt,
+      createdBy,
+      updatedAt: new Date(),
+    })
+    .returning();
+  await logEvent(row.id, "CREATED", null, null, { documentName: RENT_AGREEMENT_DOC_NAME, auto: createdBy == null });
+  return row;
+}
+
+// Generate a Rent Agreement esign request — mounted as
+// POST /residents/:id/agreement. The resident then signs via the existing
+// public /sign/:token flow (no new signing UI). Returns the signerUrl.
+esignRouter.post("/residents/:id/agreement", authenticate, authorize("RESIDENTS", "edit"), async (req, res) => {
+  try {
+    const residentId = req.params["id"] as string;
+    const [resident] = await db.select().from(residentsTable).where(eq(residentsTable.id, residentId));
+    if (!resident) {
+      res.status(404).json({ success: false, error: "Resident not found" });
+      return;
+    }
+    if (!resident.propertyId) {
+      res.status(400).json({ success: false, error: "Resident has no property; cannot render agreement" });
+      return;
+    }
+    const row = await createRentAgreementEsign(residentId, req.user?.id ?? null);
+    if (!row) {
+      res.status(400).json({ success: false, error: "Could not render agreement (missing property data)" });
+      return;
+    }
+    const origin = req.headers["origin"] || `${req.protocol}://${req.headers["host"]}`;
+    res.status(201).json({
+      success: true,
+      data: { ...row, documentBody: undefined, signerUrl: `${origin}/esign/sign/${row.signerToken}` },
+    });
+  } catch (err) {
+    req.log.error(err);
+    res.status(500).json({ success: false, error: "Internal server error" });
+  }
+});
 
 // List for a resident — mounted as /residents/:id/esign
 esignRouter.get("/residents/:id/esign", authenticate, authorize("RESIDENTS", "view"), async (req, res) => {
@@ -647,4 +867,24 @@ export async function residentMeetsActivationRequirements(residentId: string): P
     .limit(1);
   if (!esign) return { ok: false, reason: "No signed agreement on file" };
   return { ok: true };
+}
+
+/**
+ * O25: true iff the resident has a SIGNED esign request whose documentName is the
+ * canonical 'Rent Agreement'. This is a stricter, agreement-specific gate than
+ * residentMeetsActivationRequirements (which accepts any signed esign).
+ */
+export async function hasSignedRentAgreement(residentId: string): Promise<boolean> {
+  const [row] = await db
+    .select({ id: esignRequestsTable.id })
+    .from(esignRequestsTable)
+    .where(
+      and(
+        eq(esignRequestsTable.residentId, residentId),
+        eq(esignRequestsTable.documentName, RENT_AGREEMENT_DOC_NAME),
+        eq(esignRequestsTable.status, "SIGNED"),
+      ),
+    )
+    .limit(1);
+  return !!row;
 }

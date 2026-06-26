@@ -4,6 +4,13 @@ import { Minus, Plus } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 
 export interface NumberStepperProps {
   value: number
@@ -14,6 +21,12 @@ export interface NumberStepperProps {
   disabled?: boolean
   className?: string
   "aria-label"?: string
+  /** Static unit label shown after the input (used when `unitOptions` is absent). */
+  unit?: string
+  /** When provided, renders a compact unit dropdown next to the input. */
+  unitOptions?: string[]
+  /** Called with the newly selected unit. */
+  onUnitChange?: (unit: string) => void
 }
 
 const clamp = (n: number, min?: number, max?: number) => {
@@ -21,6 +34,22 @@ const clamp = (n: number, min?: number, max?: number) => {
   if (typeof min === "number" && next < min) next = min
   if (typeof max === "number" && next > max) next = max
   return next
+}
+
+// Weight units that auto-convert between one another.
+const WEIGHT_UNITS = new Set(["kg", "gram", "g"])
+const isKg = (u: string) => u === "kg"
+const isGram = (u: string) => u === "gram" || u === "g"
+
+/**
+ * Convert `n` from `from` unit to `to` unit when both are weight units.
+ * kg -> gram/g = x1000, gram/g -> kg = /1000. Otherwise returns `n` unchanged.
+ */
+const convertValue = (n: number, from: string, to: string): number => {
+  if (!WEIGHT_UNITS.has(from) || !WEIGHT_UNITS.has(to)) return n
+  if (isKg(from) && isGram(to)) return n * 1000
+  if (isGram(from) && isKg(to)) return n / 1000
+  return n
 }
 
 const NumberStepper = React.forwardRef<HTMLInputElement, NumberStepperProps>(
@@ -34,6 +63,9 @@ const NumberStepper = React.forwardRef<HTMLInputElement, NumberStepperProps>(
       disabled,
       className,
       "aria-label": ariaLabel,
+      unit,
+      unitOptions,
+      onUnitChange,
     },
     ref
   ) => {
@@ -62,14 +94,25 @@ const NumberStepper = React.forwardRef<HTMLInputElement, NumberStepperProps>(
       if (next !== value) onChange(next)
     }
 
-    return (
+    const handleUnitChange = (next: string) => {
+      if (disabled) return
+      const prev = unit
+      // Auto-convert the numeric value for weight<->weight switches; emit via onChange.
+      if (typeof prev === "string" && prev !== next && !Number.isNaN(value)) {
+        const converted = convertValue(value, prev, next)
+        if (converted !== value) onChange(clamp(converted, min, max))
+      }
+      onUnitChange?.(next)
+    }
+
+    const stepper = (
       <div
         role="group"
         aria-label={ariaLabel}
         className={cn(
           "inline-flex h-9 items-center rounded-md border border-input bg-transparent",
           disabled && "cursor-not-allowed opacity-50",
-          className
+          !unitOptions && className
         )}
       >
         <Button
@@ -112,6 +155,36 @@ const NumberStepper = React.forwardRef<HTMLInputElement, NumberStepperProps>(
         >
           <Plus />
         </Button>
+        {!unitOptions && unit ? (
+          <span className="pl-1 pr-2 text-sm text-muted-foreground">{unit}</span>
+        ) : null}
+      </div>
+    )
+
+    if (!unitOptions) return stepper
+
+    return (
+      <div className={cn("inline-flex items-center gap-1.5", className)}>
+        {stepper}
+        <Select
+          value={unit}
+          onValueChange={handleUnitChange}
+          disabled={disabled}
+        >
+          <SelectTrigger
+            aria-label="Unit"
+            className="h-9 w-auto min-w-[4.5rem] gap-1 px-2 text-sm"
+          >
+            <SelectValue placeholder="Unit" />
+          </SelectTrigger>
+          <SelectContent>
+            {unitOptions.map((opt) => (
+              <SelectItem key={opt} value={opt}>
+                {opt}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
     )
   }

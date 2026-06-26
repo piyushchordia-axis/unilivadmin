@@ -9,9 +9,22 @@
  * non-production only, SES_WEBHOOK_SKIP_VERIFY=1 bypasses verification for local
  * testing; it is ignored in production.
  */
-import { Router, text as textBody, type Request, type Response } from "express";
+import { Router, text as textBody, raw as rawBody, type Request, type Response } from "express";
 import { suppress } from "@workspace/notify-core";
 import { IS_PRODUCTION } from "../config/env.js";
+import {
+  db,
+  walletsTable,
+  walletTransactionsTable,
+  paymentsTable,
+  ledgerEntriesTable,
+} from "@workspace/db";
+import { and, asc, eq } from "drizzle-orm";
+import { newId } from "../lib/id.js";
+import {
+  isRazorpayWebhookConfigured,
+  verifyWebhookSignature,
+} from "../lib/razorpay.js";
 
 const router = Router();
 
@@ -146,6 +159,168 @@ router.post("/webhooks/ses", textBody({ type: () => true }), async (req: Request
     }
 
     res.json({ success: true });
+  } catch (err) {
+    req.log.error(err);
+    res.status(500).json({ success: false, error: "Internal server error" });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /webhooks/razorpay
+// Razorpay sends payment events here. We verify the HMAC-SHA256 signature
+// (X-Razorpay-Signature) against the RAW body, then on payment_link.paid /
+// payment.captured we settle the correlated entity. Correlation uses the link's
+// `notes` (kind=RESIDENT_DUES|WALLET_TOPUP + residentId) captured at creation.
+//
+// Raw-body note: the global express.json() runs before the router, so to verify
+// the signature reliably we register a route-level express.raw() parser. When an
+// upstream parser has already consumed the stream, req.body arrives as an object
+// and we fall back to its JSON serialization (best-effort) for the HMAC.
+//
+// Idempotent: a top-up/dues settlement keyed off the Razorpay payment/link id is
+// applied at most once (guarded via wallet_transactions.referenceId / payments).
+// No-op gracefully (200) when the webhook secret is unconfigured.
+// ─────────────────────────────────────────────────────────────────────────────
+function correlationFromEntity(payload: any): {
+  kind?: string;
+  residentId?: string;
+  amountPaise?: number;
+  refId?: string;
+} {
+  const pl = payload?.payment_link?.entity;
+  const pay = payload?.payment?.entity;
+  const notes = pl?.notes || pay?.notes || {};
+  return {
+    kind: notes.kind,
+    residentId: notes.residentId,
+    amountPaise: Number(pl?.amount_paid ?? pl?.amount ?? pay?.amount ?? 0),
+    refId: pl?.id || pay?.id,
+  };
+}
+
+async function settleWalletTopup(residentId: string, amountPaise: number, refId: string): Promise<void> {
+  const amount = amountPaise / 100;
+  if (!residentId || amount <= 0) return;
+  await db.transaction(async (tx) => {
+    const [wallet] = await tx
+      .select()
+      .from(walletsTable)
+      .where(eq(walletsTable.residentId, residentId))
+      .for("update");
+    if (!wallet) return; // wallet not provisioned — nothing to credit
+    // Idempotency: skip if a txn already references this Razorpay id.
+    const [existing] = await tx
+      .select({ id: walletTransactionsTable.id })
+      .from(walletTransactionsTable)
+      .where(and(eq(walletTransactionsTable.walletId, wallet.id), eq(walletTransactionsTable.referenceId, refId)));
+    if (existing) return;
+    const balanceBefore = Number(wallet.balance);
+    const balanceAfter = balanceBefore + amount;
+    await tx.update(walletsTable).set({ balance: String(balanceAfter), updatedAt: new Date() }).where(eq(walletsTable.id, wallet.id));
+    await tx.insert(walletTransactionsTable).values({
+      id: newId(),
+      walletId: wallet.id,
+      residentId,
+      type: "TOPUP",
+      amount: String(amount),
+      balanceBefore: String(balanceBefore),
+      balanceAfter: String(balanceAfter),
+      description: `Online wallet top-up (Razorpay ${refId})`,
+      recordedBy: "SYSTEM_RAZORPAY",
+      referenceId: refId,
+      referenceType: "RAZORPAY",
+    });
+  });
+}
+
+async function settleResidentDues(residentId: string, amountPaise: number, refId: string): Promise<void> {
+  const amount = amountPaise / 100;
+  if (!residentId || amount <= 0) return;
+  await db.transaction(async (tx) => {
+    // Idempotency: a payment already referencing this Razorpay id means we're done.
+    const [paid] = await tx
+      .select({ id: paymentsTable.id })
+      .from(paymentsTable)
+      .where(and(eq(paymentsTable.residentId, residentId), eq(paymentsTable.reference, refId)));
+    if (paid) return;
+    await tx.insert(paymentsTable).values({
+      id: newId(),
+      residentId,
+      amount: String(amount),
+      mode: "UPI",
+      status: "SUCCESS",
+      razorpayPayId: refId,
+      reference: refId,
+      notes: "Razorpay payment-link settlement",
+    });
+    // Auto-settle oldest unpaid charges up to the collected amount (whole-entry).
+    const unpaid = await tx
+      .select()
+      .from(ledgerEntriesTable)
+      .where(and(eq(ledgerEntriesTable.residentId, residentId), eq(ledgerEntriesTable.isPaid, false)))
+      .orderBy(asc(ledgerEntriesTable.dueDate), asc(ledgerEntriesTable.createdAt))
+      .for("update");
+    let remaining = amount;
+    for (const entry of unpaid) {
+      const amt = Number(entry.amount);
+      if (amt <= 0) continue;
+      if (amt > remaining + 0.001) continue;
+      await tx.update(ledgerEntriesTable)
+        .set({ isPaid: true, paidOn: new Date(), updatedAt: new Date() })
+        .where(and(eq(ledgerEntriesTable.id, entry.id), eq(ledgerEntriesTable.isPaid, false)));
+      remaining -= amt;
+      if (remaining <= 0.001) break;
+    }
+  });
+}
+
+router.post("/webhooks/razorpay", rawBody({ type: () => true }), async (req: Request, res: Response) => {
+  try {
+    // Gracefully no-op if the webhook secret is not configured.
+    if (!isRazorpayWebhookConfigured()) {
+      res.status(200).json({ success: true, skipped: "not configured" });
+      return;
+    }
+
+    // Recover the EXACT raw body for HMAC. The global express.json() verify hook
+    // (app.ts) stashes the original bytes on req.rawBody, so we get a byte-exact
+    // payload even though the upstream parser consumed the stream. Fall back to
+    // the route-level raw Buffer / string / serialization only if rawBody is absent.
+    const captured = (req as unknown as { rawBody?: Buffer }).rawBody;
+    const raw =
+      Buffer.isBuffer(captured) ? captured.toString("utf8")
+        : Buffer.isBuffer(req.body) ? req.body.toString("utf8")
+          : typeof req.body === "string" ? req.body
+            : JSON.stringify(req.body ?? {});
+
+    const signature = req.headers["x-razorpay-signature"] as string | undefined;
+    if (!verifyWebhookSignature(raw, signature)) {
+      res.status(403).json({ success: false, error: "Invalid signature" });
+      return;
+    }
+
+    let event: any;
+    try {
+      event = JSON.parse(raw);
+    } catch {
+      res.status(400).json({ success: false, error: "Invalid payload" });
+      return;
+    }
+
+    const type = event?.event as string | undefined;
+    if (type === "payment_link.paid" || type === "payment.captured") {
+      const c = correlationFromEntity(event?.payload || {});
+      if (c.refId && c.amountPaise && c.residentId) {
+        if (c.kind === "WALLET_TOPUP") {
+          await settleWalletTopup(c.residentId, c.amountPaise, c.refId);
+        } else if (c.kind === "RESIDENT_DUES") {
+          await settleResidentDues(c.residentId, c.amountPaise, c.refId);
+        }
+      }
+    }
+
+    // Always 200 so Razorpay does not retry once we've accepted the event.
+    res.status(200).json({ success: true });
   } catch (err) {
     req.log.error(err);
     res.status(500).json({ success: false, error: "Internal server error" });

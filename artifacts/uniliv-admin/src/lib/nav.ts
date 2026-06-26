@@ -23,6 +23,7 @@ export const navGroups: NavGroup[] = [
   { title: "Properties", items: [
     { title: "My Properties", href: "/food/my-properties", icon: Home, module: "FOOD_DASHBOARD" },
     { title: "Properties", href: "/properties", icon: Building2, module: "PROPERTIES" },
+    { title: "Active Guests", href: "/food/guests", icon: Users, module: "FOOD_DASHBOARD" },
   ]},
   { title: "Operations", items: [
     { title: "Rooms", href: "/rooms", icon: DoorOpen, module: "PROPERTIES" },
@@ -58,7 +59,6 @@ export const navGroups: NavGroup[] = [
     { title: "Organization", href: "/food/organization", icon: Network, module: "FOOD_ORG" },
     { title: "All Orders", href: "/food/orders", icon: ListOrdered, module: "FOOD_ALL_ORDERS" },
     { title: "Place Order", href: "/food/place-order", icon: FilePlus2, module: "FOOD_PLACE_ORDER" },
-    { title: "Active Guests", href: "/food/guests", icon: Users, module: "FOOD_DASHBOARD" },
     { title: "Kitchen Summary", href: "/food/kitchen-summary", icon: Soup, module: "FOOD_KITCHEN_SUMMARY" },
     { title: "Dispatch", href: "/food/dispatch", icon: Send, module: "FOOD_DISPATCH" },
     { title: "Confirm Delivery", href: "/food/confirm-delivery", icon: CheckCircle2, module: "FOOD_CONFIRM_DELIVERY" },

@@ -11,7 +11,9 @@ import { Badge } from "@/components/ui/badge";
 import { FormModal } from "@/components/ui/form-modal";
 import { BoundedScroll } from "@/components/ui/bounded-scroll";
 import { useToast } from "@/hooks/use-toast";
-import { ShieldCheck, Plus } from "lucide-react";
+import { ShieldCheck, Plus, Fingerprint } from "lucide-react";
+
+const DIGILOCKER_NOT_CONFIGURED = "DigiLocker is not configured";
 
 type KycRow = {
   id: string;
@@ -56,8 +58,33 @@ export function ResidentKycTab({ residentId }: { residentId: string }) {
   const { data, isLoading } = useQuery<{ data: KycRow[] }>({
     queryKey: ["kyc", residentId],
     queryFn: () => apiFetch(`/residents/${residentId}/kyc`),
+    // The DigiLocker OAuth completes in a separate tab/window; refetch on focus
+    // so a returning admin sees the VERIFIED status without a manual reload.
+    refetchOnWindowFocus: true,
   });
   const rows = data?.data || [];
+
+  // O27 — null = unknown (probe on first attempt), true/false once known.
+  const [digilockerConfigured, setDigilockerConfigured] = React.useState<boolean | null>(null);
+
+  // Start the DigiLocker OAuth handshake for a KYC request. On success we open the
+  // authorize URL; the public callback marks the row VERIFIED out-of-band.
+  const digilocker = useMutation<{ data: { authorizeUrl: string } }, Error, string>({
+    mutationFn: (kycId: string) => apiFetch(`/kyc/${kycId}/digilocker/initiate`),
+    onSuccess: (resp) => {
+      setDigilockerConfigured(true);
+      window.open(resp.data.authorizeUrl, "_blank", "noopener,noreferrer");
+      toast({ title: "DigiLocker opened", description: "Complete verification in the new tab, then return here." });
+    },
+    onError: (e: Error) => {
+      if (e.message === DIGILOCKER_NOT_CONFIGURED) {
+        setDigilockerConfigured(false);
+        toast({ title: "DigiLocker not configured yet", variant: "destructive" });
+        return;
+      }
+      toast({ title: e.message, variant: "destructive" });
+    },
+  });
 
   const verify = useMutation({
     mutationFn: ({ id, status, rejectionReason }: { id: string; status: string; rejectionReason?: string }) =>
@@ -115,25 +142,47 @@ export function ResidentKycTab({ residentId }: { residentId: string }) {
                   )}
                   <KycEventsList kycId={r.id} />
                 </div>
-                {r.status !== "VERIFIED" && (
-                  <Button
-                    size="sm"
-                    onClick={() => verify.mutate({ id: r.id, status: "VERIFIED" })}
-                    data-testid={`button-verify-${r.id}`}
-                  >
-                    Verify
-                  </Button>
-                )}
-                {r.status !== "REJECTED" && (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => setRejectFor(r.id)}
-                    data-testid={`button-reject-${r.id}`}
-                  >
-                    Reject
-                  </Button>
-                )}
+                <div className="flex flex-col items-end gap-2 shrink-0">
+                  {r.status !== "VERIFIED" && (
+                    <Button
+                      size="sm"
+                      onClick={() => verify.mutate({ id: r.id, status: "VERIFIED" })}
+                      data-testid={`button-verify-${r.id}`}
+                    >
+                      Verify (Manual)
+                    </Button>
+                  )}
+                  {r.status !== "VERIFIED" && (
+                    digilockerConfigured === false ? (
+                      <div className="text-right">
+                        <Button size="sm" variant="outline" disabled data-testid={`button-digilocker-${r.id}`}>
+                          <Fingerprint className="h-4 w-4 mr-2" /> Verify via DigiLocker
+                        </Button>
+                        <p className="text-[10px] text-muted-foreground mt-0.5">DigiLocker not configured yet</p>
+                      </div>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => digilocker.mutate(r.id)}
+                        disabled={digilocker.isPending}
+                        data-testid={`button-digilocker-${r.id}`}
+                      >
+                        <Fingerprint className="h-4 w-4 mr-2" /> Verify via DigiLocker
+                      </Button>
+                    )
+                  )}
+                  {r.status !== "REJECTED" && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setRejectFor(r.id)}
+                      data-testid={`button-reject-${r.id}`}
+                    >
+                      Reject
+                    </Button>
+                  )}
+                </div>
               </CardContent>
             </Card>
           ))}
@@ -258,7 +307,7 @@ function CreateKycModal({
           </div>
         </div>
         <p className="text-xs text-muted-foreground">
-          Default provider is <strong>Manual</strong> — request stays Pending until an admin verifies. DigiLocker / Aadhaar OTP provider can be plugged in later.
+          Submitted as <strong>Manual</strong> — the request stays Pending until an admin verifies it or the resident completes <strong>DigiLocker</strong> verification from the request actions.
         </p>
       </div>
     </FormModal>

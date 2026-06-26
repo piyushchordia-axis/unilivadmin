@@ -124,10 +124,28 @@ export async function toPdf(table: ExportTable): Promise<Uint8Array> {
   const rowH = 20;
   const fontSize = 8;
 
-  const fit = (text: string, width: number) => {
-    let s = String(text ?? "");
-    while (s.length > 0 && font.widthOfTextAtSize(s, fontSize) > width - 6) s = s.slice(0, -1);
-    return s.length < String(text ?? "").length ? s.slice(0, -1) + "…" : s;
+  const ELLIPSIS = "…";
+  // Width measurement guarded so a font/glyph edge case can never throw the
+  // request and 500 the whole export; on failure we treat the text as zero-width
+  // (i.e. it "fits"), which is harmless for layout.
+  const measure = (s: string) => {
+    try {
+      return font.widthOfTextAtSize(s, fontSize);
+    } catch {
+      return 0;
+    }
+  };
+  const fit = (value: unknown) => {
+    // Coerce null/undefined/number cell values to string safely before measuring.
+    const text = value == null ? "" : String(value);
+    const maxW = colW - 6;
+    if (measure(text) <= maxW) return text;
+    // Need to truncate. Account for the ellipsis glyph width in the loop
+    // condition, and never slice past an empty string.
+    const ellW = measure(ELLIPSIS);
+    let s = text;
+    while (s.length > 0 && measure(s) + ellW > maxW) s = s.slice(0, -1);
+    return s + ELLIPSIS;
   };
 
   let page = doc.addPage([pageW, pageH]);
@@ -151,7 +169,7 @@ export async function toPdf(table: ExportTable): Promise<Uint8Array> {
   const drawHeader = () => {
     page.drawRectangle({ x: margin, y: y - rowH + 4, width: usableW, height: rowH, color: navy });
     table.headers.forEach((h, i) => {
-      page.drawText(fit(h, colW), {
+      page.drawText(fit(h), {
         x: margin + i * colW + 4,
         y: y - rowH + 10,
         size: fontSize,
@@ -175,7 +193,7 @@ export async function toPdf(table: ExportTable): Promise<Uint8Array> {
       page.drawRectangle({ x: margin, y: y - rowH + 4, width: usableW, height: rowH, color: lightRow });
     }
     row.forEach((cell, i) => {
-      page.drawText(fit(cell == null ? "" : String(cell), colW), {
+      page.drawText(fit(cell), {
         x: margin + i * colW + 4,
         y: y - rowH + 10,
         size: fontSize,

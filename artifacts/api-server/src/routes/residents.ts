@@ -1,13 +1,72 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
-import { residentsTable, ledgerEntriesTable, paymentsTable, propertiesTable, roomsTable } from "@workspace/db";
-import { eq, sql, ilike, or, and, inArray } from "drizzle-orm";
+import { residentsTable, ledgerEntriesTable, paymentsTable, propertiesTable, roomsTable, notificationOutboxTable } from "@workspace/db";
+import { eq, sql, ilike, or, and, inArray, asc } from "drizzle-orm";
 import { authenticate } from "../middlewares/auth.js";
 import { authorize } from "../middlewares/authorize.js";
 import { pick, assertPropertyAccess, scopedPropertyId } from "../lib/authz.js";
 import { getPagination, buildMeta } from "../lib/paginate.js";
 import { newId } from "../lib/id.js";
-import { isKycGateEnabled, residentMeetsActivationRequirements } from "./kyc-esign.js";
+import {
+  isKycGateEnabled,
+  residentMeetsActivationRequirements,
+  createRentAgreementEsign,
+  hasSignedRentAgreement,
+} from "./kyc-esign.js";
+import {
+  createPaymentLink,
+  isRazorpayConfigured,
+  toPaise,
+  RazorpayNotConfiguredError,
+} from "../lib/razorpay.js";
+import { enqueueDelivery, processDelivery, queueEnabled } from "@workspace/notify-core";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Ad-hoc outbound message helper.
+// notification-service.notify() resolves email/phone from a userId, but payment
+// links must reach the resident's own phone/email and guardian (parentPhone /
+// parentEmail) or an arbitrary contact — none of which are users. We therefore
+// enqueue an outbox row directly (userId left null; toAddress set explicitly),
+// reusing the same durable outbox + delivery pipeline. Best-effort/non-throwing.
+// ─────────────────────────────────────────────────────────────────────────────
+async function sendAdHoc(
+  channel: "SMS" | "EMAIL",
+  toAddress: string,
+  body: string,
+  opts: { subject?: string; entityType?: string; entityId?: string } = {},
+): Promise<void> {
+  try {
+    const id = newId();
+    await db.insert(notificationOutboxTable).values({
+      id,
+      userId: null,
+      channel,
+      toAddress,
+      subject: opts.subject ?? null,
+      body,
+      entityType: opts.entityType ?? null,
+      entityId: opts.entityId ?? null,
+      status: "PENDING",
+    });
+    if (queueEnabled()) {
+      const queued = await enqueueDelivery(id);
+      if (!queued) await processDelivery(id);
+    } else {
+      await processDelivery(id);
+    }
+  } catch {
+    // swallow — a delivery failure must never break the API request
+  }
+}
+
+/** Compute a resident's current outstanding dues (sum of unpaid ledger amounts). */
+async function outstandingDues(residentId: string): Promise<number> {
+  const [row] = await db
+    .select({ total: sql<string>`coalesce(sum(${ledgerEntriesTable.amount}::numeric), 0)` })
+    .from(ledgerEntriesTable)
+    .where(and(eq(ledgerEntriesTable.residentId, residentId), eq(ledgerEntriesTable.isPaid, false)));
+  return Number(row?.total ?? 0);
+}
 
 const router = Router();
 
@@ -81,6 +140,13 @@ router.post("/", authenticate, authorize("RESIDENTS", "create"), async (req, res
       });
       return;
     }
+    // O25: activation always requires a SIGNED Rent Agreement. A brand-new
+    // resident has none yet, so creating directly as ACTIVE is rejected (this
+    // gate applies regardless of the KYC-gate toggle).
+    if (requestedStatus === "ACTIVE") {
+      res.status(400).json({ success: false, error: "A signed rent agreement is required before activation." });
+      return;
+    }
     const [row] = await db.insert(residentsTable).values({
       id: newId(),
       propertyId: body.propertyId,
@@ -105,6 +171,15 @@ router.post("/", authenticate, authorize("RESIDENTS", "create"), async (req, res
       status: requestedStatus,
       updatedAt: new Date(),
     }).returning();
+    // O26/O25: auto-generate the interim Rent Agreement esign draft so a
+    // PENDING agreement always exists for the resident to sign. Best-effort —
+    // a generation failure (e.g. missing property data) must not fail the
+    // resident create; the draft can be (re)generated via the esign endpoint.
+    try {
+      await createRentAgreementEsign(row.id, req.user?.id ?? null);
+    } catch (e) {
+      req.log.error({ err: e }, "Failed to auto-generate rent agreement");
+    }
     res.status(201).json({ success: true, data: await enrichResident(row) });
   } catch (err) {
     if (sendAuthzError(err, res)) return;
@@ -143,11 +218,20 @@ router.put("/:id", authenticate, authorize("RESIDENTS", "edit"), async (req, res
     if (body.propertyId !== undefined && body.propertyId !== existing.propertyId) {
       assertPropertyAccess(req, body.propertyId);
     }
-    if (body?.status === "ACTIVE" && (await isKycGateEnabled())) {
-      const check = await residentMeetsActivationRequirements(req.params["id"]!);
-      if (!check.ok) {
-        res.status(400).json({ success: false, error: `Cannot activate resident: ${check.reason}` });
+    if (body?.status === "ACTIVE") {
+      // O25: a SIGNED 'Rent Agreement' is always required to activate.
+      if (!(await hasSignedRentAgreement(req.params["id"]!))) {
+        res.status(400).json({ success: false, error: "A signed rent agreement is required before activation." });
         return;
+      }
+      // Existing KYC-gate behavior still applies when the gate is enabled
+      // (e.g. requires a VERIFIED KYC on file as well). Both gates apply.
+      if (await isKycGateEnabled()) {
+        const check = await residentMeetsActivationRequirements(req.params["id"]!);
+        if (!check.ok) {
+          res.status(400).json({ success: false, error: `Cannot activate resident: ${check.reason}` });
+          return;
+        }
       }
     }
     const updateData: Record<string, unknown> = { updatedAt: new Date() };
@@ -195,19 +279,92 @@ router.get("/:id/ledger", authenticate, authorize("RESIDENTS", "view"), async (r
   }
 });
 
+// POST /residents/:id/ledger
+// Two modes:
+//   (a) Charge/debit (default): records a normal ledger entry (RENT/UTILITY/…).
+//   (b) Collection credit (O24): pass entryType="CREDIT" to record cash physically
+//       collected. A CREDIT entry (isPaid=true, collectionDate set) is inserted and
+//       the oldest unpaid charges are auto-marked paid up to the collected amount —
+//       reducing outstanding. Whole-entry settlement only (no partial split). All
+//       in one transaction.
 router.post("/:id/ledger", authenticate, authorize("RESIDENTS", "edit"), async (req, res) => {
   try {
-    const [resident] = await db.select().from(residentsTable).where(eq(residentsTable.id, req.params["id"]!));
+    const residentId = req.params["id"]!;
+    const [resident] = await db.select().from(residentsTable).where(eq(residentsTable.id, residentId));
     if (!resident) { res.status(404).json({ success: false, error: "Not found" }); return; }
     assertPropertyAccess(req, resident.propertyId);
     const body = req.body;
-    if (body?.amount == null || Number.isNaN(Number(body.amount))) {
-      res.status(400).json({ success: false, error: "amount is required and must be a number" });
+    if (body?.amount == null || Number.isNaN(Number(body.amount)) || Number(body.amount) <= 0) {
+      res.status(400).json({ success: false, error: "amount is required and must be a positive number" });
       return;
     }
+
+    const isCollection = String(body.entryType ?? "").toUpperCase() === "CREDIT";
+
+    if (isCollection) {
+      const collectedAmount = Number(body.amount);
+      const collectionDate = body.collectionDate ? new Date(body.collectionDate) : new Date();
+
+      const result = await db.transaction(async (tx) => {
+        // Record the collection itself as a paid CREDIT entry. We reuse the
+        // ledger `type` enum (default ADJUSTMENT) since there is no credit/debit
+        // column; the row is identified as a collection by collectionDate != null.
+        const [credit] = await tx.insert(ledgerEntriesTable).values({
+          id: newId(),
+          residentId,
+          type: body.type ?? "ADJUSTMENT",
+          amount: collectedAmount.toString(),
+          description: body.description ?? `Cash collected ₹${collectedAmount}`,
+          isPaid: true,
+          paidOn: collectionDate,
+          collectionDate,
+          reference: body.reference,
+          createdBy: req.user?.id,
+          updatedAt: new Date(),
+        }).returning();
+
+        // Auto-settle: oldest unpaid charges first (by dueDate, then createdAt),
+        // whole-entry only, up to the collected amount. Best-effort.
+        const unpaid = await tx
+          .select()
+          .from(ledgerEntriesTable)
+          .where(and(eq(ledgerEntriesTable.residentId, residentId), eq(ledgerEntriesTable.isPaid, false)))
+          .orderBy(asc(ledgerEntriesTable.dueDate), asc(ledgerEntriesTable.createdAt))
+          .for("update");
+
+        let remaining = collectedAmount;
+        const settledIds: string[] = [];
+        for (const entry of unpaid) {
+          const amt = Number(entry.amount);
+          if (amt <= 0) continue;
+          if (amt > remaining + 0.001) continue; // can't fully cover this one
+          await tx.update(ledgerEntriesTable)
+            .set({ isPaid: true, paidOn: collectionDate, updatedAt: new Date() })
+            .where(and(eq(ledgerEntriesTable.id, entry.id), eq(ledgerEntriesTable.isPaid, false)));
+          remaining -= amt;
+          settledIds.push(entry.id);
+          if (remaining <= 0.001) break;
+        }
+
+        return { credit: credit!, settledIds };
+      });
+
+      res.status(201).json({
+        success: true,
+        data: {
+          ...result.credit,
+          amount: Number(result.credit.amount),
+          settledEntryIds: result.settledIds,
+          settledCount: result.settledIds.length,
+        },
+      });
+      return;
+    }
+
+    // Default: ordinary charge/debit entry (unchanged behavior).
     const [row] = await db.insert(ledgerEntriesTable).values({
       id: newId(),
-      residentId: req.params["id"]!,
+      residentId,
       type: body.type,
       amount: body.amount.toString(),
       description: body.description,
@@ -219,6 +376,68 @@ router.post("/:id/ledger", authenticate, authorize("RESIDENTS", "edit"), async (
     }).returning();
     res.status(201).json({ success: true, data: { ...row, amount: Number(row.amount) } });
   } catch (err) {
+    if (sendAuthzError(err, res)) return;
+    req.log.error(err);
+    res.status(500).json({ success: false, error: "Internal server error" });
+  }
+});
+
+// POST /residents/:id/payment-link  (O23)
+// Create a 7-day Razorpay payment link for the resident's dues and share it via
+// SMS/email to the chosen recipients. Body:
+//   { amount?: number, recipients?: Array<'resident'|'guardian'|{phone?,email?}> }
+// Default amount = current outstanding dues. Default recipient = 'resident'.
+// 503 when Razorpay is not configured. Property-scoped.
+router.post("/:id/payment-link", authenticate, authorize("RESIDENTS", "edit"), async (req, res) => {
+  try {
+    const residentId = req.params["id"]!;
+    const [resident] = await db.select().from(residentsTable).where(eq(residentsTable.id, residentId));
+    if (!resident) { res.status(404).json({ success: false, error: "Not found" }); return; }
+    assertPropertyAccess(req, resident.propertyId);
+
+    if (!isRazorpayConfigured()) {
+      res.status(503).json({ success: false, error: "Payments not configured" });
+      return;
+    }
+
+    const body = req.body || {};
+    const amount = body.amount != null ? Number(body.amount) : await outstandingDues(residentId);
+    if (!amount || Number.isNaN(amount) || amount <= 0) {
+      res.status(400).json({ success: false, error: "No outstanding dues to collect (or amount invalid)" });
+      return;
+    }
+
+    // Resolve recipients to concrete phone/email targets.
+    const requested: Array<"resident" | "guardian" | { phone?: string; email?: string }> =
+      Array.isArray(body.recipients) && body.recipients.length ? body.recipients : ["resident"];
+    const targets: Array<{ phone?: string | null; email?: string | null }> = [];
+    for (const r of requested) {
+      if (r === "resident") targets.push({ phone: resident.phone, email: resident.email });
+      else if (r === "guardian") targets.push({ phone: resident.parentPhone, email: resident.parentEmail });
+      else if (r && typeof r === "object") targets.push({ phone: r.phone, email: r.email });
+    }
+
+    const link = await createPaymentLink({
+      amountPaise: toPaise(amount),
+      description: `Dues payment — ${resident.name}`,
+      customer: { name: resident.name, contact: resident.phone, email: resident.email },
+      expireBySeconds: 7 * 24 * 60 * 60, // 7 days
+      notes: { kind: "RESIDENT_DUES", residentId, propertyId: resident.propertyId },
+    });
+
+    const smsText = `Hi, pay your dues of ₹${amount} for ${resident.name}: ${link.shortUrl} (valid 7 days)`;
+    const emailText = `Dear ${resident.name},\n\nPlease pay your outstanding dues of ₹${amount} using the secure link below (valid 7 days):\n\n${link.shortUrl}\n\nThank you.`;
+    for (const t of targets) {
+      if (t.phone) await sendAdHoc("SMS", t.phone, smsText, { entityType: "PAYMENT_LINK", entityId: link.id });
+      if (t.email) await sendAdHoc("EMAIL", t.email, emailText, { subject: "Payment link for your dues", entityType: "PAYMENT_LINK", entityId: link.id });
+    }
+
+    res.status(201).json({ success: true, data: { shortUrl: link.shortUrl, id: link.id } });
+  } catch (err) {
+    if (err instanceof RazorpayNotConfiguredError) {
+      res.status(503).json({ success: false, error: "Payments not configured" });
+      return;
+    }
     if (sendAuthzError(err, res)) return;
     req.log.error(err);
     res.status(500).json({ success: false, error: "Internal server error" });

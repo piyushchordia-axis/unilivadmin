@@ -1567,6 +1567,197 @@ foodOpsRouter.get("/reports/variance", authenticate, authorize("FOOD_REPORTS", "
 });
 
 /* ════════════════════════════════════════════════════════════════════════
+ * On-time delivery report (O15/O16) + tolerance config (system_config)
+ *
+ * A delivery is ON-TIME when deliveredAt <= (serviceDate @ the meal's SCHEDULED
+ * SERVICE TIME) + TOLERANCE minutes. This deliberately uses the configured
+ * meal-window serviceTime (NOT expectedDeliveryAt, which adds lead time) so the
+ * SLA is measured against the promised service moment. TOLERANCE is a global
+ * system_config value `FOOD_ONTIME_TOLERANCE_MINUTES` (default 45).
+ *
+ * The service-time instant is built in IST (atTime → atIst) so it is the correct
+ * absolute instant regardless of server/process timezone, matching the cut-off
+ * logic above.
+ * ════════════════════════════════════════════════════════════════════════ */
+
+/** Global on-time tolerance config key + default (minutes). */
+const FOOD_ONTIME_TOLERANCE_KEY = "FOOD_ONTIME_TOLERANCE_MINUTES";
+const FOOD_ONTIME_TOLERANCE_DEFAULT = 45;
+
+/** Current on-time tolerance in minutes (clamped to 0..240; default 45). */
+async function getOntimeToleranceMinutes(): Promise<number> {
+  const raw = await getSystemConfigValue<number>(FOOD_ONTIME_TOLERANCE_KEY, FOOD_ONTIME_TOLERANCE_DEFAULT);
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 && n <= 240 ? n : FOOD_ONTIME_TOLERANCE_DEFAULT;
+}
+
+/**
+ * Resolves, per (brand, mealType, propertyId), the scheduled serviceTime "HH:MM"
+ * from the active meal windows. Pre-fetches ALL active windows once and resolves
+ * in JS (property-specific overrides the global default) so an on-time report
+ * over many orders runs without an N+1 DB hit per order.
+ */
+async function loadServiceTimeResolver(): Promise<(brand: string, mealType: string, propertyId: string) => string | null> {
+  const rows = await db.select().from(foodMealWindowsTable).where(eq(foodMealWindowsTable.isActive, true));
+  return (brand, mealType, propertyId) => {
+    let global: string | null | undefined;
+    for (const w of rows) {
+      if (w.brand !== brand || w.mealType !== mealType) continue;
+      if (w.propertyId === propertyId) return w.serviceTime ?? null;
+      if (w.propertyId === null && global === undefined) global = w.serviceTime;
+    }
+    return global ?? null;
+  };
+}
+
+/**
+ * GET /food/reports/on-time — on-time vs late delivered orders over a window.
+ * Scoped via resolveAccessiblePropertyIds + optional propertyId/brand filters.
+ * Only DELIVERED orders with a deliveredAt are counted; orders whose meal has no
+ * configured serviceTime can't be measured and are skipped (excluded from totals).
+ */
+foodOpsRouter.get("/reports/on-time", authenticate, authorize("FOOD_REPORTS", "view"), async (req, res) => {
+  try {
+    const ids = await resolveAccessiblePropertyIds(req.user!);
+    const { from, to } = periodRange(req.query["period"] as string | undefined, req.query as Record<string, unknown>);
+    const propertyId = req.query["propertyId"] as string | undefined;
+    const brand = req.query["brand"] as string | undefined;
+    if (propertyId && !isAccessible(propertyId, ids)) {
+      res.status(403).json({ success: false, error: "Property not accessible" }); return;
+    }
+
+    const conds = [
+      gte(foodOrdersTable.serviceDate, from),
+      lte(foodOrdersTable.serviceDate, to),
+      eq(foodOrdersTable.status, "DELIVERED" as never),
+      isNotNull(foodOrdersTable.deliveredAt),
+    ] as any[];
+    if (ids !== null) conds.push(ids.length ? inArray(foodOrdersTable.propertyId, ids) : sql`false`);
+    if (propertyId) conds.push(eq(foodOrdersTable.propertyId, propertyId));
+    if (brand) conds.push(eq(foodOrdersTable.brand, brand as never));
+
+    const orders = await db.select({
+      brand: foodOrdersTable.brand, mealType: foodOrdersTable.mealType, propertyId: foodOrdersTable.propertyId,
+      serviceDate: foodOrdersTable.serviceDate, deliveredAt: foodOrdersTable.deliveredAt,
+    }).from(foodOrdersTable).where(and(...conds));
+
+    const toleranceMinutes = await getOntimeToleranceMinutes();
+    const resolveServiceTime = await loadServiceTimeResolver();
+    const tolMs = toleranceMinutes * 60000;
+
+    const byDay = new Map<string, { onTime: number; late: number }>();
+    let onTimeCount = 0, lateCount = 0;
+    for (const o of orders) {
+      const serviceTime = resolveServiceTime(o.brand, o.mealType, o.propertyId);
+      const base = atTime(o.serviceDate, serviceTime); // IST-anchored service instant
+      if (!base || !o.deliveredAt) continue; // unmeasurable — excluded from totals
+      const onTime = o.deliveredAt.getTime() <= base.getTime() + tolMs;
+      const day = istDayYmd(o.serviceDate);
+      const bucket = byDay.get(day) ?? { onTime: 0, late: 0 };
+      if (onTime) { bucket.onTime++; onTimeCount++; } else { bucket.late++; lateCount++; }
+      byDay.set(day, bucket);
+    }
+    const totalDelivered = onTimeCount + lateCount;
+    const byDayRows = [...byDay.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1))
+      .map(([date, v]) => ({ date, onTime: v.onTime, late: v.late }));
+
+    res.json({
+      success: true,
+      data: {
+        onTimePct: totalDelivered ? Math.round((onTimeCount / totalDelivered) * 1000) / 10 : 0,
+        lateCount, onTimeCount, totalDelivered,
+        toleranceMinutes,
+        byDay: byDayRows,
+      },
+    });
+  } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
+});
+
+/**
+ * GET /food/settings/ontime-tolerance — read the global on-time tolerance (min).
+ * Any authenticated food user may read (needed to label the on-time report).
+ */
+foodOpsRouter.get("/settings/ontime-tolerance", authenticate, async (req, res) => {
+  try {
+    res.json({ success: true, data: { minutes: await getOntimeToleranceMinutes() } });
+  } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
+});
+
+/**
+ * PUT /food/settings/ontime-tolerance — set the tolerance. SUPER_ADMIN only
+ * (org-wide SLA setting), mirroring the OTP-config gate. Validates 0..240.
+ */
+const ontimeToleranceSchema = z.object({ minutes: z.union([z.string(), z.number()]) }).passthrough();
+
+foodOpsRouter.put("/settings/ontime-tolerance", authenticate, async (req, res) => {
+  try {
+    if (req.user?.role !== "SUPER_ADMIN") {
+      res.status(403).json({ success: false, error: "Forbidden — SUPER_ADMIN only" }); return;
+    }
+    if (!validateBody(ontimeToleranceSchema, req, res)) return;
+    const n = Number((req.body || {}).minutes);
+    if (!Number.isInteger(n) || n < 0 || n > 240) {
+      res.status(400).json({ success: false, error: "minutes must be an integer between 0 and 240" }); return;
+    }
+    await db.insert(systemConfigTable)
+      .values({ id: newId(), key: FOOD_ONTIME_TOLERANCE_KEY, value: n as never, description: "On-time delivery tolerance (minutes) past the meal's scheduled service time.", updatedAt: new Date() })
+      .onConflictDoUpdate({ target: systemConfigTable.key, set: { value: n as never, updatedAt: new Date() } });
+    res.json({ success: true, data: { minutes: await getOntimeToleranceMinutes() } });
+  } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
+});
+
+/* ════════════════════════════════════════════════════════════════════════
+ * Variance grouped by service-day (O17)
+ *
+ * Per IST service-day ordered/received/wasted/variance over DELIVERED orders,
+ * with an optional single-meal filter. Mirrors /reports/variance scoping; the
+ * date bucket is the IST calendar day of serviceDate.
+ * ════════════════════════════════════════════════════════════════════════ */
+foodOpsRouter.get("/reports/variance-by-day", authenticate, authorize("FOOD_REPORTS", "view"), async (req, res) => {
+  try {
+    const ids = await resolveAccessiblePropertyIds(req.user!);
+    const { from, to } = periodRange(req.query["period"] as string | undefined, req.query as Record<string, unknown>);
+    const propertyId = req.query["propertyId"] as string | undefined;
+    const mealType = req.query["mealType"] as string | undefined;
+    if (propertyId && !isAccessible(propertyId, ids)) {
+      res.status(403).json({ success: false, error: "Property not accessible" }); return;
+    }
+    if (mealType && !MEAL_TYPES.includes(mealType as never)) {
+      res.status(400).json({ success: false, error: "Invalid mealType" }); return;
+    }
+
+    const conds = [
+      gte(foodOrdersTable.serviceDate, from),
+      lte(foodOrdersTable.serviceDate, to),
+      eq(foodOrdersTable.status, "DELIVERED" as never),
+    ] as any[];
+    if (ids !== null) conds.push(ids.length ? inArray(foodOrdersTable.propertyId, ids) : sql`false`);
+    if (propertyId) conds.push(eq(foodOrdersTable.propertyId, propertyId));
+    if (mealType) conds.push(eq(foodOrdersTable.mealType, mealType as never));
+
+    // Group by IST calendar day of serviceDate (to_char in IST: shift +5:30).
+    const day = sql<string>`to_char(${foodOrdersTable.serviceDate} + interval '330 minutes', 'YYYY-MM-DD')`;
+    const grouped = await db.select({
+      date: day,
+      ordered: sql<number>`coalesce(sum(${foodOrderItemsTable.orderedQty}), 0)::float`,
+      received: sql<number>`coalesce(sum(${foodOrderItemsTable.receivedQty}), 0)::float`,
+      wasted: sql<number>`coalesce(sum(${foodOrderItemsTable.wastedQty}), 0)::float`,
+    }).from(foodOrdersTable)
+      .innerJoin(foodOrderItemsTable, eq(foodOrderItemsTable.orderId, foodOrdersTable.id))
+      .where(and(...conds)).groupBy(day).orderBy(day);
+
+    const r3 = (n: number) => Math.round(n * 1000) / 1000;
+    const rows = grouped.map((g) => {
+      const ordered = r3(Number(g.ordered));
+      const received = r3(Number(g.received));
+      const wasted = r3(Number(g.wasted));
+      return { date: g.date, ordered, received, variance: r3(ordered - received), wasted };
+    });
+    res.json({ success: true, data: { rows } });
+  } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
+});
+
+/* ════════════════════════════════════════════════════════════════════════
  * Exports — orders & guests (Persona st.34, st.47)
  * ════════════════════════════════════════════════════════════════════════ */
 
@@ -1624,34 +1815,217 @@ function ordersFilename(propertyName: string | null, ext: string): string {
   return `food-orders${prop}-${fileDateStamp()}.${ext}`;
 }
 
-foodOpsRouter.get("/reports/export.csv", authenticate, authorize("FOOD_REPORTS", "view"), async (req, res) => {
-  try {
-    const { rows, propertyName, dateRange } = await fetchOrdersForExport(req);
-    const csv = toCsv({ title: "Food Orders Report", headers: ORDER_HEADERS, rows, propertyName, dateRange });
+// NOTE: these literal `.csv/.pdf/.xls` routes are registered BEFORE the unified
+// `/reports/export.:fmt` route below, so Express matches them first. To keep the
+// O20 `?report=` contract working on these paths too, each delegates to the same
+// buildReportTable() pipeline. With no `?report=` (or report=orders) the output
+// is byte-identical to the original orders export, so existing callers are unaffected.
+async function serveReportExport(req: any, res: any, fmt: "csv" | "pdf" | "xls"): Promise<void> {
+  const report = String(req.query["report"] ?? "orders").toLowerCase();
+  if (!EXPORT_REPORTS.has(report)) {
+    res.status(400).json({ success: false, error: "report must be one of orders, variance, waste, ontime" }); return;
+  }
+  const t = await buildReportTable(report, req);
+  const table = { title: t.title, headers: t.headers, rows: t.rows, propertyName: t.propertyName, dateRange: t.dateRange };
+  const filename = report === "orders"
+    ? ordersFilename(t.propertyName, fmt)          // preserve the original orders filename
+    : reportFilename(t.fileBase, t.propertyName, fmt);
+  if (fmt === "csv") {
     res.setHeader("Content-Type", "text/csv; charset=utf-8");
-    res.setHeader("Content-Disposition", `attachment; filename=${ordersFilename(propertyName, "csv")}`);
-    res.send(csv);
-  } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
+    res.setHeader("Content-Disposition", `attachment; filename=${filename}`);
+    res.send(toCsv(table));
+  } else if (fmt === "pdf") {
+    const pdf = await toPdf(table);
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename=${filename}`);
+    res.send(Buffer.from(pdf));
+  } else {
+    res.setHeader("Content-Type", "application/vnd.ms-excel");
+    res.setHeader("Content-Disposition", `attachment; filename=${filename}`);
+    res.send(toXls(table));
+  }
+}
+
+foodOpsRouter.get("/reports/export.csv", authenticate, authorize("FOOD_REPORTS", "view"), async (req, res) => {
+  try { await serveReportExport(req, res, "csv"); }
+  catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
 foodOpsRouter.get("/reports/export.pdf", authenticate, authorize("FOOD_REPORTS", "view"), async (req, res) => {
-  try {
-    const { rows, propertyName, dateRange } = await fetchOrdersForExport(req);
-    const pdf = await toPdf({ title: "Food Orders Report", headers: ORDER_HEADERS, rows, propertyName, dateRange });
-    res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Content-Disposition", `attachment; filename=${ordersFilename(propertyName, "pdf")}`);
-    res.send(Buffer.from(pdf));
-  } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
+  try { await serveReportExport(req, res, "pdf"); }
+  catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
 foodOpsRouter.get("/reports/export.xls", authenticate, authorize("FOOD_REPORTS", "view"), async (req, res) => {
-  try {
+  try { await serveReportExport(req, res, "xls"); }
+  catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
+});
+
+/* ════════════════════════════════════════════════════════════════════════
+ * Unified report export (O20) — GET /food/reports/export.:fmt
+ *
+ * One endpoint serves every report widget. `?report=` selects which dataset to
+ * render (orders | variance | waste | ontime); fmt (csv|pdf|xls) selects the
+ * encoder. Scoping (resolveAccessiblePropertyIds + ?propertyId/?brand) and the
+ * from/to filters mirror the per-report JSON endpoints, so an export reflects
+ * exactly what the on-screen widget shows. `orders` reuses fetchOrdersForExport.
+ * ════════════════════════════════════════════════════════════════════════ */
+
+const r3 = (n: number) => Math.round(n * 1000) / 1000;
+
+/** Shared property/brand/date scope for the variance/waste/ontime export datasets. */
+async function reportExportScope(req: any): Promise<{
+  where: ReturnType<typeof and>; propertyName: string | null; dateRange: string | null; from?: Date; to?: Date;
+}> {
+  const ids = await resolveAccessiblePropertyIds(req.user!);
+  const from = parseDate(req.query["from"]); const to = parseDate(req.query["to"]);
+  const propertyId = req.query["propertyId"] as string | undefined;
+  const brand = req.query["brand"] as string | undefined;
+  const conds = [] as any[];
+  if (ids !== null) conds.push(ids.length ? inArray(foodOrdersTable.propertyId, ids) : sql`false`);
+  if (from) conds.push(gte(foodOrdersTable.serviceDate, from));
+  if (to) conds.push(lte(foodOrdersTable.serviceDate, to));
+  if (propertyId) conds.push(eq(foodOrdersTable.propertyId, propertyId));
+  if (brand) conds.push(eq(foodOrdersTable.brand, brand as never));
+  conds.push(eq(foodOrdersTable.status, "DELIVERED" as never));
+  let propertyName: string | null = null;
+  if (propertyId) {
+    const [p] = await db.select({ name: propertiesTable.name }).from(propertiesTable).where(eq(propertiesTable.id, propertyId));
+    propertyName = p?.name ?? null;
+  }
+  const dateRange = from || to ? `${from ? fmtDate(from) : "…"} → ${to ? fmtDate(to) : "…"}` : null;
+  return { where: and(...conds), propertyName, dateRange, from, to };
+}
+
+/** Builds the {title, headers, rows, propertyName, dateRange} table for a report. */
+async function buildReportTable(report: string, req: any): Promise<{
+  title: string; headers: string[]; rows: (string | number | null | undefined)[][];
+  propertyName: string | null; dateRange: string | null; fileBase: string;
+}> {
+  if (report === "orders") {
     const { rows, propertyName, dateRange } = await fetchOrdersForExport(req);
-    const xls = toXls({ title: "Food Orders Report", headers: ORDER_HEADERS, rows, propertyName, dateRange });
-    res.setHeader("Content-Type", "application/vnd.ms-excel");
-    res.setHeader("Content-Disposition", `attachment; filename=${ordersFilename(propertyName, "xls")}`);
-    res.send(xls);
-  } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
+    return { title: "Food Orders Report", headers: ORDER_HEADERS, rows, propertyName, dateRange, fileBase: "food-orders" };
+  }
+
+  if (report === "variance") {
+    const { where, propertyName, dateRange } = await reportExportScope(req);
+    const grouped = await db.select({
+      mealType: foodOrdersTable.mealType,
+      ordered: sql<number>`coalesce(sum(${foodOrderItemsTable.orderedQty}), 0)::float`,
+      received: sql<number>`coalesce(sum(${foodOrderItemsTable.receivedQty}), 0)::float`,
+      wasted: sql<number>`coalesce(sum(${foodOrderItemsTable.wastedQty}), 0)::float`,
+    }).from(foodOrdersTable)
+      .innerJoin(foodOrderItemsTable, eq(foodOrderItemsTable.orderId, foodOrdersTable.id))
+      .where(where).groupBy(foodOrdersTable.mealType);
+    const byMeal = new Map(grouped.map((g) => [g.mealType, g]));
+    const rows = MEAL_TYPES.map((mt) => {
+      const g = byMeal.get(mt);
+      const ordered = r3(Number(g?.ordered ?? 0));
+      const received = r3(Number(g?.received ?? 0));
+      const wasted = r3(Number(g?.wasted ?? 0));
+      return [mt, ordered, received, r3(ordered - received), wasted];
+    });
+    return {
+      title: "Ordered vs Delivered Variance", headers: ["Meal", "Ordered", "Received", "Variance", "Wasted"],
+      rows, propertyName, dateRange, fileBase: "food-variance",
+    };
+  }
+
+  if (report === "waste") {
+    const { where, propertyName, dateRange } = await reportExportScope(req);
+    const wasteByDish = await db.select({
+      dishName: dishesTable.name, unit: foodOrderItemsTable.unit,
+      wasted: sql<number>`coalesce(sum(${foodOrderItemsTable.wastedQty}), 0)::float`,
+      ordered: sql<number>`coalesce(sum(${foodOrderItemsTable.orderedQty}), 0)::float`,
+    }).from(foodOrdersTable).innerJoin(foodOrderItemsTable, eq(foodOrderItemsTable.orderId, foodOrdersTable.id))
+      .leftJoin(dishesTable, eq(foodOrderItemsTable.dishId, dishesTable.id))
+      .where(where).groupBy(dishesTable.name, foodOrderItemsTable.unit)
+      .orderBy(desc(sql`sum(${foodOrderItemsTable.wastedQty})`));
+    const nonZero = wasteByDish.filter((d) => Number(d.wasted) > 0);
+    const topCount = Math.max(1, Math.ceil(nonZero.length * 0.2));
+    const rows = nonZero.slice(0, topCount).map((d) => {
+      const wasted = r3(Number(d.wasted)); const ordered = r3(Number(d.ordered));
+      const pct = ordered > 0 ? Math.round((Number(d.wasted) / Number(d.ordered)) * 1000) / 10 : 0;
+      return [d.dishName ?? "—", d.unit ?? "", ordered, wasted, `${pct}%`];
+    });
+    return {
+      title: "Top Waste Items", headers: ["Dish", "Unit", "Ordered", "Wasted", "Waste %"],
+      rows, propertyName, dateRange, fileBase: "food-waste",
+    };
+  }
+
+  if (report === "ontime") {
+    const { where, propertyName, dateRange } = await reportExportScope(req);
+    const orders = await db.select({
+      brand: foodOrdersTable.brand, mealType: foodOrdersTable.mealType, propertyId: foodOrdersTable.propertyId,
+      serviceDate: foodOrdersTable.serviceDate, deliveredAt: foodOrdersTable.deliveredAt,
+    }).from(foodOrdersTable).where(and(where, isNotNull(foodOrdersTable.deliveredAt)));
+    const tolMs = (await getOntimeToleranceMinutes()) * 60000;
+    const resolveServiceTime = await loadServiceTimeResolver();
+    const byDay = new Map<string, { onTime: number; late: number }>();
+    for (const o of orders) {
+      const base = atTime(o.serviceDate, resolveServiceTime(o.brand, o.mealType, o.propertyId));
+      if (!base || !o.deliveredAt) continue;
+      const day = istDayYmd(o.serviceDate);
+      const bucket = byDay.get(day) ?? { onTime: 0, late: 0 };
+      if (o.deliveredAt.getTime() <= base.getTime() + tolMs) bucket.onTime++; else bucket.late++;
+      byDay.set(day, bucket);
+    }
+    const rows = [...byDay.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1)).map(([date, v]) => {
+      const total = v.onTime + v.late;
+      return [date, v.onTime, v.late, total ? `${Math.round((v.onTime / total) * 1000) / 10}%` : "0%"];
+    });
+    return {
+      title: "On-Time Delivery", headers: ["Date", "On-Time", "Late", "On-Time %"],
+      rows, propertyName, dateRange, fileBase: "food-ontime",
+    };
+  }
+
+  throw new Error("INVALID_REPORT");
+}
+
+/** Build "{base}-{property?}-{date}.{ext}" filename for a report export. */
+function reportFilename(fileBase: string, propertyName: string | null, ext: string): string {
+  const prop = propertyName ? `-${sanitizeForFilename(propertyName)}` : "";
+  return `${fileBase}${prop}-${fileDateStamp()}.${ext}`;
+}
+
+const EXPORT_REPORTS = new Set(["orders", "variance", "waste", "ontime"]);
+
+foodOpsRouter.get("/reports/export.:fmt", authenticate, authorize("FOOD_REPORTS", "view"), async (req, res) => {
+  try {
+    const fmt = String(req.params["fmt"] ?? "").toLowerCase();
+    if (!["csv", "pdf", "xls"].includes(fmt)) {
+      res.status(400).json({ success: false, error: "fmt must be csv, pdf or xls" }); return;
+    }
+    const report = String(req.query["report"] ?? "orders").toLowerCase();
+    if (!EXPORT_REPORTS.has(report)) {
+      res.status(400).json({ success: false, error: "report must be one of orders, variance, waste, ontime" }); return;
+    }
+    const t = await buildReportTable(report, req);
+    const table = { title: t.title, headers: t.headers, rows: t.rows, propertyName: t.propertyName, dateRange: t.dateRange };
+    const filename = reportFilename(t.fileBase, t.propertyName, fmt);
+
+    if (fmt === "csv") {
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader("Content-Disposition", `attachment; filename=${filename}`);
+      res.send(toCsv(table));
+    } else if (fmt === "pdf") {
+      const pdf = await toPdf(table);
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `attachment; filename=${filename}`);
+      res.send(Buffer.from(pdf));
+    } else {
+      res.setHeader("Content-Type", "application/vnd.ms-excel");
+      res.setHeader("Content-Disposition", `attachment; filename=${filename}`);
+      res.send(toXls(table));
+    }
+  } catch (err) {
+    if ((err as Error)?.message === "INVALID_REPORT") {
+      res.status(400).json({ success: false, error: "Invalid report" }); return;
+    }
+    req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" });
+  }
 });
 
 /* ════════════════════════════════════════════════════════════════════════

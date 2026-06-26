@@ -3,12 +3,11 @@ import { useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { format } from "date-fns";
 import {
-  Plus, Search, Utensils, CheckCircle2, Truck, Clock, Pencil,
+  Plus, Search, Pencil,
 } from "lucide-react";
 import { DataTable } from "@/components/data-table";
 import { PageHeader } from "@/components/page-header";
 import { PropertyScopeBanner } from "@/components/property-scope-banner";
-import { StatCard } from "@/components/stat-card";
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -76,14 +75,6 @@ export default function FoodOrders() {
     queryFn: () => foodApi.listOrders(params),
   });
   const orders: FoodOrder[] = res?.data ?? [];
-
-  const stats = React.useMemo(() => {
-    const total = res?.meta?.total ?? orders.length;
-    const active = orders.filter((o) => o.status === "PLACED" || o.status === "PREPARING").length;
-    const inTransit = orders.filter((o) => o.status === "DISPATCHED").length;
-    const delivered = orders.filter((o) => o.status === "DELIVERED").length;
-    return { total, active, inTransit, delivered };
-  }, [orders, res?.meta?.total]);
 
   // Name of the property the page is currently scoped to (URL param or filter),
   // for the scope banner. Falls back gracefully until lookups resolve.
@@ -185,13 +176,6 @@ export default function FoodOrders() {
       />
 
       <PropertyScopeBanner propertyName={scopedPropertyName} onClear={clearScope} />
-
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard title="Total Orders" value={stats.total} icon={Utensils} />
-        <StatCard title="Active (Placed / Preparing)" value={stats.active} icon={Clock} />
-        <StatCard title="In Transit" value={stats.inTransit} icon={Truck} />
-        <StatCard title="Delivered" value={stats.delivered} icon={CheckCircle2} />
-      </div>
 
       <div className="flex flex-wrap items-center gap-3">
         <div className="relative max-w-xs flex-1 min-w-[200px]">

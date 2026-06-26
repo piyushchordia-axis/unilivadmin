@@ -55,6 +55,9 @@ import {
   FileText,
   Download,
   Megaphone,
+  HandCoins,
+  Link2,
+  Copy,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { ResidentKycTab } from "./resident-kyc-tab";
@@ -130,12 +133,26 @@ export default function ResidentDetail() {
   });
   const reminderCount = reminderCountRes?.data?.count ?? 0;
 
+  // O25 — surface the rent-agreement gate. The most recent non-voided
+  // 'Rent Agreement' esign request drives the signed/required indicator.
+  const { data: esignRes } = useQuery<{ data: Array<{ id: string; documentName: string; status: string; createdAt: string }> }>({
+    queryKey: ["esign", id],
+    queryFn: () => apiFetch(`/residents/${id}/esign`),
+    enabled: !!id,
+  });
+  const rentAgreement = (esignRes?.data || [])
+    .filter((r) => r.documentName === "Rent Agreement" && r.status !== "VOIDED")
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
+  const agreementSigned = rentAgreement?.status === "SIGNED";
+
   const resident = residentRes?.data;
   const ledger = ledgerRes?.data || [];
   const payments = paymentsRes?.data || [];
   const complaints = (complaintsRes?.data || []).filter((c) => c.residentId === id);
 
   const [ledgerModalOpen, setLedgerModalOpen] = React.useState(false);
+  const [collectionModalOpen, setCollectionModalOpen] = React.useState(false);
+  const [paymentLinkModalOpen, setPaymentLinkModalOpen] = React.useState(false);
   const [paymentModalOpen, setPaymentModalOpen] = React.useState(false);
   const [checkoutOpen, setCheckoutOpen] = React.useState(false);
   const [messageModalOpen, setMessageModalOpen] = React.useState(false);
@@ -211,6 +228,12 @@ export default function ResidentDetail() {
               {resident.propertyName && <Badge variant="secondary">{resident.propertyName}</Badge>}
               {resident.roomNumber && <Badge variant="outline">Room {resident.roomNumber}</Badge>}
               <StatusBadge status={resident.status} />
+              <Badge
+                variant={agreementSigned ? "success" : "warning"}
+                data-testid="badge-agreement-status"
+              >
+                {agreementSigned ? "Agreement: signed" : "Agreement: required"}
+              </Badge>
             </div>
             <div className="flex gap-3 mt-2 text-sm text-muted-foreground">
               <span className="flex items-center gap-1"><Phone className="w-3.5 h-3.5" /> {resident.phone}</span>
@@ -227,6 +250,12 @@ export default function ResidentDetail() {
         <Button variant="outline" size="sm" onClick={() => setPaymentModalOpen(true)} data-testid="button-record-payment">
           <Receipt className="w-4 h-4 mr-2" /> Record Payment
         </Button>
+        <Button variant="outline" size="sm" onClick={() => setCollectionModalOpen(true)} data-testid="button-record-collection">
+          <HandCoins className="w-4 h-4 mr-2" /> Record Collection
+        </Button>
+        <Button variant="outline" size="sm" onClick={() => setPaymentLinkModalOpen(true)} data-testid="button-share-payment-link">
+          <Link2 className="w-4 h-4 mr-2" /> Share Payment Link
+        </Button>
         <Button variant="outline" size="sm" onClick={() => setComplaintModalOpen(true)} data-testid="button-raise-complaint">
           <AlertCircle className="w-4 h-4 mr-2" /> Raise Complaint
         </Button>
@@ -234,6 +263,22 @@ export default function ResidentDetail() {
           <LogOut className="w-4 h-4 mr-2" /> Check Out
         </Button>
       </div>
+
+      {resident.status !== "ACTIVE" && !agreementSigned && (
+        <Card className="bg-warning/5 border-warning/20" data-testid="agreement-activation-hint">
+          <CardContent className="p-4 flex items-start gap-3">
+            <FileText className="w-5 h-5 text-warning mt-0.5 shrink-0" />
+            <div className="text-sm">
+              <p className="font-medium text-primary">A signed rent agreement is required before activation</p>
+              <p className="text-muted-foreground mt-0.5">
+                {rentAgreement
+                  ? "The rent agreement has been generated but not yet signed. Share the signing link from the E-sign tab, then activate the resident."
+                  : "No rent agreement exists yet. Generate one from the E-sign tab and have the resident sign it before activating."}
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         <Card>
@@ -467,6 +512,8 @@ export default function ResidentDetail() {
       </Tabs>
 
       <AddLedgerModal open={ledgerModalOpen} onOpenChange={setLedgerModalOpen} residentId={id} />
+      <RecordCollectionModal open={collectionModalOpen} onOpenChange={setCollectionModalOpen} residentId={id} outstanding={outstanding} />
+      <SharePaymentLinkModal open={paymentLinkModalOpen} onOpenChange={setPaymentLinkModalOpen} resident={resident} outstanding={outstanding} />
       <AddPaymentModal open={paymentModalOpen} onOpenChange={setPaymentModalOpen} residentId={id} />
       <CheckoutModal open={checkoutOpen} onOpenChange={setCheckoutOpen} resident={resident} ledger={ledger} />
       <SendMessageModal open={messageModalOpen} onOpenChange={setMessageModalOpen} resident={resident} />
@@ -1021,6 +1068,217 @@ function AddPaymentModal({ open, onOpenChange, residentId }: { open: boolean; on
           <Label>Notes</Label>
           <Textarea rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} />
         </div>
+      </div>
+    </FormModal>
+  );
+}
+
+function todayIso(): string {
+  return format(new Date(), "yyyy-MM-dd");
+}
+
+/**
+ * O24 — Record a CREDIT/collection ledger entry. Posts in "collection mode" to
+ * POST /residents/:id/ledger with entryType="CREDIT"; the backend inserts a paid
+ * CREDIT row and auto-settles the oldest unpaid charges up to the amount.
+ */
+function RecordCollectionModal({ open, onOpenChange, residentId, outstanding }: { open: boolean; onOpenChange: (o: boolean) => void; residentId: string; outstanding: number }) {
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  const [amount, setAmount] = React.useState("");
+  const [collectionDate, setCollectionDate] = React.useState(todayIso());
+  const [type, setType] = React.useState("ADJUSTMENT");
+  const [description, setDescription] = React.useState("");
+  const [reference, setReference] = React.useState("");
+
+  React.useEffect(() => {
+    if (open) {
+      setAmount(outstanding > 0 ? String(outstanding) : "");
+      setCollectionDate(todayIso());
+      setType("ADJUSTMENT");
+      setDescription("");
+      setReference("");
+    }
+  }, [open, outstanding]);
+
+  const mut = useMutation({
+    mutationFn: (body: object) =>
+      apiFetch<{ success: boolean; data: { settledCount: number } }>(`/residents/${residentId}/ledger`, { method: "POST", body: JSON.stringify(body) }),
+    onSuccess: (res) => {
+      const settled = res?.data?.settledCount ?? 0;
+      toast({ title: "Collection recorded", description: settled > 0 ? `Settled ${settled} charge${settled === 1 ? "" : "s"}.` : undefined });
+      qc.invalidateQueries({ queryKey: getGetResidentLedgerQueryKey(residentId) });
+      qc.invalidateQueries({ queryKey: getGetResidentPaymentsQueryKey(residentId) });
+      onOpenChange(false);
+    },
+    onError: (e: Error) => toast({ title: e?.message || "Failed to record collection", variant: "destructive" }),
+  });
+
+  const onSave = () => {
+    const amt = Number(amount);
+    if (isNaN(amt) || amt <= 0) { toast({ title: "Enter a valid amount", variant: "destructive" }); return; }
+    mut.mutate({
+      entryType: "CREDIT",
+      amount: amt,
+      collectionDate: collectionDate || undefined,
+      type,
+      description: description || undefined,
+      reference: reference || undefined,
+    });
+  };
+
+  return (
+    <FormModal open={open} onOpenChange={onOpenChange} title="Record Collection" onSave={onSave} isSaving={mut.isPending} saveLabel="Record Collection">
+      <div className="space-y-4">
+        <div className="rounded-md bg-success/5 border border-success/20 p-3 text-sm">
+          <span className="text-muted-foreground">A collection records money received from the resident and settles their oldest unpaid charges.</span>
+          {outstanding > 0 && (
+            <div className="mt-1 text-primary font-medium">Outstanding dues: ₹{outstanding.toLocaleString("en-IN")}</div>
+          )}
+        </div>
+        <div>
+          <Label>Amount (₹) *</Label>
+          <Input type="number" min="1" value={amount} onChange={(e) => setAmount(e.target.value)} data-testid="input-collection-amount" />
+        </div>
+        <div>
+          <Label>Collection Date *</Label>
+          <DatePicker value={collectionDate} onChange={setCollectionDate} max={todayIso()} data-testid="datepicker-collection-date" />
+        </div>
+        <div>
+          <Label>Type</Label>
+          <Select value={type} onValueChange={setType}>
+            <SelectTrigger><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {LEDGER_TYPES.map((t) => (<SelectItem key={t} value={t}>{t}</SelectItem>))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div>
+          <Label>Description</Label>
+          <Textarea rows={2} value={description} onChange={(e) => setDescription(e.target.value)} />
+        </div>
+        <div>
+          <Label>Reference</Label>
+          <Input value={reference} onChange={(e) => setReference(e.target.value)} placeholder="UTR / receipt no." />
+        </div>
+      </div>
+    </FormModal>
+  );
+}
+
+const PAYMENTS_NOT_CONFIGURED = "Payments not configured";
+type LinkRecipient = "resident" | "guardian" | "custom";
+
+/**
+ * O23 — Generate & share a Razorpay payment link for the resident's dues. Posts to
+ * POST /residents/:id/payment-link. Amount defaults to current outstanding dues.
+ * A 503 ("Payments not configured") surfaces a friendly gateway-not-ready message.
+ */
+function SharePaymentLinkModal({ open, onOpenChange, resident, outstanding }: { open: boolean; onOpenChange: (o: boolean) => void; resident: ResidentDto; outstanding: number }) {
+  const { toast } = useToast();
+  const [recipient, setRecipient] = React.useState<LinkRecipient>("resident");
+  const [amount, setAmount] = React.useState("");
+  const [custom, setCustom] = React.useState("");
+  const [shortUrl, setShortUrl] = React.useState<string | null>(null);
+  const [notConfigured, setNotConfigured] = React.useState(false);
+
+  React.useEffect(() => {
+    if (open) {
+      setRecipient("resident");
+      setAmount(outstanding > 0 ? String(outstanding) : "");
+      setCustom("");
+      setShortUrl(null);
+      setNotConfigured(false);
+    }
+  }, [open, outstanding]);
+
+  const mut = useMutation({
+    mutationFn: (body: object) =>
+      apiFetch<{ success: boolean; data: { shortUrl: string; id: string } }>(`/residents/${resident.id}/payment-link`, { method: "POST", body: JSON.stringify(body) }),
+    onSuccess: (res) => {
+      setShortUrl(res?.data?.shortUrl ?? null);
+      toast({ title: "Payment link sent", description: "Shared with the selected recipient." });
+    },
+    onError: (e: Error) => {
+      if (e?.message === PAYMENTS_NOT_CONFIGURED) {
+        setNotConfigured(true);
+        return;
+      }
+      toast({ title: e?.message || "Failed to create payment link", variant: "destructive" });
+    },
+  });
+
+  const onSave = () => {
+    const amt = Number(amount);
+    if (isNaN(amt) || amt <= 0) { toast({ title: "Enter a valid amount", variant: "destructive" }); return; }
+    const recipients: Array<"resident" | "guardian" | { phone?: string; email?: string }> =
+      recipient === "custom"
+        ? [custom.includes("@") ? { email: custom.trim() } : { phone: custom.trim() }]
+        : [recipient];
+    if (recipient === "custom" && !custom.trim()) { toast({ title: "Enter a phone or email", variant: "destructive" }); return; }
+    setShortUrl(null);
+    setNotConfigured(false);
+    mut.mutate({ amount: amt, recipients });
+  };
+
+  const copyLink = () => {
+    if (shortUrl) {
+      navigator.clipboard?.writeText(shortUrl);
+      toast({ title: "Link copied" });
+    }
+  };
+
+  return (
+    <FormModal
+      open={open}
+      onOpenChange={onOpenChange}
+      title={`Share Payment Link — ${resident.name}`}
+      onSave={shortUrl || notConfigured ? undefined : onSave}
+      isSaving={mut.isPending}
+      saveLabel="Generate & Send"
+    >
+      <div className="space-y-4">
+        {notConfigured ? (
+          <div className="rounded-md bg-surface border p-4 text-sm text-muted-foreground" data-testid="payment-link-not-configured">
+            <p className="font-medium text-primary mb-1">Payments gateway not configured yet</p>
+            Online payment links aren't available until the Razorpay keys are set up. Please contact your administrator.
+          </div>
+        ) : shortUrl ? (
+          <div className="space-y-3" data-testid="payment-link-result">
+            <div className="rounded-md bg-success/5 border border-success/20 p-3 text-sm">
+              <p className="font-medium text-success mb-1">Payment link created &amp; shared</p>
+              <a href={shortUrl} target="_blank" rel="noreferrer" className="font-mono text-xs text-accent underline break-all">{shortUrl}</a>
+            </div>
+            <Button type="button" variant="outline" size="sm" onClick={copyLink}>
+              <Copy className="w-3.5 h-3.5 mr-1" /> Copy link
+            </Button>
+          </div>
+        ) : (
+          <>
+            <div>
+              <Label>Recipient *</Label>
+              <Select value={recipient} onValueChange={(v) => setRecipient(v as LinkRecipient)}>
+                <SelectTrigger data-testid="select-link-recipient"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="resident">Resident{resident.phone ? ` · ${resident.phone}` : ""}</SelectItem>
+                  <SelectItem value="guardian">Guardian{resident.parentPhone ? ` · ${resident.parentPhone}` : ""}</SelectItem>
+                  <SelectItem value="custom">Custom phone or email</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            {recipient === "custom" && (
+              <div>
+                <Label>Phone or Email *</Label>
+                <Input value={custom} onChange={(e) => setCustom(e.target.value)} placeholder="9876543210 or name@email.com" data-testid="input-link-custom" />
+              </div>
+            )}
+            <div>
+              <Label>Amount (₹) *</Label>
+              <Input type="number" min="1" value={amount} onChange={(e) => setAmount(e.target.value)} data-testid="input-link-amount" />
+              <p className="text-xs text-muted-foreground mt-1">Prefilled to outstanding dues. Link expires in 7 days.</p>
+            </div>
+          </>
+        )}
       </div>
     </FormModal>
   );

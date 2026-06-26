@@ -2,12 +2,11 @@ import * as React from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { format } from "date-fns";
 import {
-  CheckCircle2, Truck, PackageCheck, Building2, Users, Clock,
-  ClipboardCheck, CircleDot, Loader2,
+  CheckCircle2, PackageCheck, Users, Clock,
+  ClipboardCheck, CircleDot, Loader2, AlertTriangle,
 } from "lucide-react";
 import { DataTable } from "@/components/data-table";
 import { PageHeader } from "@/components/page-header";
-import { StatCard } from "@/components/stat-card";
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -20,6 +19,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
+import { cn } from "@/lib/utils";
 import {
   foodApi, foodKeys, MEAL_TYPES, BRANDS, MEAL_LABEL, fmtQty,
   type FoodOrder, type FoodOrderItem, type FoodOrderEvent,
@@ -30,6 +30,28 @@ function fmtDateTime(d: string | null | undefined): string {
   if (!d) return "—";
   const dt = new Date(d);
   return isNaN(dt.getTime()) ? "—" : format(dt, "dd MMM, HH:mm");
+}
+
+// Weight units that auto-convert (mirrors NumberStepper's conversion rule exactly).
+const WEIGHT_UNITS = new Set(["kg", "gram", "g"]);
+const isKg = (u: string) => u === "kg";
+const isGram = (u: string) => u === "gram" || u === "g";
+
+/** Convert `n` from `from`→`to`. kg↔gram/g scales ×/÷1000; otherwise unchanged. */
+function convertQty(n: number, from: string, to: string): number {
+  if (from === to) return n;
+  if (!WEIGHT_UNITS.has(from) || !WEIGHT_UNITS.has(to)) return n;
+  if (isKg(from) && isGram(to)) return n * 1000;
+  if (isGram(from) && isKg(to)) return n / 1000;
+  return n; // gram<->g, same magnitude
+}
+
+const round3 = (n: number) => Math.round(n * 1000) / 1000;
+
+/** Build the per-item unit options: canonical base unit + kg/gram (de-duped). */
+function unitOptionsFor(baseUnit: string): string[] {
+  const opts = [baseUnit, "kg", "gram"];
+  return opts.filter((u, i) => opts.indexOf(u) === i);
 }
 
 export default function FoodConfirmDelivery() {
@@ -130,20 +152,6 @@ export default function FoodConfirmDelivery() {
         subtitle="Verify receipt of dispatched orders and record proof of delivery"
       />
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <StatCard title="Awaiting Confirmation" value={isLoading ? "—" : orders.length} icon={Truck} />
-        <StatCard
-          title="Total Residents"
-          value={isLoading ? "—" : orders.reduce((s, o) => s + (o.residentsCount || 0), 0)}
-          icon={Users}
-        />
-        <StatCard
-          title="Properties Involved"
-          value={isLoading ? "—" : new Set(orders.map((o) => o.propertyId)).size}
-          icon={Building2}
-        />
-      </div>
-
       <div className="flex flex-wrap items-center gap-3">
         <Select value={propertyId} onValueChange={setPropertyId}>
           <SelectTrigger className="w-52"><SelectValue placeholder="Property" /></SelectTrigger>
@@ -200,8 +208,12 @@ export default function FoodConfirmDelivery() {
 interface ItemEntry {
   itemId: string;
   dishName: string;
+  /** Canonical unit of the line item — `value` is submitted in this unit. */
   unit: string;
+  /** Unit currently shown in the stepper; `value` is expressed in this unit. */
+  displayUnit: string;
   orderedQty: number;
+  /** Received quantity, expressed in `displayUnit`. */
   value: string;
 }
 
@@ -236,6 +248,7 @@ function ConfirmDeliverySheet({
           itemId: it.id,
           dishName: it.dishName ?? it.dishId,
           unit: it.unit,
+          displayUnit: it.unit,
           orderedQty: ordered,
           value: String(ordered),
         };
@@ -244,12 +257,16 @@ function ConfirmDeliverySheet({
     setRemarks(order.deliveryRemarks ?? "");
   }, [order]);
 
+  // Received qty in the item's canonical unit (value is entered in displayUnit).
+  const receivedCanonical = (e: ItemEntry): number =>
+    round3(convertQty(Number(e.value), e.displayUnit, e.unit));
+
   const errorFor = (e: ItemEntry): string | null => {
     if (e.value.trim() === "") return "Required";
     const n = Number(e.value);
     if (!Number.isFinite(n)) return "Must be a number";
     if (n < 0) return "Cannot be negative";
-    if (n > e.orderedQty) return `Cannot exceed ${fmtQty(e.orderedQty, e.unit)}`;
+    if (receivedCanonical(e) > e.orderedQty) return `Cannot exceed ${fmtQty(e.orderedQty, e.unit)}`;
     return null;
   };
   const hasErrors = entries.some((e) => errorFor(e) !== null);
@@ -257,11 +274,37 @@ function ConfirmDeliverySheet({
   const setValue = (itemId: string, value: string) =>
     setEntries((prev) => prev.map((e) => (e.itemId === itemId ? { ...e, value } : e)));
 
+  // Stepper unit change: value already auto-converted via onChange; just record the unit.
+  const setDisplayUnit = (itemId: string, displayUnit: string) =>
+    setEntries((prev) => prev.map((e) => (e.itemId === itemId ? { ...e, displayUnit } : e)));
+
+  // Per-item variance (computed in canonical units).
+  const varianceFor = (e: ItemEntry) => {
+    const received = receivedCanonical(e);
+    const diff = round3(received - e.orderedQty);
+    const pct = e.orderedQty > 0 ? (diff / e.orderedQty) * 100 : 0;
+    return { received, diff, pct, short: diff < 0 };
+  };
+
+  // Order-level variance summary (canonical units share the same base only when
+  // units match; we still aggregate raw canonical totals + a combined % shortfall).
+  const overall = entries.reduce(
+    (acc, e) => {
+      const v = varianceFor(e);
+      acc.ordered += e.orderedQty;
+      acc.received += v.received;
+      return acc;
+    },
+    { ordered: 0, received: 0 },
+  );
+  const overallDiff = round3(overall.received - overall.ordered);
+  const overallPct = overall.ordered > 0 ? (overallDiff / overall.ordered) * 100 : 0;
+
   const mutation = useMutation({
     mutationFn: () =>
       foodApi.confirmDelivery(
         id!,
-        entries.map((e) => ({ itemId: e.itemId, receivedQty: Number(e.value) })),
+        entries.map((e) => ({ itemId: e.itemId, receivedQty: receivedCanonical(e) })),
         remarks.trim() || undefined,
       ),
     onSuccess: () => {
@@ -352,6 +395,10 @@ function ConfirmDeliverySheet({
                 <div className="space-y-2">
                   {entries.map((e) => {
                     const err = errorFor(e);
+                    const v = varianceFor(e);
+                    // Stepper min/max expressed in the currently displayed unit.
+                    const dispMax = round3(convertQty(e.orderedQty, e.unit, e.displayUnit));
+                    const critical = e.orderedQty > 0 && v.pct < -5;
                     return (
                       <div key={e.itemId} className="border rounded-md p-3 bg-card">
                         <div className="flex items-center justify-between gap-3">
@@ -363,23 +410,90 @@ function ConfirmDeliverySheet({
                           </div>
                           <div className="shrink-0">
                             <Label className="text-[10px] uppercase text-muted-foreground">
-                              Received ({e.unit.toLowerCase()})
+                              Received
                             </Label>
                             <NumberStepper
                               value={Number(e.value)}
                               min={0}
-                              max={e.orderedQty}
+                              max={dispMax}
                               step={0.001}
+                              unit={e.displayUnit}
+                              unitOptions={unitOptionsFor(e.unit)}
                               onChange={(n) => setValue(e.itemId, String(n))}
+                              onUnitChange={(u) => setDisplayUnit(e.itemId, u)}
                               aria-label={`${e.dishName} received quantity`}
                               className={err ? "mt-1 border-destructive" : "mt-1"}
                             />
                           </div>
                         </div>
-                        {err && <p className="text-xs text-destructive mt-1.5">{err}</p>}
+                        {/* Per-item variance preview (ordered vs received) */}
+                        {err ? (
+                          <p className="text-xs text-destructive mt-1.5">{err}</p>
+                        ) : v.diff === 0 ? (
+                          <p className="text-xs text-muted-foreground mt-1.5">
+                            Received {fmtQty(v.received, e.unit)} · no variance
+                          </p>
+                        ) : (
+                          <p
+                            className={cn(
+                              "text-xs mt-1.5 flex items-center gap-1.5",
+                              v.short
+                                ? critical
+                                  ? "text-destructive font-medium"
+                                  : "text-warning"
+                                : "text-muted-foreground",
+                            )}
+                          >
+                            {v.short && (
+                              <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                            )}
+                            <span>
+                              {v.diff > 0 ? "+" : ""}
+                              {fmtQty(v.diff, e.unit)} ({v.pct > 0 ? "+" : ""}
+                              {Math.round(v.pct)}%)
+                              {critical && " · critical shortfall"}
+                            </span>
+                          </p>
+                        )}
                       </div>
                     );
                   })}
+                </div>
+              )}
+
+              {/* Order-level overall variance summary */}
+              {entries.length > 0 && !hasErrors && (
+                <div
+                  className={cn(
+                    "mt-3 flex items-center justify-between gap-3 rounded-md border px-3 py-2.5 text-sm",
+                    overallDiff < 0
+                      ? overallPct < -5
+                        ? "border-destructive/40 bg-destructive/5"
+                        : "border-warning/40 bg-warning/5"
+                      : "bg-card",
+                  )}
+                >
+                  <span className="text-xs uppercase tracking-wider text-muted-foreground">
+                    Overall received
+                  </span>
+                  <span className="flex items-center gap-2 tabular-nums">
+                    <span className="font-medium">
+                      {round3(overall.received)} / {round3(overall.ordered)}
+                    </span>
+                    {overallDiff < 0 ? (
+                      <span
+                        className={cn(
+                          "flex items-center gap-1 font-medium",
+                          overallPct < -5 ? "text-destructive" : "text-warning",
+                        )}
+                      >
+                        <AlertTriangle className="h-3.5 w-3.5" />
+                        {round3(overallDiff)} ({Math.round(overallPct)}%)
+                      </span>
+                    ) : (
+                      <span className="text-muted-foreground">no shortfall</span>
+                    )}
+                  </span>
                 </div>
               )}
             </div>

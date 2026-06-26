@@ -36,6 +36,7 @@ import {
   kitchensTable,
   foodDispatchesTable,
   foodBrandsTable,
+  complaintsTable,
 } from "@workspace/db";
 import { and, eq, or, ilike, sql, desc, asc, gte, lte, lt, inArray, isNull, isNotNull } from "drizzle-orm";
 import type { AnyColumn } from "drizzle-orm";
@@ -913,21 +914,89 @@ foodRouter.post("/orders/:id/confirm-delivery", authenticate, authorize("FOOD_CO
     }
 
     const now = new Date();
-    for (const inp of items) {
-      await db.update(foodOrderItemsTable).set({ receivedQty: String(Number(inp.receivedQty)), updatedAt: now }).where(eq(foodOrderItemsTable.id, inp.itemId));
-    }
     const wasteWindowMs = await getWasteEditWindowMs();
-    const [updated] = await db.update(foodOrdersTable).set({
-      status: "DELIVERED",
-      deliveredAt: now,
-      wasteEditableUntil: new Date(now.getTime() + wasteWindowMs),
-      confirmedById: req.user!.id,
-      deliveryRemarks: b.remarks ?? null,
-      updatedAt: now,
-    }).where(eq(foodOrdersTable.id, id)).returning();
-    await db.insert(foodOrderEventsTable).values({
-      id: newId(), orderId: id, status: "DELIVERED", note: "Delivery confirmed", actorId: req.user!.id,
+
+    // Detect any shortfall (receivedQty < orderedQty) to auto-raise a FOOD
+    // complaint (O5). We compute it from the submitted received quantities;
+    // items not submitted are treated as fully received (no shortfall).
+    const receivedById = new Map(items.map((i) => [i.itemId, Number(i.receivedQty)]));
+    type Short = { name: string; ordered: number; received: number; short: number; pct: number };
+    const shortfalls: Short[] = [];
+    for (const it of orderItems) {
+      if (!receivedById.has(it.id)) continue;
+      const ordered = Number(it.orderedQty);
+      const received = receivedById.get(it.id)!;
+      if (received < ordered) {
+        const [dish] = await db.select({ name: dishesTable.name }).from(dishesTable).where(eq(dishesTable.id, it.dishId));
+        const shortQty = ordered - received;
+        shortfalls.push({
+          name: dish?.name || "item",
+          ordered, received, short: shortQty,
+          pct: ordered > 0 ? (shortQty / ordered) * 100 : 0,
+        });
+      }
+    }
+
+    const { updated } = await db.transaction(async (tx) => {
+      for (const inp of items) {
+        await tx.update(foodOrderItemsTable).set({ receivedQty: String(Number(inp.receivedQty)), updatedAt: now }).where(eq(foodOrderItemsTable.id, inp.itemId));
+      }
+      const [upd] = await tx.update(foodOrdersTable).set({
+        status: "DELIVERED",
+        deliveredAt: now,
+        wasteEditableUntil: new Date(now.getTime() + wasteWindowMs),
+        confirmedById: req.user!.id,
+        deliveryRemarks: b.remarks ?? null,
+        updatedAt: now,
+      }).where(eq(foodOrdersTable.id, id)).returning();
+      await tx.insert(foodOrderEventsTable).values({
+        id: newId(), orderId: id, status: "DELIVERED", note: "Delivery confirmed", actorId: req.user!.id,
+      });
+
+      // O5 — auto-create a property-scoped FOOD complaint on ANY shortfall, in
+      // the SAME transaction so delivery + complaint commit/rollback together.
+      if (shortfalls.length > 0) {
+        // Mirror the complaints module's ticket numbering (TKT-NNNNN) and its
+        // FOOD-category SLA default (slaHours = 24).
+        const [maxRow] = await tx.select({ max: sql<string | null>`MAX(${complaintsTable.ticketNo})` }).from(complaintsTable);
+        const last = maxRow?.max || "TKT-01000";
+        const n = parseInt(last.replace(/[^0-9]/g, ""), 10) || 1000;
+        const ticketNo = `TKT-${String(n + 1).padStart(5, "0")}`;
+        const slaHours = 24;
+        const worst = [...shortfalls].sort((a, b2) => b2.pct - a.pct)[0]!;
+        const priority = worst.pct >= 50 ? "HIGH" : worst.pct >= 20 ? "MEDIUM" : "LOW";
+        const itemSummary = shortfalls
+          .map((s) => `${s.name} (short ${s.short} of ${s.ordered}, ${s.pct.toFixed(0)}%)`)
+          .join("; ");
+        const title = `Delivery shortfall on order ${order.orderNumber}`;
+        const description =
+          `Auto-raised on delivery confirmation for order ${order.orderNumber} ` +
+          `(${order.mealType}, ${order.brand}). ${shortfalls.length} item(s) received short: ${itemSummary}.`;
+        await tx.insert(complaintsTable).values({
+          id: newId(),
+          propertyId: order.propertyId,
+          residentId: null, // property/food-level complaint, not resident-bound
+          orderId: order.id,
+          ticketNo,
+          category: "FOOD",
+          subCategory: "DELIVERY_VARIANCE",
+          title,
+          description,
+          status: "OPEN",
+          priority,
+          slaHours,
+          slaDeadline: new Date(now.getTime() + slaHours * 60 * 60 * 1000),
+          updatedAt: now,
+        });
+        await tx.insert(foodOrderEventsTable).values({
+          id: newId(), orderId: id, status: "DELIVERED",
+          note: `Variance complaint ${ticketNo} auto-created`, actorId: req.user!.id,
+        });
+      }
+
+      return { updated: upd };
     });
+
     await notifyOrderEvent("DELIVERED", {
       unitLeadId: order.unitLeadId, orderId: order.id, orderNumber: order.orderNumber,
       propertyName: await propertyName(order.propertyId), mealType: order.mealType, brand: order.brand,

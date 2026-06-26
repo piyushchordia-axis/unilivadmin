@@ -26,8 +26,51 @@ import {
   debitWallet,
   writeAuditLog,
 } from "../lib/wallet-service.js";
+import { notificationOutboxTable } from "@workspace/db";
+import { enqueueDelivery, processDelivery, queueEnabled } from "@workspace/notify-core";
+import {
+  createPaymentLink,
+  isRazorpayConfigured,
+  toPaise,
+  RazorpayNotConfiguredError,
+} from "../lib/razorpay.js";
 
 export const walletRouter: Router = Router();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Ad-hoc outbound message helper (shares the durable outbox + delivery pipeline).
+// Used to share top-up payment links with the resident; userId is left null and
+// toAddress is set explicitly. Best-effort/non-throwing.
+// ─────────────────────────────────────────────────────────────────────────────
+async function sendAdHoc(
+  channel: "SMS" | "EMAIL",
+  toAddress: string,
+  body: string,
+  opts: { subject?: string; entityType?: string; entityId?: string } = {},
+): Promise<void> {
+  try {
+    const id = newId();
+    await db.insert(notificationOutboxTable).values({
+      id,
+      userId: null,
+      channel,
+      toAddress,
+      subject: opts.subject ?? null,
+      body,
+      entityType: opts.entityType ?? null,
+      entityId: opts.entityId ?? null,
+      status: "PENDING",
+    });
+    if (queueEnabled()) {
+      const queued = await enqueueDelivery(id);
+      if (!queued) await processDelivery(id);
+    } else {
+      await processDelivery(id);
+    }
+  } catch {
+    // swallow — delivery failure must never break the API request
+  }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Idempotency helper
@@ -262,6 +305,75 @@ walletRouter.post(
         },
       });
     } catch (err: any) {
+      if (err?.statusCode === 403) {
+        res.status(403).json({ success: false, error: err.message });
+        return;
+      }
+      req.log.error(err);
+      res.status(500).json({ success: false, error: "Internal server error" });
+    }
+  }
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /wallet/:residentId/topup-link  (O29)
+// Create a Razorpay payment link to top up the resident's wallet and share it
+// via SMS/email. Link expires in 24h and allows partial payment.
+// Body: { amount: number }. 503 when Razorpay is not configured.
+// ─────────────────────────────────────────────────────────────────────────────
+walletRouter.post(
+  "/wallet/:residentId/topup-link",
+  authenticate,
+  authorize("WALLET", "create"),
+  async (req, res) => {
+    try {
+      const { residentId } = req.params as { residentId: string };
+      const amount = Number((req.body || {}).amount);
+
+      if (!amount || amount <= 0) {
+        res.status(400).json({ success: false, error: "amount must be a positive number" });
+        return;
+      }
+
+      const [resident] = await db
+        .select()
+        .from(residentsTable)
+        .where(eq(residentsTable.id, residentId));
+      if (!resident) {
+        res.status(404).json({ success: false, error: "Resident not found" });
+        return;
+      }
+      assertPropertyAccess(req, resident.propertyId);
+      if (!resident.walletEnabled) {
+        res.status(400).json({ success: false, error: "Wallet is disabled for this resident" });
+        return;
+      }
+
+      if (!isRazorpayConfigured()) {
+        res.status(503).json({ success: false, error: "Payments not configured" });
+        return;
+      }
+
+      const link = await createPaymentLink({
+        amountPaise: toPaise(amount),
+        description: `Wallet top-up — ${resident.name}`,
+        customer: { name: resident.name, contact: resident.phone, email: resident.email },
+        expireBySeconds: 24 * 60 * 60, // 24 hours
+        acceptPartial: true,
+        notes: { kind: "WALLET_TOPUP", residentId, propertyId: resident.propertyId },
+      });
+
+      const smsText = `Top up your UNILIV wallet (₹${amount}): ${link.shortUrl} (valid 24h, partial payment allowed)`;
+      const emailText = `Dear ${resident.name},\n\nTop up your wallet of ₹${amount} using the secure link below (valid 24 hours, partial payment allowed):\n\n${link.shortUrl}\n\nThank you.`;
+      if (resident.phone) await sendAdHoc("SMS", resident.phone, smsText, { entityType: "WALLET_TOPUP_LINK", entityId: link.id });
+      if (resident.email) await sendAdHoc("EMAIL", resident.email, emailText, { subject: "Wallet top-up link", entityType: "WALLET_TOPUP_LINK", entityId: link.id });
+
+      res.status(201).json({ success: true, data: { shortUrl: link.shortUrl, id: link.id } });
+    } catch (err: any) {
+      if (err instanceof RazorpayNotConfiguredError) {
+        res.status(503).json({ success: false, error: "Payments not configured" });
+        return;
+      }
       if (err?.statusCode === 403) {
         res.status(403).json({ success: false, error: err.message });
         return;
@@ -914,6 +1026,13 @@ walletRouter.post(
       }
       if (!["ADJUSTMENT_CREDIT", "ADJUSTMENT_DEBIT"].includes(adjustType)) {
         res.status(400).json({ success: false, error: "type must be ADJUSTMENT_CREDIT or ADJUSTMENT_DEBIT" });
+        return;
+      }
+      // O30 wallet debit lock: only SUPER_ADMIN may remove funds. A negative
+      // adjustment (ADJUSTMENT_DEBIT) drains the wallet, so reject it for every
+      // other role. Credits / add-funds remain available to all permitted roles.
+      if (adjustType === "ADJUSTMENT_DEBIT" && req.user?.role !== "SUPER_ADMIN") {
+        res.status(403).json({ success: false, error: "Removing funds is not permitted" });
         return;
       }
       if (!body.description) {

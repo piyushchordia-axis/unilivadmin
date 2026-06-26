@@ -56,7 +56,7 @@ type Unit = "G" | "KG" | "ML" | "LITRE" | "PCS" | "PLATE" | "SERVING";
 const COMPONENT_RULE: Record<Component, { unit: Unit; qty: number }> = {
   HOT_FOOD:     { unit: "KG", qty: 0.18 },
   SABZI:        { unit: "KG", qty: 0.15 },
-  DAL:          { unit: "LITRE", qty: 0.2 },
+  DAL:          { unit: "KG", qty: 0.2 },
   RICE:         { unit: "KG", qty: 0.15 },
   BREAD:        { unit: "PCS", qty: 2 },
   SALAD:        { unit: "KG", qty: 0.05 },

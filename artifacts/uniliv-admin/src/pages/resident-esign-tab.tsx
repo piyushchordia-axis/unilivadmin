@@ -11,7 +11,10 @@ import { FormModal } from "@/components/ui/form-modal";
 import { BoundedScroll } from "@/components/ui/bounded-scroll";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { useToast } from "@/hooks/use-toast";
-import { FileSignature, Plus, Copy, ExternalLink, X, Download } from "lucide-react";
+import { FileSignature, Plus, Copy, ExternalLink, X, Download, FileCheck2, ShieldAlert } from "lucide-react";
+
+/** Canonical document name the backend uses for the rent agreement esign request. */
+const RENT_AGREEMENT_DOC_NAME = "Rent Agreement";
 
 type EsignRow = {
   id: string;
@@ -45,8 +48,16 @@ export function ResidentEsignTab({ residentId, residentName }: { residentId: str
   });
   const rows = data?.data || [];
 
+  // O26/O25 — the rent agreement is the most recent (non-voided) 'Rent Agreement'
+  // esign request. The signed copy gates resident activation.
+  const agreement = rows
+    .filter((r) => r.documentName === RENT_AGREEMENT_DOC_NAME && r.status !== "VOIDED")
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
+
   return (
     <div className="space-y-4">
+      <RentAgreementBanner residentId={residentId} agreement={agreement} onOpenDetail={setDetailId} />
+
       <div className="flex items-center justify-between">
         <p className="text-sm text-muted-foreground">
           Send agreements, NOCs, and other documents for signature. Signers receive a token-gated link.
@@ -94,6 +105,116 @@ export function ResidentEsignTab({ residentId, residentName }: { residentId: str
       <CreateEsignModal open={createOpen} onOpenChange={setCreateOpen} residentId={residentId} residentName={residentName} />
       {detailId && <EsignDetailSheet id={detailId} onClose={() => setDetailId(null)} />}
     </div>
+  );
+}
+
+/**
+ * O26/O25 — Rent Agreement summary banner. Surfaces the one esign request that
+ * gates resident activation: generate it when none exists, otherwise show its
+ * status, a copy/open sign link, and the signed PDF once signed.
+ */
+function RentAgreementBanner({
+  residentId,
+  agreement,
+  onOpenDetail,
+}: {
+  residentId: string;
+  agreement: EsignRow | undefined;
+  onOpenDetail: (id: string) => void;
+}) {
+  const qc = useQueryClient();
+  const { toast } = useToast();
+
+  const generate = useMutation<{ data: EsignRow & { signerUrl: string } }, Error, void>({
+    mutationFn: () => apiFetch(`/residents/${residentId}/agreement`, { method: "POST" }),
+    onSuccess: (resp) => {
+      qc.invalidateQueries({ queryKey: ["esign", residentId] });
+      toast({ title: "Agreement generated", description: "Signing link copied to clipboard." });
+      try { navigator.clipboard?.writeText(resp.data.signerUrl); } catch { /* noop */ }
+    },
+    onError: (e) => toast({ title: e.message, variant: "destructive" }),
+  });
+
+  const signed = agreement?.status === "SIGNED";
+  const origin = typeof window !== "undefined" ? window.location.origin : "";
+  const signerUrl = agreement ? `${origin}/esign/sign/${agreement.signerToken}` : "";
+
+  const copyLink = () => {
+    if (!signerUrl) return;
+    navigator.clipboard?.writeText(signerUrl);
+    toast({ title: "Sign link copied" });
+  };
+
+  return (
+    <Card
+      className={signed ? "bg-success/5 border-success/20" : "bg-warning/5 border-warning/20"}
+      data-testid="rent-agreement-banner"
+    >
+      <CardContent className="p-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-start gap-3">
+          {signed
+            ? <FileCheck2 className="h-5 w-5 text-success mt-0.5 shrink-0" />
+            : <ShieldAlert className="h-5 w-5 text-warning mt-0.5 shrink-0" />}
+          <div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <p className="font-medium text-primary">Rent Agreement</p>
+              {agreement && <Badge variant={statusVariant(agreement.status)}>{agreement.status}</Badge>}
+            </div>
+            <p className="text-xs text-muted-foreground mt-1">
+              {signed
+                ? `Signed ${agreement?.signedAt ? `on ${new Date(agreement.signedAt).toLocaleString()}` : ""}${agreement?.signerName ? ` by ${agreement.signerName}` : ""}.`
+                : agreement
+                  ? "A signed rent agreement is required before the resident can be activated."
+                  : "No rent agreement yet — generate one to send for signature. Required before activation."}
+            </p>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2 shrink-0">
+          {!agreement ? (
+            <Button
+              size="sm"
+              onClick={() => generate.mutate()}
+              disabled={generate.isPending}
+              data-testid="button-generate-agreement"
+            >
+              <FileSignature className="h-4 w-4 mr-2" />
+              {generate.isPending ? "Generating…" : "Generate Agreement"}
+            </Button>
+          ) : (
+            <>
+              {!signed && (
+                <>
+                  <Button variant="outline" size="sm" onClick={copyLink} data-testid="button-copy-agreement-link">
+                    <Copy className="h-4 w-4 mr-2" /> Copy sign link
+                  </Button>
+                  <a href={signerUrl} target="_blank" rel="noreferrer">
+                    <Button variant="outline" size="sm" title="Open sign page">
+                      <ExternalLink className="h-4 w-4" />
+                    </Button>
+                  </a>
+                </>
+              )}
+              {signed && (
+                <a
+                  href={`/api/esign/${agreement.id}/pdf`}
+                  target="_blank"
+                  rel="noreferrer"
+                  data-testid="link-agreement-pdf"
+                >
+                  <Button variant="outline" size="sm">
+                    <Download className="h-4 w-4 mr-2" /> Signed PDF
+                  </Button>
+                </a>
+              )}
+              <Button variant="ghost" size="sm" onClick={() => onOpenDetail(agreement.id)} data-testid="button-agreement-detail">
+                Details
+              </Button>
+            </>
+          )}
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 

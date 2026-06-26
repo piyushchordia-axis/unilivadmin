@@ -144,6 +144,21 @@ export interface VarianceData {
   totals: { ordered: number; received: number; wasted: number; variance: number };
 }
 
+// O15 — on-time delivery report (% on-time + per-day on-time/late trend).
+export interface OnTimeReport {
+  onTimePct: number;
+  lateCount: number;
+  onTimeCount: number;
+  totalDelivered: number;
+  toleranceMinutes: number;
+  byDay: { date: string; onTime: number; late: number }[];
+}
+// O16 — global on-time tolerance (minutes after configured service time).
+export interface OnTimeTolerance { minutes: number }
+// O17 — ordered-vs-received variance per service-day (bar chart, filterable by meal).
+export interface VarianceByDayRow { date: string; ordered: number; received: number; variance: number; wasted: number }
+export interface VarianceByDayData { rows: VarianceByDayRow[] }
+
 export interface DishIngredientRow { id?: string; rawMaterialId: string; rawMaterialName?: string | null; quantity: string | number | null; unit: string | null }
 export interface Dish {
   id: string; name: string; component: string; unit: string;
@@ -304,6 +319,10 @@ export const foodKeys = {
   kitchenSummary: (p: Record<string, unknown>) => ["food", "kitchen-summary", p] as const,
   reports: (p: Record<string, unknown>) => ["food", "reports", p] as const,
   reportsVariance: (p: Record<string, unknown>) => ["food", "reports-variance", p] as const,
+  // O15/O16/O17 — on-time report, tolerance config, variance-by-day.
+  reportsOnTime: (p: Record<string, unknown>) => ["food", "reports-ontime", p] as const,
+  ontimeTolerance: () => ["food", "ontime-tolerance"] as const,
+  reportsVarianceByDay: (p: Record<string, unknown>) => ["food", "reports-variance-by-day", p] as const,
   dishes: (p: Record<string, unknown>) => ["food", "dishes", p] as const,
   dish: (id: string) => ["food", "dish", id] as const,
   rawMaterials: (p: Record<string, unknown> = {}) => ["food", "raw-materials", p] as const,
@@ -357,6 +376,17 @@ export const foodApi = {
   // WS11 — aggregated ordered-vs-delivered variance table.
   reportsVariance: (p: Record<string, unknown> = {}) =>
     apiFetch<Envelope<VarianceData>>(`/food/reports/variance${qs(p)}`).then((r) => r.data),
+  // O15 — on-time delivery report (% on-time + per-day on-time/late trend).
+  reportsOnTime: (p: Record<string, unknown> = {}) =>
+    apiFetch<Envelope<OnTimeReport>>(`/food/reports/on-time${qs(p)}`).then((r) => r.data),
+  // O17 — ordered-vs-received variance per service-day (filterable by mealType).
+  reportsVarianceByDay: (p: Record<string, unknown> = {}) =>
+    apiFetch<Envelope<VarianceByDayData>>(`/food/reports/variance-by-day${qs(p)}`).then((r) => r.data),
+  // O16 — global on-time tolerance (read: any food user; write: SUPER_ADMIN).
+  ontimeTolerance: () =>
+    apiFetch<Envelope<OnTimeTolerance>>(`/food/settings/ontime-tolerance`).then((r) => r.data),
+  updateOntimeTolerance: (minutes: number | string) =>
+    apiFetch<Envelope<OnTimeTolerance>>(`/food/settings/ontime-tolerance`, { method: "PUT", body: JSON.stringify({ minutes }) }).then((r) => r.data),
   reportsExportUrl: (p: Record<string, unknown> = {}) => `/api/food/reports/export${qs(p)}`,
 
   // Orders
@@ -537,6 +567,9 @@ export const foodApi = {
   reportsExportCsvUrl: (p: Record<string, unknown> = {}) => `/api/food/reports/export.csv${qs(p)}`,
   reportsExportPdfUrl: (p: Record<string, unknown> = {}) => `/api/food/reports/export.pdf${qs(p)}`,
   reportsExportXlsUrl: (p: Record<string, unknown> = {}) => `/api/food/reports/export.xls${qs(p)}`,
+  // O20 — report-aware export URL builder. fmt ∈ csv|pdf|xls; the `report` filter
+  // (orders|variance|waste|ontime) selects the widget being exported.
+  reportsExportFmtUrl: (fmt: "csv" | "pdf" | "xls", p: Record<string, unknown> = {}) => `/api/food/reports/export.${fmt}${qs(p)}`,
   guestsExportCsvUrl: (p: Record<string, unknown> = {}) => `/api/food/guests/export.csv${qs(p)}`,
   guestsExportPdfUrl: (p: Record<string, unknown> = {}) => `/api/food/guests/export.pdf${qs(p)}`,
   guestsExportXlsUrl: (p: Record<string, unknown> = {}) => `/api/food/guests/export.xls${qs(p)}`,

@@ -2,11 +2,14 @@ import * as React from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { format, formatDistanceToNowStrict, isAfter } from "date-fns";
 import {
-  Trash2, Clock, Lock, Unlock, Package, AlertTriangle, Save,
+  Trash2, Clock, Lock, Unlock, Package, AlertTriangle, Save, TrendingDown, BarChart3,
 } from "lucide-react";
+import {
+  ResponsiveContainer, BarChart, Bar, ComposedChart, Line, Cell,
+  XAxis, YAxis, CartesianGrid, Tooltip, Legend,
+} from "recharts";
 import { DataTable } from "@/components/data-table";
 import { PageHeader } from "@/components/page-header";
-import { StatCard } from "@/components/stat-card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { NumberStepper } from "@/components/ui/number-stepper";
@@ -16,15 +19,22 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import {
   foodApi, foodKeys, MEAL_TYPES, BRANDS, MEAL_LABEL, fmtQty,
-  type FoodOrder, type FoodOrderItem,
+  type FoodOrder, type FoodOrderItem, type AnalyticsData,
 } from "@/lib/food-api";
 import { useToast } from "@/hooks/use-toast";
+
+const PRIMARY = "var(--primary)";
+const ACCENT = "var(--accent)";
+
+// Units offered on the waste stepper; weight units auto-convert (kg<->gram).
+const WASTE_UNITS = ["kg", "gram", "unit"];
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function isWindowOpen(order: { wasteEditableUntil: string | null }): boolean {
@@ -90,8 +100,60 @@ export default function FoodWaste() {
   });
   const orders = ordersRes?.data ?? [];
 
-  const openCount = orders.filter((o) => isWindowOpen(o)).length;
-  const lockedCount = orders.length - openCount;
+  // ── Analytics (scoped to the page's current property/brand filter) ──
+  // Use an explicit 12-month from/to window (the backend honours from/to and
+  // otherwise caps `year` at 365 days) so the MoM trend has a full year of
+  // history. The single-day `date` filter only scopes the delivered-orders
+  // table, not these rollups.
+  const analyticsTo = format(new Date(), "yyyy-MM-dd");
+  const analyticsFrom = format(
+    new Date(new Date().getFullYear() - 1, new Date().getMonth(), 1),
+    "yyyy-MM-dd",
+  );
+  const analyticsParams: Record<string, string> = {
+    period: "year", from: analyticsFrom, to: analyticsTo,
+  };
+  if (propertyId !== "ALL") analyticsParams.propertyId = propertyId;
+  if (brand !== "ALL") analyticsParams.brand = brand;
+
+  const { data: analytics, isLoading: analyticsLoading } = useQuery<AnalyticsData>({
+    queryKey: foodKeys.analytics(analyticsParams),
+    queryFn: () => foodApi.analytics(analyticsParams),
+  });
+
+  // [O11] Pareto: per-item wasted qty sorted desc + cumulative %, 80/20 highlight.
+  const pareto = React.useMemo(() => {
+    const items = (analytics?.topWasteItems ?? [])
+      .filter((it) => Number(it.wasted) > 0)
+      .map((it) => ({ name: it.dishName || it.dishId, wasted: Number(it.wasted) || 0 }))
+      .sort((a, b) => b.wasted - a.wasted);
+    const total = items.reduce((s, it) => s + it.wasted, 0);
+    let cum = 0;
+    return items.map((it) => {
+      cum += it.wasted;
+      const pct = total > 0 ? (it.wasted / total) * 100 : 0;
+      const cumPct = total > 0 ? (cum / total) * 100 : 0;
+      return { ...it, pct, cumPct, vital: cumPct - pct < 80 };
+    });
+  }, [analytics?.topWasteItems]);
+
+  // [O12] Month-on-Month: aggregate daily wastageTrend into the last 12 calendar months.
+  const monthly = React.useMemo(() => {
+    const buckets = new Map<string, number>();
+    for (const row of analytics?.wastageTrend ?? []) {
+      const d = new Date(row.date);
+      if (Number.isNaN(d.getTime())) continue;
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+      buckets.set(key, (buckets.get(key) ?? 0) + (Number(row.wasted) || 0));
+    }
+    return Array.from(buckets.entries())
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+      .slice(-12)
+      .map(([key, wasted]) => ({
+        month: format(new Date(`${key}-01T00:00:00`), "MMM yy"),
+        wasted: Math.round(wasted * 1000) / 1000,
+      }));
+  }, [analytics?.wastageTrend]);
 
   const cols = [
     {
@@ -152,10 +214,77 @@ export default function FoodWaste() {
         subtitle="Record post-delivery wastage on delivered orders within the 1-hour edit window"
       />
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <StatCard title="Delivered Orders" value={isLoading ? "—" : orders.length} icon={Package} />
-        <StatCard title="Editable Now" value={isLoading ? "—" : openCount} icon={Unlock} />
-        <StatCard title="Locked" value={isLoading ? "—" : lockedCount} icon={Lock} />
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {/* [O11] Waste Pareto — vital few items driving ~80% of waste */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base flex items-center gap-2">
+              <BarChart3 className="h-4 w-4 text-muted-foreground" /> Waste Pareto (80/20)
+            </CardTitle>
+          </CardHeader>
+          <CardContent style={{ height: 300 }}>
+            {analyticsLoading ? (
+              <Skeleton className="h-full w-full" />
+            ) : pareto.length === 0 ? (
+              <div className="flex h-full flex-col items-center justify-center text-muted-foreground">
+                <Package className="h-8 w-8 mb-2" />
+                <p className="text-sm">No waste recorded for this scope.</p>
+              </div>
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                <ComposedChart data={pareto} margin={{ top: 8, right: 8, bottom: 8, left: -8 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                  <XAxis dataKey="name" tick={{ fontSize: 11 }} interval={0} angle={-20} textAnchor="end" height={56} />
+                  <YAxis yAxisId="qty" tick={{ fontSize: 11 }} />
+                  <YAxis yAxisId="pct" orientation="right" domain={[0, 100]} unit="%" tick={{ fontSize: 11 }} />
+                  <Tooltip
+                    formatter={(v: any, name: any) =>
+                      name === "Cumulative %"
+                        ? [`${Number(v).toFixed(1)}%`, name]
+                        : [fmtQty(Number(v)), name]
+                    }
+                  />
+                  <Legend wrapperStyle={{ fontSize: 12 }} />
+                  <Bar yAxisId="qty" dataKey="wasted" name="Wasted qty" radius={[4, 4, 0, 0]}>
+                    {pareto.map((d, i) => (
+                      <Cell key={i} fill={d.vital ? PRIMARY : "var(--muted-foreground)"} />
+                    ))}
+                  </Bar>
+                  <Line yAxisId="pct" type="monotone" dataKey="cumPct" name="Cumulative %" stroke={ACCENT} strokeWidth={2} dot={{ r: 3 }} />
+                </ComposedChart>
+              </ResponsiveContainer>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* [O12] Month-on-Month waste trend (last 12 months) */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base flex items-center gap-2">
+              <TrendingDown className="h-4 w-4 text-muted-foreground" /> Month-on-Month Waste
+            </CardTitle>
+          </CardHeader>
+          <CardContent style={{ height: 300 }}>
+            {analyticsLoading ? (
+              <Skeleton className="h-full w-full" />
+            ) : monthly.length === 0 ? (
+              <div className="flex h-full flex-col items-center justify-center text-muted-foreground">
+                <TrendingDown className="h-8 w-8 mb-2" />
+                <p className="text-sm">No trend data for this scope.</p>
+              </div>
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={monthly} margin={{ top: 8, right: 8, bottom: 8, left: -8 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                  <XAxis dataKey="month" tick={{ fontSize: 11 }} />
+                  <YAxis tick={{ fontSize: 11 }} />
+                  <Tooltip formatter={(v: any) => [fmtQty(Number(v)), "Wasted"]} />
+                  <Bar dataKey="wasted" name="Wasted" fill={PRIMARY} radius={[4, 4, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            )}
+          </CardContent>
+        </Card>
       </div>
 
       <div className="flex flex-wrap items-center gap-3">
@@ -226,15 +355,22 @@ function WasteSheet({
 
   // Local draft of wasted quantities keyed by item id.
   const [draft, setDraft] = React.useState<Record<string, string>>({});
+  // Controlled unit per item (drives the stepper dropdown + auto-convert). Seeded
+  // from the item's own unit; weight switches convert the draft value in place.
+  const [units, setUnits] = React.useState<Record<string, string>>({});
   React.useEffect(() => {
     if (order) {
       const next: Record<string, string> = {};
+      const nextUnits: Record<string, string> = {};
       for (const it of order.items) {
         next[it.id] = it.wastedQty == null ? "" : String(Number(it.wastedQty));
+        nextUnits[it.id] = it.unit;
       }
       setDraft(next);
+      setUnits(nextUnits);
     } else {
       setDraft({});
+      setUnits({});
     }
   }, [order]);
 
@@ -371,14 +507,21 @@ function WasteSheet({
                             <Input value={it.receivedQty == null ? "—" : String(Number(it.receivedQty))} readOnly disabled className="mt-1 bg-muted/40" />
                           </div>
                           <div>
-                            <Label className="text-xs text-muted-foreground">Wasted ({it.unit.toLowerCase()})</Label>
+                            <Label className="text-xs text-muted-foreground">Wasted</Label>
                             <NumberStepper
                               value={draft[it.id] === "" || draft[it.id] === undefined ? 0 : Number(draft[it.id])}
                               min={0}
                               max={Number(it.orderedQty)}
                               step={0.001}
                               disabled={locked}
+                              unit={units[it.id] ?? it.unit}
+                              unitOptions={
+                                WASTE_UNITS.includes(units[it.id] ?? it.unit)
+                                  ? WASTE_UNITS
+                                  : [units[it.id] ?? it.unit, ...WASTE_UNITS]
+                              }
                               onChange={(n) => setDraft((d) => ({ ...d, [it.id]: String(n) }))}
+                              onUnitChange={(u) => setUnits((m) => ({ ...m, [it.id]: u }))}
                               aria-label={`${it.dishName || it.dishId} wasted quantity`}
                               className={`mt-1 ${err ? "border-destructive focus-visible:ring-destructive" : ""}`}
                             />
