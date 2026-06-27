@@ -69,6 +69,7 @@ import { BookingFormModal } from "@/components/booking-form-modal";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { PropertyImageCarousel } from "@/components/property-image-carousel";
 import { PropertyPhotosManager } from "@/components/property-photos-manager";
+import { ImageLightbox } from "@/components/image-lightbox";
 import {
   Dialog,
   DialogContent,
@@ -438,6 +439,7 @@ function PropertyPhotoGallery({ propertyId, canEdit }: { propertyId: string; can
     queryFn: () => foodApi.listPropertyPhotos(propertyId),
   });
   const [manageOpen, setManageOpen] = React.useState(false);
+  const [lightboxIndex, setLightboxIndex] = React.useState<number | null>(null);
   const urls = React.useMemo(
     () =>
       [...photos]
@@ -474,9 +476,21 @@ function PropertyPhotoGallery({ propertyId, canEdit }: { propertyId: string; can
               </Button>
             )}
           </div>
-          <PropertyImageCarousel images={urls} aspectClassName="aspect-video" />
+          <PropertyImageCarousel
+            images={urls}
+            aspectClassName="h-72 sm:h-80"
+            fit="contain"
+            onImageClick={urls.length ? (i) => setLightboxIndex(i) : undefined}
+          />
         </CardContent>
       </Card>
+
+      <ImageLightbox
+        images={urls}
+        index={lightboxIndex}
+        onIndexChange={setLightboxIndex}
+        onClose={() => setLightboxIndex(null)}
+      />
 
       {canEdit && (
         <Dialog open={manageOpen} onOpenChange={setManageOpen}>

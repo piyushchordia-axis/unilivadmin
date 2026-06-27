@@ -18,7 +18,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Plus, Eye, Pencil, Building2, Bed, Users, Percent, Search, Image as ImageIcon } from "lucide-react";
+import { Plus, Pencil, Building2, Bed, Users, Percent, Search, Image as ImageIcon } from "lucide-react";
 import { useLocation } from "wouter";
 import { PropertyFormModal } from "@/components/property-form-modal";
 import { Badge } from "@/components/ui/badge";
@@ -272,17 +272,6 @@ export default function Properties() {
             variant="ghost"
             onClick={(e) => {
               e.stopPropagation();
-              setLocation(`/properties/${row.original.id}`);
-            }}
-            data-testid={`button-view-property-${row.original.id}`}
-          >
-            <Eye className="w-4 h-4" />
-          </Button>
-          <Button
-            size="icon"
-            variant="ghost"
-            onClick={(e) => {
-              e.stopPropagation();
               openEdit(row.original);
             }}
             data-testid={`button-edit-property-${row.original.id}`}
@@ -372,6 +361,7 @@ export default function Properties() {
         columns={columns as any}
         data={filtered}
         isLoading={isLoading}
+        onRowClick={(p: PropertyDto) => setLocation(`/properties/${p.id}`)}
       />
 
       <PropertyFormModal

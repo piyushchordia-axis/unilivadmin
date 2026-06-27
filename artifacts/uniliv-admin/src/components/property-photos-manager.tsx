@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import { Image as ImageIcon, Star, Trash2 } from "lucide-react";
+import { ImageLightbox } from "@/components/image-lightbox";
 
 // Read a picked image File into a downscaled JPEG data URL kept comfortably under
 // the global body-parser ~1mb cap (max edge 1600px, quality 0.82). Falls back to a
@@ -59,11 +60,17 @@ export function PropertyPhotosManager({
   const { toast } = useToast();
   const [uploading, setUploading] = React.useState(false);
   const [busyId, setBusyId] = React.useState<string | null>(null);
+  const [lightboxIndex, setLightboxIndex] = React.useState<number | null>(null);
 
   const { data: photos = [], isLoading } = useQuery({
     queryKey: foodKeys.propertyPhotos(propertyId),
     queryFn: () => foodApi.listPropertyPhotos(propertyId),
   });
+
+  const urls = React.useMemo(
+    () => photos.filter((p) => p.url).map((p) => p.url) as string[],
+    [photos],
+  );
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: foodKeys.propertyPhotos(propertyId) });
@@ -136,8 +143,16 @@ export function PropertyPhotosManager({
           {photos.map((photo) => (
             <div
               key={photo.id}
-              className="group relative aspect-video overflow-hidden rounded-lg border bg-surface"
+              className={`group relative aspect-video overflow-hidden rounded-lg border bg-surface${photo.url ? " cursor-zoom-in" : ""}`}
               data-testid={`property-photo-${photo.id}`}
+              onClick={
+                photo.url
+                  ? () => {
+                      const idx = urls.indexOf(photo.url!);
+                      if (idx >= 0) setLightboxIndex(idx);
+                    }
+                  : undefined
+              }
             >
               {photo.url ? (
                 <img
@@ -163,7 +178,10 @@ export function PropertyPhotosManager({
                     variant="secondary"
                     className="h-7 w-7"
                     disabled={busyId === photo.id}
-                    onClick={() => setHero(photo.id)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setHero(photo.id);
+                    }}
                     aria-label="Set as hero"
                     data-testid={`button-set-hero-${photo.id}`}
                   >
@@ -176,7 +194,10 @@ export function PropertyPhotosManager({
                   variant="secondary"
                   className="h-7 w-7 text-destructive"
                   disabled={busyId === photo.id}
-                  onClick={() => removePhoto(photo.id)}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    removePhoto(photo.id);
+                  }}
                   aria-label="Delete photo"
                   data-testid={`button-delete-photo-${photo.id}`}
                 >
@@ -187,6 +208,12 @@ export function PropertyPhotosManager({
           ))}
         </div>
       )}
+      <ImageLightbox
+        images={urls}
+        index={lightboxIndex}
+        onIndexChange={setLightboxIndex}
+        onClose={() => setLightboxIndex(null)}
+      />
     </div>
   );
 }

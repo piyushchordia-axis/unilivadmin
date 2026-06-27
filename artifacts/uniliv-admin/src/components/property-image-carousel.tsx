@@ -12,19 +12,28 @@ import {
 /**
  * Read-only image carousel for property photos.
  *
- * - empty   -> aspect box with a centered placeholder icon
+ * - empty   -> sizing box with a centered placeholder icon
  * - 1 image -> the single image, no arrows / no dots
- * - 2+      -> embla carousel with chevron arrows + dot indicators
+ * - 2+      -> embla carousel with hover arrows + dot indicators
+ *
+ * `fit="contain"` shows the whole image (letterboxed on a muted backdrop) at the
+ * box height — good for a detail viewer where you don't want a tall, cropped hero.
+ * `fit="cover"` (default) fills the box — good for card banners.
+ * Pass `onImageClick` to make images open a lightbox (adds a zoom cursor).
  */
 export function PropertyImageCarousel({
   images,
   alt = "Property photo",
   aspectClassName = "aspect-[16/7]",
+  fit = "cover",
+  onImageClick,
   className,
 }: {
   images: string[];
   alt?: string;
   aspectClassName?: string;
+  fit?: "cover" | "contain";
+  onImageClick?: (index: number) => void;
   className?: string;
 }): React.JSX.Element {
   const [api, setApi] = React.useState<CarouselApi>();
@@ -32,12 +41,10 @@ export function PropertyImageCarousel({
 
   React.useEffect(() => {
     if (!api) return;
-
     const onSelect = () => setSelectedIndex(api.selectedScrollSnap());
     onSelect();
     api.on("select", onSelect);
     api.on("reInit", onSelect);
-
     return () => {
       api.off("select", onSelect);
       api.off("reInit", onSelect);
@@ -46,16 +53,31 @@ export function PropertyImageCarousel({
 
   const wrapperClass = cn("overflow-hidden rounded-lg bg-surface", className);
 
+  // A single image cell — handles cover/contain fit + optional click-to-zoom.
+  const cell = (src: string, i: number) => (
+    <div
+      className={cn(
+        aspectClassName,
+        "w-full",
+        fit === "contain" && "flex items-center justify-center bg-muted/30",
+        onImageClick && "cursor-zoom-in",
+      )}
+      onClick={onImageClick ? () => onImageClick(i) : undefined}
+    >
+      <img
+        src={src}
+        alt={`${alt} ${i + 1}`}
+        draggable={false}
+        className={fit === "contain" ? "max-h-full max-w-full object-contain" : "h-full w-full object-cover"}
+      />
+    </div>
+  );
+
   // Empty -> placeholder
   if (images.length === 0) {
     return (
       <div className={wrapperClass}>
-        <div
-          className={cn(
-            aspectClassName,
-            "flex w-full items-center justify-center text-muted-foreground",
-          )}
-        >
+        <div className={cn(aspectClassName, "flex w-full items-center justify-center text-muted-foreground")}>
           <ImageIcon className="h-7 w-7" />
         </div>
       </div>
@@ -64,17 +86,7 @@ export function PropertyImageCarousel({
 
   // Single image -> no controls
   if (images.length === 1) {
-    return (
-      <div className={wrapperClass}>
-        <div className={cn(aspectClassName, "w-full")}>
-          <img
-            src={images[0]}
-            alt={alt}
-            className="h-full w-full object-cover"
-          />
-        </div>
-      </div>
-    );
+    return <div className={wrapperClass}>{cell(images[0], 0)}</div>;
   }
 
   // Multiple images -> carousel with arrows + dots
@@ -84,13 +96,7 @@ export function PropertyImageCarousel({
         <CarouselContent className="ml-0">
           {images.map((src, i) => (
             <CarouselItem key={i} className="pl-0">
-              <div className={cn(aspectClassName, "w-full")}>
-                <img
-                  src={src}
-                  alt={`${alt} ${i + 1}`}
-                  className="h-full w-full object-cover"
-                />
-              </div>
+              {cell(src, i)}
             </CarouselItem>
           ))}
         </CarouselContent>
@@ -124,9 +130,7 @@ export function PropertyImageCarousel({
             onClick={() => api?.scrollTo(i)}
             className={cn(
               "pointer-events-auto h-1.5 rounded-full transition-all",
-              i === selectedIndex
-                ? "w-4 bg-white"
-                : "w-1.5 bg-white/60 hover:bg-white/80",
+              i === selectedIndex ? "w-4 bg-white" : "w-1.5 bg-white/60 hover:bg-white/80",
             )}
           />
         ))}
