@@ -12,6 +12,7 @@
     "scrape:uniliv": "tsx ./src/scrape-uniliv.ts",
     "import:uniliv": "tsx ./src/import-uniliv-properties.ts",
     "geocode:properties": "tsx ./src/geocode-properties.ts",
+    "scope:unit-leads": "tsx ./src/scope-unit-leads-single.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
