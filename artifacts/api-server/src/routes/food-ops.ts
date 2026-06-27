@@ -2734,28 +2734,39 @@ foodOpsRouter.get("/my-properties", authenticate, authorize("FOOD_DASHBOARD", "v
     if (!props.length) { res.json({ success: true, data: [] }); return; }
     const propIds = props.map((p) => p.id);
 
-    // One hero photo per property, served directly so cards don't call the
+    // Up to 8 photos per property, served directly so cards don't call the
     // PROPERTIES-scoped /:id/photos route (which 403s every property beyond the
-    // caller's own users.property_id). Order hero-first then lowest sort_order,
-    // then keep the FIRST row seen per property.
+    // caller's own users.property_id). Order hero-first then lowest sort_order;
+    // the first presigned URL per property is the hero (heroImageUrl === images[0]).
+    const MAX_PHOTOS_PER_PROP = 8;
     const photoRows = await db
       .select({ propertyId: propertyPhotosTable.propertyId, storageKey: propertyPhotosTable.storageKey })
       .from(propertyPhotosTable)
       .where(inArray(propertyPhotosTable.propertyId, propIds))
       .orderBy(desc(propertyPhotosTable.isHero), asc(propertyPhotosTable.sortOrder));
-    const heroKeyByProp = new Map<string, string>();
+    const photoKeysByProp = new Map<string, string[]>();
     for (const row of photoRows) {
-      if (!heroKeyByProp.has(row.propertyId)) heroKeyByProp.set(row.propertyId, row.storageKey);
-    }
-    const heroByProp = new Map<string, string | null>();
-    for (const [pid, key] of heroKeyByProp) {
-      let url: string | null = null;
-      try {
-        url = isStorageConfigured() ? await getObjectUrl(key) : null;
-      } catch {
-        url = null;
+      const keys = photoKeysByProp.get(row.propertyId) ?? [];
+      if (keys.length < MAX_PHOTOS_PER_PROP) {
+        keys.push(row.storageKey);
+        photoKeysByProp.set(row.propertyId, keys);
       }
-      heroByProp.set(pid, url);
+    }
+    const imagesByProp = new Map<string, string[]>();
+    const heroByProp = new Map<string, string | null>();
+    for (const [pid, keys] of photoKeysByProp) {
+      const urls: string[] = [];
+      if (isStorageConfigured()) {
+        for (const key of keys) {
+          try {
+            urls.push(await getObjectUrl(key));
+          } catch {
+            // Skip photos whose presign fails so one bad key doesn't drop the rest.
+          }
+        }
+      }
+      imagesByProp.set(pid, urls);
+      heroByProp.set(pid, urls[0] ?? null);
     }
 
     const kitchens = await db.select({ id: kitchensTable.id, name: kitchensTable.name }).from(kitchensTable);
@@ -2806,6 +2817,7 @@ foodOpsRouter.get("/my-properties", authenticate, authorize("FOOD_DASHBOARD", "v
         deliveredCount: deliveredByProp.get(p.id) ?? 0,
         configured: Boolean(p.brand && p.kitchenId),
         heroImageUrl: heroByProp.get(p.id) ?? null,
+        images: imagesByProp.get(p.id) ?? [],
       };
     });
     res.json({ success: true, data });

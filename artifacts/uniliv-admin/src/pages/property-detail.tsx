@@ -67,6 +67,8 @@ import {
 } from "lucide-react";
 import { BookingFormModal } from "@/components/booking-form-modal";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { PropertyImageCarousel } from "@/components/property-image-carousel";
+import { PropertyPhotosManager } from "@/components/property-photos-manager";
 import {
   PORTFOLIO_TYPE_LABELS,
   ATTR_LABELS,
@@ -419,49 +421,64 @@ function PropertyElectricityTab({ propertyId }: { propertyId: string }) {
   );
 }
 
-// Photo gallery shown near the top of the property detail page. Read-only here;
-// uploads/hero/delete live in the property edit modal. Photos come back ordered
-// ascending by sortOrder (hero is flagged via isHero).
-function PropertyPhotoGallery({ propertyId }: { propertyId: string }) {
+// Photo gallery shown near the top of the property detail page. Displays a
+// carousel; editors can toggle into inline photo management (upload/delete/
+// set-primary). Photos come back ordered ascending by sortOrder (hero flagged
+// via isHero); we sort hero-first for the carousel.
+function PropertyPhotoGallery({ propertyId, canEdit }: { propertyId: string; canEdit: boolean }) {
   const { data: photos = [], isLoading } = useQuery({
     queryKey: foodKeys.propertyPhotos(propertyId),
     queryFn: () => foodApi.listPropertyPhotos(propertyId),
   });
-  if (isLoading || photos.length === 0) return null;
-  const hero = photos.find((p) => p.isHero) ?? photos[0];
-  const rest = photos.filter((p) => p.id !== hero.id);
+  const [managing, setManaging] = React.useState(false);
+  const urls = React.useMemo(
+    () =>
+      [...photos]
+        .sort((a, b) => {
+          if (a.isHero !== b.isHero) return a.isHero ? -1 : 1;
+          return (a.sortOrder ?? 0) - (b.sortOrder ?? 0);
+        })
+        .map((p) => p.url)
+        .filter(Boolean) as string[],
+    [photos],
+  );
+
+  // Non-editors with no photos: render nothing (as before). Editors always
+  // get the card so they can upload the first photo.
+  if (!canEdit && (isLoading || photos.length === 0)) return null;
+
   return (
     <Card data-testid="property-photo-gallery">
       <CardContent className="p-4">
-        <h3 className="font-display font-semibold text-primary mb-3 flex items-center gap-2">
-          <ImageIcon className="w-4 h-4" /> Photos
-        </h3>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-          <div className="relative aspect-video overflow-hidden rounded-lg border bg-surface sm:col-span-2 sm:row-span-2">
-            {hero.url ? (
-              <img src={hero.url} alt={hero.caption || "Property photo"} className="h-full w-full object-cover" />
-            ) : (
-              <div className="flex h-full w-full items-center justify-center text-muted-foreground">
-                <ImageIcon className="h-7 w-7" />
-              </div>
-            )}
-          </div>
-          {rest.slice(0, 4).map((photo) => (
-            <div
-              key={photo.id}
-              className="relative aspect-video overflow-hidden rounded-lg border bg-surface"
-              data-testid={`property-detail-photo-${photo.id}`}
+        <div className="mb-3 flex items-center justify-between">
+          <h3 className="font-display font-semibold text-primary flex items-center gap-2">
+            <ImageIcon className="w-4 h-4" /> Photos
+          </h3>
+          {canEdit && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setManaging((m) => !m)}
+              data-testid="property-photos-manage-toggle"
             >
-              {photo.url ? (
-                <img src={photo.url} alt={photo.caption || "Property photo"} className="h-full w-full object-cover" />
+              {managing ? (
+                <>
+                  <ImageIcon className="w-4 h-4 mr-1" /> View
+                </>
               ) : (
-                <div className="flex h-full w-full items-center justify-center text-muted-foreground">
-                  <ImageIcon className="h-5 w-5" />
-                </div>
+                <>
+                  <Pencil className="w-4 h-4 mr-1" /> Manage
+                </>
               )}
-            </div>
-          ))}
+            </Button>
+          )}
         </div>
+        {canEdit && managing ? (
+          <PropertyPhotosManager propertyId={propertyId} className="" />
+        ) : (
+          <PropertyImageCarousel images={urls} aspectClassName="aspect-video" />
+        )}
       </CardContent>
     </Card>
   );
@@ -612,7 +629,7 @@ export default function PropertyDetail() {
         <StatusBadge status={property.status} className="px-3 py-1" />
       </div>
 
-      <PropertyPhotoGallery propertyId={id} />
+      <PropertyPhotoGallery propertyId={id} canEdit={can("PROPERTIES", "edit")} />
 
       <div className="grid gap-4 grid-cols-1 md:grid-cols-2 lg:grid-cols-4">
         <Card>

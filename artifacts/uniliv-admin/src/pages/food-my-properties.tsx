@@ -4,9 +4,10 @@ import { useAppStore } from "@/lib/store";
 import { useQuery } from "@tanstack/react-query";
 import {
   Home, Building2, ChefHat, Users, Percent, Wallet, ListOrdered,
-  Truck, AlertTriangle, Tag, BedDouble, CheckCircle2, Image as ImageIcon,
+  Truck, AlertTriangle, Tag, BedDouble, CheckCircle2,
 } from "lucide-react";
 import { PageHeader } from "@/components/page-header";
+import { PropertyImageCarousel } from "@/components/property-image-carousel";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -15,25 +16,6 @@ import { foodApi, foodKeys, type MyPropertyCard } from "@/lib/food-api";
 import { withQuery } from "@/lib/nav-helpers";
 
 const inr = (n: number) => `₹${(n ?? 0).toLocaleString("en-IN")}`;
-
-// Card banner image. The /food/my-properties payload now carries heroImageUrl
-// (resolved server-side over the caller's full accessible property set), so we
-// render it directly instead of calling the PROPERTIES-scoped /:id/photos route
-// (which 403s every property beyond the caller's own users.property_id).
-// Falls back to a placeholder when there's no hero or storage is unavailable.
-function PropertyBanner({ url, name }: { url: string | null; name: string }) {
-  return (
-    <div className="aspect-[16/7] w-full overflow-hidden bg-surface" data-testid={`property-banner-${name}`}>
-      {url ? (
-        <img src={url} alt={name} className="h-full w-full object-cover" />
-      ) : (
-        <div className="flex h-full w-full items-center justify-center text-muted-foreground">
-          <ImageIcon className="h-7 w-7" />
-        </div>
-      )}
-    </div>
-  );
-}
 
 function Stat({
   icon: Icon, label, value, onClick,
@@ -108,7 +90,11 @@ export default function FoodMyProperties() {
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {properties.map((p) => (
             <Card key={p.id} className="flex flex-col overflow-hidden">
-              <PropertyBanner url={p.heroImageUrl ?? null} name={p.name} />
+              <PropertyImageCarousel
+                images={p.images ?? (p.heroImageUrl ? [p.heroImageUrl] : [])}
+                alt={p.name}
+                aspectClassName="aspect-[16/7]"
+              />
               <CardHeader className="pb-3">
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
