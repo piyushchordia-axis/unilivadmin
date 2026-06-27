@@ -129,6 +129,15 @@ function brandForName(name: string): string {
   return "UNILIV";
 }
 
+/** The scrape has no bed inventory, so derive a stable, realistic capacity (40-120)
+ *  deterministically from the source URL — gives imported properties a workable bed
+ *  count so they show up as residential and get rooms/residents from seed:demo. */
+function bedsForProperty(sourceUrl: string): number {
+  let h = 0;
+  for (let i = 0; i < sourceUrl.length; i++) h = (h * 31 + sourceUrl.charCodeAt(i)) | 0;
+  return 40 + (Math.abs(h) % 81);
+}
+
 /** Map scraped gender → portfolioAttributes.gender enum. */
 function genderAttr(gender: string): "MALE" | "FEMALE" | "COED" {
   const g = (gender || "").trim().toLowerCase();
@@ -254,7 +263,7 @@ async function main() {
         pincode,
         lat,
         lng,
-        totalBeds: 0,
+        totalBeds: bedsForProperty(p.sourceUrl),
         status: "ACTIVE",
         portfolioType,
         portfolioAttributes,
@@ -269,6 +278,9 @@ async function main() {
           name: p.name,
           brand: brandForName(p.name),
           kitchenId: resolveKitchenId(p.city),
+          // Backfill a bed count only if one isn't already set (preserve any
+          // admin-adjusted / previously-seeded value on re-import).
+          totalBeds: sql`case when ${propertiesTable.totalBeds} = 0 then ${bedsForProperty(p.sourceUrl)} else ${propertiesTable.totalBeds} end`,
           address,
           city: p.city,
           state,

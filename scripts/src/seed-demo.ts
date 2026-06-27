@@ -190,6 +190,10 @@ async function main() {
        FROM properties WHERE total_beds > 0 ORDER BY id`,
   )).rows as Array<{ id: string; name: string; total_beds: number; brand: string; kitchen_id: string | null; pincode: string }>;
   console.log(`  ✓ ${allProps.length} residential properties in scope`);
+  // Stable per-property index (allProps is ORDER BY id) so demo order numbers can be
+  // derived deterministically from (date, meal, property) — making the seed re-run-safe
+  // (the unique order_number then always maps to the same row as the deterministic PK).
+  const propIdx = new Map(allProps.map((pp, i) => [pp.id, i]));
 
   /* ── 2. ROOMS (~ceil(beds/2) per property) ───────────────────────────────── */
   console.log("• rooms...");
@@ -934,7 +938,9 @@ async function main() {
 
         orderRows.push({
           id: orderId,
-          orderNumber: `DEMO-ORD-${String(orderSeq).padStart(7, "0")}`,
+          // Deterministic + unique per (date, meal, property) → re-run-safe (no volatile
+          // counter that could shift across runs and collide on the unique constraint).
+          orderNumber: `DEMO-${serviceDateStr.replace(/-/g, "")}-${meal.slice(0, 3)}-P${String(propIdx.get(p.id) ?? 0).padStart(3, "0")}`,
           propertyId: p.id,
           brand: p.brand,
           mealType: meal,
@@ -1016,6 +1022,27 @@ async function main() {
     });
   }
   await insertChunked(billingCyclesTable, cycleRows, "billing_cycles");
+
+  /* ── Property photos — every property card should show an image ───────────── */
+  console.log("• property photos (ensure every property has a hero image)...");
+  // Reuse already-uploaded property photos (from import:uniliv) as the hero for any
+  // property that has none, so all cards show an image. No-op (graceful) if there's
+  // no photo pool yet — run import:uniliv first to populate real photos.
+  await pool.query(`
+    WITH heroes AS (SELECT storage_key, content_type, row_number() OVER (ORDER BY id) rn FROM property_photos WHERE is_hero),
+    hc AS (SELECT count(*) c FROM heroes),
+    photoless AS (SELECT id, row_number() OVER (ORDER BY id) rn FROM properties p WHERE NOT EXISTS (SELECT 1 FROM property_photos pp WHERE pp.property_id=p.id))
+    INSERT INTO property_photos (id, property_id, storage_key, content_type, is_hero, sort_order, source_url, created_at)
+    SELECT gen_random_uuid()::text, pl.id, h.storage_key, h.content_type, true, 0, 'demo-reuse', now()
+    FROM photoless pl CROSS JOIN hc JOIN heroes h ON h.rn = ((pl.rn - 1) % NULLIF(hc.c, 0)) + 1`);
+  // Ensure every property that has photos has exactly one hero (so heroImageUrl resolves).
+  await pool.query(`
+    WITH pick AS (SELECT DISTINCT ON (pp.property_id) pp.id FROM property_photos pp
+      WHERE NOT EXISTS (SELECT 1 FROM property_photos h WHERE h.property_id = pp.property_id AND h.is_hero)
+      ORDER BY pp.property_id, pp.sort_order, pp.id)
+    UPDATE property_photos SET is_hero = true WHERE id IN (SELECT id FROM pick)`);
+  const { rows: photoGap } = await pool.query(`SELECT count(*)::int c FROM properties p WHERE NOT EXISTS (SELECT 1 FROM property_photos pp WHERE pp.property_id = p.id)`);
+  console.log(`  ✓ property photos ensured (${(photoGap[0] as { c: number }).c} still without a photo — run import:uniliv to populate the pool)`);
 
   console.log("✅ Demo data seeded.");
 }
