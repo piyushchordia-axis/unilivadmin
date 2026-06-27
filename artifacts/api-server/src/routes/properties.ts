@@ -8,7 +8,7 @@ import { authorize } from "../middlewares/authorize.js";
 import { pick, assertPropertyAccess } from "../lib/authz.js";
 import { getPagination, buildMeta } from "../lib/paginate.js";
 import { newId } from "../lib/id.js";
-import { resolveKitchenForPincode, isActiveBrand } from "../lib/food-service.js";
+import { resolveKitchenForPincode, isActiveBrand, resolveAccessiblePropertyIds } from "../lib/food-service.js";
 import { writeAuditLog } from "../lib/wallet-service.js";
 
 const router = Router();
@@ -207,7 +207,19 @@ router.get("/", authenticate, authorize("PROPERTIES", "view"), async (req, res) 
     const { page, limit, offset } = getPagination(req.query as Record<string, unknown>);
     const search = req.query["search"] as string | undefined;
 
-    const where = search ? or(ilike(propertiesTable.name, `%${search}%`), ilike(propertiesTable.city, `%${search}%`)) : undefined;
+    // Property-scoped callers (e.g. UNIT_LEAD / WARDEN) only see the properties
+    // they're bound to — the same accessible set My Properties resolves. Org-wide
+    // roles get null (no restriction). Mirrors GET /food/my-properties.
+    const accessibleIds = await resolveAccessiblePropertyIds(req.user!);
+    if (accessibleIds !== null && accessibleIds.length === 0) {
+      res.json({ success: true, data: [], meta: buildMeta(0, page, limit) });
+      return;
+    }
+    const conds = [
+      accessibleIds !== null ? inArray(propertiesTable.id, accessibleIds) : undefined,
+      search ? or(ilike(propertiesTable.name, `%${search}%`), ilike(propertiesTable.city, `%${search}%`)) : undefined,
+    ].filter(Boolean);
+    const where = conds.length ? and(...conds) : undefined;
 
     const [countResult] = await db.select({ count: sql<number>`count(*)::int` }).from(propertiesTable).where(where);
     const rows = await db.select().from(propertiesTable).where(where).limit(limit).offset(offset).orderBy(propertiesTable.createdAt);
@@ -330,6 +342,12 @@ router.post("/", authenticate, authorize("PROPERTIES", "create"), async (req, re
 
 router.get("/:id", authenticate, authorize("PROPERTIES", "view"), async (req, res) => {
   try {
+    // Property-scoped callers may only open a property in their accessible set.
+    const accessibleIds = await resolveAccessiblePropertyIds(req.user!);
+    if (accessibleIds !== null && !accessibleIds.includes(req.params["id"]!)) {
+      res.status(403).json({ success: false, error: "Outside your property scope" });
+      return;
+    }
     const [row] = await db.select().from(propertiesTable).where(eq(propertiesTable.id, req.params["id"]!));
     if (!row) { res.status(404).json({ success: false, error: "Not found" }); return; }
     const [r] = await db.select({ count: sql<number>`count(*)::int` }).from(residentsTable).where(eq(residentsTable.propertyId, row.id));
