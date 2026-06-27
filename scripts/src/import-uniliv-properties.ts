@@ -120,6 +120,15 @@ function portfolioTypeForGender(gender: string): "CO_LIVING" | "PG" {
   return (gender || "").trim().toLowerCase() === "coliving" ? "CO_LIVING" : "PG";
 }
 
+/** Derive the food brand (food_brands.code) from the property name. Every property
+ *  must have a brand — "Huddle Stays …" → HUDDLE, "Uniliv …" → UNILIV, else UNILIV. */
+function brandForName(name: string): string {
+  const n = (name || "").trim().toLowerCase();
+  if (n.startsWith("huddle")) return "HUDDLE";
+  if (n.startsWith("uniliv")) return "UNILIV";
+  return "UNILIV";
+}
+
 /** Map scraped gender → portfolioAttributes.gender enum. */
 function genderAttr(gender: string): "MALE" | "FEMALE" | "COED" {
   const g = (gender || "").trim().toLowerCase();
@@ -173,6 +182,27 @@ async function main() {
   const catalogue = JSON.parse(raw) as ScrapedProperty[];
   console.log(`  • ${catalogue.length} properties in ${DATA_FILE}`);
 
+  // Every property must have a kitchen. Load the active kitchens once and resolve
+  // one per property by city (with NCR→Delhi + Gurgaon→Gurugram normalisation and a
+  // guaranteed fallback so the result is never null).
+  const { rows: kitchenRows } = await pool.query<{ id: string; city: string }>(
+    `SELECT id, city FROM kitchens WHERE is_active = true ORDER BY name`,
+  );
+  if (kitchenRows.length === 0) {
+    throw new Error("No active kitchens found — seed kitchens before importing (every property needs one).");
+  }
+  const kitchenByCity = new Map<string, string>();
+  for (const k of kitchenRows) kitchenByCity.set((k.city || "").trim().toLowerCase(), k.id);
+  const fallbackKitchenId = kitchenRows[0]!.id;
+  const NCR_TO_DELHI = new Set(["noida", "greater noida", "ghaziabad", "faridabad", "jaipur"]);
+  function resolveKitchenId(city: string): string {
+    const c = (city || "").trim().toLowerCase();
+    if (kitchenByCity.has(c)) return kitchenByCity.get(c)!;
+    if (NCR_TO_DELHI.has(c)) return kitchenByCity.get("new delhi") ?? kitchenByCity.get("delhi") ?? fallbackKitchenId;
+    if (c === "gurgaon" || c === "gurugram") return kitchenByCity.get("gurugram") ?? kitchenByCity.get("gurgaon") ?? fallbackKitchenId;
+    return fallbackKitchenId;
+  }
+
   let propsCreated = 0;
   let propsUpdated = 0;
   let geoMissing = 0;
@@ -216,6 +246,8 @@ async function main() {
         id: propertyId,
         code,
         name: p.name,
+        brand: brandForName(p.name),
+        kitchenId: resolveKitchenId(p.city),
         address,
         city: p.city,
         state,
@@ -235,6 +267,8 @@ async function main() {
         .update(propertiesTable)
         .set({
           name: p.name,
+          brand: brandForName(p.name),
+          kitchenId: resolveKitchenId(p.city),
           address,
           city: p.city,
           state,
