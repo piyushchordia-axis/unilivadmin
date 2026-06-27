@@ -67,7 +67,10 @@ async function buildAll() {
       "@mikro-orm/*",
       "@grpc/*",
       "@swc/*",
-      "@aws-sdk/*",
+      // NOTE: @aws-sdk/* is intentionally NOT externalized — the api runtime image
+      // ships no node_modules (self-contained esbuild bundle), so the AWS SDK
+      // (S3/R2 storage in @workspace/storage, SES in notify-core) must be bundled
+      // in, not left as an unresolvable external import. It's pure JS, bundles fine.
       "@azure/*",
       "@opentelemetry/*",
       "@google-cloud/*",
