@@ -67,6 +67,31 @@ interface DataTableProps<TData, TValue> {
    * grow to its natural height. Defaults to `"58vh"`.
    */
   maxBodyHeight?: string | false
+  /**
+   * localStorage key (sans prefix) under which the Columns picker's visibility
+   * choices persist. When omitted, a stable key is derived from the page path
+   * (record ids stripped) plus the table's column ids — so every table gets
+   * persistence per logical table without wiring a key at each call site.
+   */
+  columnsStorageKey?: string
+}
+
+const COLUMNS_STORE_PREFIX = "uniliv_table_columns_"
+
+const colId = (c: ColumnDef<unknown, unknown>): string =>
+  String(c.id ?? (c as { accessorKey?: unknown }).accessorKey ?? "")
+
+/** Stable per-table identity: pathname with id-like segments (uuids / numbers)
+ *  stripped, plus the column-id signature — distinguishes multiple tables on
+ *  one page while sharing one key across all records of a detail page. */
+function deriveColumnsKey(columns: ColumnDef<unknown, unknown>[]): string {
+  const path = window.location.pathname
+    .split("/")
+    .filter(Boolean)
+    .filter((seg) => !/^\d+$/.test(seg) && !/^[0-9a-f]{8}-[0-9a-f]{4}-/i.test(seg))
+    .join("/")
+  const sig = columns.map(colId).filter(Boolean).join(",")
+  return `${path}::${sig}`
 }
 
 export function DataTable<TData, TValue>({
@@ -83,10 +108,44 @@ export function DataTable<TData, TValue>({
   exportTitle,
   exportPropertyName = null,
   maxBodyHeight = "58vh",
+  columnsStorageKey,
 }: DataTableProps<TData, TValue>) {
   const [sorting, setSorting] = React.useState<SortingState>([])
   const [columnFilters, setColumnFilters] = React.useState<ColumnFiltersState>([])
-  const [columnVisibility, setColumnVisibility] = React.useState<VisibilityState>({})
+  const storageKey =
+    COLUMNS_STORE_PREFIX +
+    (columnsStorageKey ?? deriveColumnsKey(columns as ColumnDef<unknown, unknown>[]))
+  // Columns-picker choices persist in the browser, per table (see storageKey).
+  // Entries are validated against the current column ids so renamed/removed
+  // columns never resurrect stale state.
+  const [columnVisibility, setColumnVisibility] = React.useState<VisibilityState>(() => {
+    try {
+      const raw = localStorage.getItem(storageKey)
+      if (!raw) return {}
+      const parsed: unknown = JSON.parse(raw)
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {}
+      const valid = new Set(
+        (columns as ColumnDef<unknown, unknown>[]).map(colId).filter(Boolean),
+      )
+      return Object.fromEntries(
+        Object.entries(parsed).filter(([k, v]) => valid.has(k) && typeof v === "boolean"),
+      ) as VisibilityState
+    } catch {
+      return {}
+    }
+  })
+  React.useEffect(() => {
+    try {
+      // Default visibility is "shown", so only `false` entries carry meaning —
+      // persisting just those lets the key disappear once a table is back to
+      // its default column set.
+      const hidden = Object.fromEntries(
+        Object.entries(columnVisibility).filter(([, v]) => v === false),
+      )
+      if (Object.keys(hidden).length === 0) localStorage.removeItem(storageKey)
+      else localStorage.setItem(storageKey, JSON.stringify(hidden))
+    } catch { /* storage unavailable — persistence is best-effort */ }
+  }, [columnVisibility, storageKey])
   const [rowSelection, setRowSelection] = React.useState({})
 
   const table = useReactTable({
