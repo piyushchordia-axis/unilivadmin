@@ -5,13 +5,15 @@ import {
   BookOpen, CreditCard, Shield, Settings, BarChart3,
   Repeat, BellRing, Landmark, Receipt, Wrench, Zap, ClipboardCheck, Radio, Wallet,
   UtensilsCrossed, ListOrdered, FilePlus2, Soup, Send, CheckCircle2, Trash2, SlidersHorizontal,
-  Network, Home,
+  Network, Home, LayoutGrid,
   DoorOpen, CalendarCheck, CalendarX, LineChart, Recycle, Database, ScrollText,
   type LucideIcon,
 } from "lucide-react"
 import { type Module } from "@/lib/permissions"
 
-export type NavItem = { title: string; href: string; icon: LucideIcon; module: Module }
+/** `module` gates the item to roles that can view it; an item without a module
+ *  (e.g. the All Modules launcher) is visible to every signed-in user. */
+export type NavItem = { title: string; href: string; icon: LucideIcon; module?: Module }
 export type NavGroup = { title: string; items: NavItem[] }
 
 export const navGroups: NavGroup[] = [
@@ -23,6 +25,7 @@ export const navGroups: NavGroup[] = [
   // above the rest of the navigation, while Dashboard/Executive remain inside
   // the collapsible Overview group below.
   { title: "Home", items: [
+    { title: "All Modules", href: "/apps", icon: LayoutGrid },
     { title: "Home", href: "/home", icon: Home, module: "FOOD_DASHBOARD" },
   ]},
   { title: "Overview", items: [

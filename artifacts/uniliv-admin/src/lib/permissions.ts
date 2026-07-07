@@ -125,35 +125,12 @@ export const isSuperAdminRole = (role: UserRole | undefined): boolean =>
   role === "SUPER_ADMIN" || role === "OPS_EXCELLENCE";
 
 /**
- * Where a freshly signed-in user should land, based on their role. Each role
- * goes to the module it actually works in, so nobody is dropped onto the
- * super-admin operations dashboard by accident. Admin/ops/audit roles (which
- * legitimately read the ops overview) fall through to "/".
+ * Where a freshly signed-in user lands: the app launcher (/apps). Every role
+ * sees a permission-filtered grid of its modules there and picks where to
+ * work, so nobody is dropped onto a dashboard they can't use.
  */
-export function homeForRole(role: UserRole | undefined): string {
-  if (!role) return "/";
-  const HOME: Partial<Record<UserRole, string>> = {
-    HR_MANAGER: "/employees",
-    PROCUREMENT_MANAGER: "/indents",
-    KITCHEN_MANAGER: "/recipes",
-    PROJECTS_MANAGER: "/property-leads",
-    PROPERTY_ACQUISITION: "/property-leads",
-    FINANCE: "/dashboard/executive",
-    SALES_EXECUTIVE: "/leads",
-    UNIT_LEAD: "/home",
-    CLUSTER_MANAGER: "/food/dashboard",
-    CITY_HEAD: "/food/dashboard",
-    ZONAL_HEAD: "/food/dashboard",
-    // B3-24: OPS_EXCELLENCE = super-admin parity, so it lands on the same "/" overview.
-    SENIOR_VICE_PRESIDENT: "/food/dashboard",
-    FNB_SUPERVISOR: "/food/dashboard",
-    FNB_MANAGER: "/food/dashboard",
-    FNB_ZONAL_HEAD: "/food/dashboard",
-  };
-  if (HOME[role]) return HOME[role]!;
-  if (can(role, "DASHBOARD", "view")) return "/";
-  if (can(role, "FOOD_DASHBOARD", "view")) return "/food/dashboard";
-  return "/";
+export function homeForRole(_role: UserRole | undefined): string {
+  return "/apps";
 }
 
 export const PATH_TO_MODULE: Array<[RegExp, Module]> = [

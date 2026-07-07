@@ -346,7 +346,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
   const filteredGroups = React.useMemo(
     () => navGroups
-      .map((g) => ({ ...g, items: g.items.filter((i) => can(i.module, "view")) }))
+      .map((g) => ({ ...g, items: g.items.filter((i) => !i.module || can(i.module, "view")) }))
       .filter((g) => g.items.length > 0),
     [can],
   )

@@ -78,6 +78,7 @@ import FoodTrack from "@/pages/food-track";
 import FoodGuests from "@/pages/food-guests";
 import Masters from "@/pages/masters";
 import MasterTable from "@/pages/master-table";
+import AppLauncher from "@/pages/apps";
 
 const queryClient = new QueryClient({
   // When any query 401s (expired token), recover once: silently refresh and
@@ -128,6 +129,9 @@ function Router() {
       <Route path="/esign/sign/:token" component={EsignSignPage} />
       <Route path="/m/:token" component={SharedMenuPage} />
       <Route path="/">{() => <ProtectedRoute component={Dashboard} />}</Route>
+      {/* App launcher — universal post-login landing; deliberately absent from
+          PATH_TO_MODULE so every authenticated role can open it. */}
+      <Route path="/apps">{() => <ProtectedRoute component={AppLauncher} />}</Route>
       <Route path="/home">{() => <ProtectedRoute component={UnitLeadHome} />}</Route>
       <Route path="/properties">{() => <ProtectedRoute component={Properties} />}</Route>
       <Route path="/properties/:id">{() => <ProtectedRoute component={PropertyDetail} />}</Route>
