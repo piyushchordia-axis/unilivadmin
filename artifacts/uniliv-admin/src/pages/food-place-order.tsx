@@ -777,7 +777,7 @@ export default function FoodPlaceOrder() {
         </div>
       )}
 
-      <div className={cn("mx-auto w-full max-w-3xl space-y-5", showStatus && "hidden")}>
+      <div className={cn("mx-auto w-full max-w-3xl space-y-5", selection.mealCount > 0 && "pb-16", showStatus && "hidden")}>
           {/* Draft-restored notice — edits from a previous visit were applied. */}
           {draftRestoredAt && draftSavedAt && (
             <div className="flex flex-wrap items-center gap-2.5 rounded-lg border border-accent/30 bg-accent/5 px-4 py-2.5 text-sm">
@@ -991,10 +991,13 @@ export default function FoodPlaceOrder() {
               </Accordion>
             </div>
           )}
-        {/* Place order action bar — totals + CTA. The per-meal dishes live in the
-            stacked sections above, so we don't repeat the dish list here. */}
+        {/* Place order action bar — a fixed dock attached to the bottom of the
+            window, spanning the full content area (offset past the sidebar on
+            desktop). The builder column carries matching bottom padding so the
+            last rows can always scroll clear of it. */}
         {selection.mealCount > 0 && (
-          <div className="flex items-center justify-between gap-3 rounded-xl border bg-card px-4 py-3">
+          <div className="fixed inset-x-0 bottom-0 z-20 border-t bg-card shadow-[0_-8px_20px_-12px_rgba(0,0,0,0.25)] md:left-64">
+            <div className="mx-auto flex w-full max-w-3xl items-center justify-between gap-3 px-4 py-3 sm:px-6">
             <div className="text-sm">
               <span className="text-muted-foreground">{selection.mealCount} meal{selection.mealCount === 1 ? "" : "s"} · </span>
               <span className="font-semibold">{selection.itemCount} item{selection.itemCount === 1 ? "" : "s"}</span>
@@ -1009,6 +1012,7 @@ export default function FoodPlaceOrder() {
               Place order
               {selection.itemCount > 0 && <Badge variant="secondary" className="ml-2 bg-white/20 text-white border-0">{selection.itemCount}</Badge>}
             </Button>
+            </div>
           </div>
         )}
       </div>
