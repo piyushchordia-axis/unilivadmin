@@ -7,6 +7,8 @@ import {
   UtensilsCrossed, ListOrdered, FilePlus2, Soup, Send, CheckCircle2, Trash2, SlidersHorizontal,
   Network, Home, LayoutGrid,
   DoorOpen, CalendarCheck, CalendarX, LineChart, Recycle, Database, ScrollText,
+  Gauge, AlertTriangle, ListChecks, Kanban, BadgeCheck, FileBarChart,
+  CalendarClock, FileStack, Library,
   type LucideIcon,
 } from "lucide-react"
 import { type Module } from "@/lib/permissions"
@@ -25,14 +27,11 @@ export const navGroups: NavGroup[] = [
     { title: "Home", href: "/apps", icon: LayoutGrid },
   ]},
   { title: "Overview", items: [
-    { title: "My Dashboard", href: "/home", icon: Home, module: "FOOD_DASHBOARD" },
     { title: "Dashboard", href: "/dashboard", icon: LayoutDashboard, module: "DASHBOARD" },
     { title: "Executive", href: "/dashboard/executive", icon: BarChart3, module: "EXECUTIVE_DASHBOARD" },
   ]},
   { title: "Properties", items: [
-    { title: "My Properties", href: "/food/my-properties", icon: Home, module: "FOOD_DASHBOARD" },
     { title: "Properties", href: "/properties", icon: Building2, module: "PROPERTIES" },
-    { title: "Active Guests", href: "/food/guests", icon: Users, module: "FOOD_DASHBOARD" },
   ]},
   { title: "Operations", items: [
     { title: "Rooms", href: "/rooms", icon: DoorOpen, module: "PROPERTIES" },
@@ -64,6 +63,9 @@ export const navGroups: NavGroup[] = [
     { title: "Menu Planning", href: "/menu-planning", icon: CalendarDays, module: "MENU_PLANNING" },
   ]},
   { title: "Food Ordering", items: [
+    { title: "My Dashboard", href: "/home", icon: Home, module: "FOOD_DASHBOARD" },
+    { title: "My Properties", href: "/food/my-properties", icon: Building2, module: "FOOD_DASHBOARD" },
+    { title: "Active Guests", href: "/food/guests", icon: Users, module: "FOOD_DASHBOARD" },
     { title: "Food Overview", href: "/food/dashboard", icon: UtensilsCrossed, module: "FOOD_DASHBOARD" },
     { title: "Organization", href: "/food/organization", icon: Network, module: "FOOD_ORG" },
     { title: "All Orders", href: "/food/orders", icon: ListOrdered, module: "FOOD_ALL_ORDERS" },
@@ -75,6 +77,20 @@ export const navGroups: NavGroup[] = [
     { title: "Reports", href: "/food/reports", icon: BarChart3, module: "FOOD_REPORTS" },
     { title: "Waste Analytics", href: "/food/waste-analytics", icon: Recycle, module: "FOOD_REPORTS" },
     { title: "Settings", href: "/food/settings", icon: SlidersHorizontal, module: "FOOD_SETTINGS" },
+  ]},
+  { title: "Audits", items: [
+    { title: "Audit Dashboard", href: "/audits/dashboard", icon: Gauge, module: "AUDIT_DASHBOARD" },
+    { title: "My Audits", href: "/audits/my", icon: ClipboardCheck, module: "AUDIT_EXECUTION" },
+    { title: "My Findings", href: "/audits/findings", icon: AlertTriangle, module: "AUDIT_FINDINGS" },
+    { title: "Audit Register", href: "/audits/register", icon: ListChecks, module: "AUDIT_REGISTER" },
+    { title: "NC Board", href: "/audits/ncs", icon: Kanban, module: "AUDIT_NCS" },
+    { title: "Review", href: "/audits/review", icon: BadgeCheck, module: "AUDIT_REVIEW" },
+    { title: "Reports", href: "/audits/reports", icon: FileBarChart, module: "AUDIT_REPORTS" },
+    { title: "Schedules", href: "/audits/schedules", icon: CalendarClock, module: "AUDIT_SCHEDULES" },
+    { title: "Templates", href: "/audits/templates", icon: FileStack, module: "AUDIT_TEMPLATES" },
+    { title: "Question Bank", href: "/audits/question-bank", icon: Library, module: "AUDIT_TEMPLATES" },
+    { title: "Audit Admin", href: "/audits/admin", icon: SlidersHorizontal, module: "AUDIT_ADMIN" },
+    { title: "Trail Explorer", href: "/audits/trail", icon: ScrollText, module: "AUDIT_TRAIL" },
   ]},
   { title: "Growth", items: [
     { title: "Sales Dashboard", href: "/sales/dashboard", icon: LineChart, module: "SALES_DASHBOARD" },

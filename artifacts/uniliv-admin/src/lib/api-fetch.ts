@@ -110,7 +110,16 @@ export async function apiFetch<T = unknown>(
 
   const json = await res.json().catch(() => null);
   if (!res.ok || (json && json.success === false)) {
-    throw new Error(json?.error || `Request failed (${res.status})`);
+    // Carry the HTTP status and any structured `details` payload (e.g. 422
+    // validation reports) so callers can render row-level errors, not just
+    // the message string.
+    const err = new Error(json?.error || `Request failed (${res.status})`) as Error & {
+      status?: number;
+      details?: unknown;
+    };
+    err.status = res.status;
+    if (json?.details !== undefined) err.details = json.details;
+    throw err;
   }
   return json as T;
 }

@@ -308,7 +308,19 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
   // The sidebar shows only the active route's module (plus the pinned links);
   // there is no group accordion — modules are switched via the /apps launcher.
-  const activeGroup = active?.group ?? null
+  //
+  // Detail/sub pages whose exact path isn't a nav item (e.g. /audits/:id, whose
+  // nav items are /audits/register, /audits/my, … with no bare /audits item)
+  // won't match above and would collapse the sidebar to just Home. Fall back to
+  // the route's module (via PATH_TO_MODULE) and show that module's group, so the
+  // sidebar stays put on every detail screen across all modules.
+  const activeGroup = React.useMemo(() => {
+    if (active) return active.group
+    const mod = moduleForPath(location)
+    if (!mod) return null
+    const group = filteredGroups.find((g) => g.items.some((i) => i.module === mod))
+    return group?.title ?? null
+  }, [active, location, filteredGroups])
 
   // The launcher (/apps) is a full-width page: no sidebar, logo in the header.
   const isLauncher = location === "/apps"

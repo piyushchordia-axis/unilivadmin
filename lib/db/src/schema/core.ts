@@ -53,6 +53,9 @@ export const userRoleEnum = pgEnum("user_role", [
   "FNB_SUPERVISOR",
   "FNB_MANAGER",
   "FNB_ZONAL_HEAD",
+  // ── Audit & Inspection (FRD §2.2 7-role model) — appended last: pg enums only
+  // support adding values, and appending avoids reorder migrations. ──
+  "CUSTOMER_EXPERIENCE",
 ]);
 export const residentStatusEnum = pgEnum("resident_status", [
   "ACTIVE",

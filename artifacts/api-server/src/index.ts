@@ -4,6 +4,16 @@ import { logger } from "./lib/logger";
 import { pool } from "@workspace/db";
 import { runSlaCheck } from "./routes/complaints.js";
 import { runDueBillingCycles, runDueReminders } from "./routes/finance.js";
+import {
+  runAuditMaterializer,
+  runAuditReminders,
+  runAuditOverdueCheck,
+  runNcSlaCheck,
+  runAuditAutoClose,
+  runGrantExpirySweep,
+  runAuditDigests,
+} from "./lib/audit-jobs.js";
+import { runReportWorker } from "./lib/audit-report-service.js";
 import { RUN_SCHEDULERS } from "./config/env.js";
 
 const rawPort = process.env["PORT"];
@@ -55,7 +65,23 @@ const server: Server = app.listen(port, "0.0.0.0", (err?: Error) => {
     runDueBillingCycles().catch((e) => logger.error({ err: e }, "Billing cycle scheduler failed (initial)"));
     runDueReminders().catch((e) => logger.error({ err: e }, "Reminder scheduler failed (initial)"));
 
-    scheduledTimers.push(slaInterval, financeInterval);
+    // Audit & Inspection jobs (FA-05 / FRD-NTF-02 / spec §4.1): occurrence
+    // materializer, pre-occurrence reminders, overdue flagging — every 5 min
+    // (+ once on boot for restart catch-up per NFR-04; idempotent by design).
+    const auditJobs = () => {
+      runAuditMaterializer().catch((e) => logger.error({ err: e }, "Audit materializer failed"));
+      runAuditReminders().catch((e) => logger.error({ err: e }, "Audit reminders failed"));
+      runAuditOverdueCheck().catch((e) => logger.error({ err: e }, "Audit overdue check failed"));
+      runNcSlaCheck().catch((e) => logger.error({ err: e }, "NC SLA check failed"));
+      runAuditAutoClose().catch((e) => logger.error({ err: e }, "Audit auto-close failed"));
+      runReportWorker().catch((e) => logger.error({ err: e }, "Audit report worker failed"));
+      runGrantExpirySweep().catch((e) => logger.error({ err: e }, "Grant expiry sweep failed"));
+      runAuditDigests().catch((e) => logger.error({ err: e }, "Audit digest failed"));
+    };
+    const auditInterval = setInterval(auditJobs, 5 * 60 * 1000);
+    auditJobs();
+
+    scheduledTimers.push(slaInterval, financeInterval, auditInterval);
   }
 });
 

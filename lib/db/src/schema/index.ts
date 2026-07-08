@@ -11,3 +11,5 @@ export * from "./kyc";
 export * from "./finance";
 export * from "./operations";
 export * from "./wallet";
+export * from "./audit-config";
+export * from "./audit";
