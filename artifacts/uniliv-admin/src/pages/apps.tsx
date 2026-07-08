@@ -39,6 +39,28 @@ const MODULE_TINT: Record<string, string> = {
   Settings: "bg-slate-500/10 text-slate-600 dark:text-slate-400",
 };
 
+// One-line explanation per module — shown on the launcher tile in place of a
+// page count (icon + description, like the reference app).
+const MODULE_DESC: Record<string, string> = {
+  Overview: "Dashboards and executive insights",
+  Properties: "Property portfolio and details",
+  Operations: "Rooms, residents, complaints, laundry and facilities",
+  People: "Employees, attendance, recruitment and learning",
+  "Supply Chain": "Vendors, indents, purchase orders and inventory",
+  "Kitchen & Menu": "Recipes and menu planning",
+  "Food Ordering": "Orders, kitchen, dispatch and delivery",
+  Audits: "Inspections, findings, reviews and reports",
+  Growth: "Sales pipeline and property leads",
+  Finance: "Ledger, payments, billing and expenses",
+  Settings: "Masters, users, roles and configuration",
+};
+
+// Preferred landing page when a module tile is clicked (falls back to the
+// module's first accessible page). Food opens its dashboard, not /home.
+const MODULE_HOME: Record<string, string> = {
+  "Food Ordering": "/food/dashboard",
+};
+
 type ModuleCard = { title: string; items: NavItem[] };
 
 function CardHeader({ m }: { m: ModuleCard }) {
@@ -50,7 +72,7 @@ function CardHeader({ m }: { m: ModuleCard }) {
       </span>
       <span className="min-w-0">
         <span className="block truncate font-display text-sm font-semibold transition-colors group-hover:text-accent">{m.title}</span>
-        <span className="text-xs text-muted-foreground">{m.items.length} page{m.items.length === 1 ? "" : "s"}</span>
+        <span className="line-clamp-2 text-xs text-muted-foreground">{MODULE_DESC[m.title] ?? ""}</span>
       </span>
       <ChevronRight className="ml-auto h-4 w-4 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
     </span>
@@ -123,7 +145,7 @@ export default function AppLauncher() {
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {visible.map((m) => (
             <div key={m.title} className="rounded-xl border bg-card p-4">
-              <Link href={m.items[0].href}>
+              <Link href={m.items.find((i) => i.href === MODULE_HOME[m.title])?.href ?? m.items[0].href}>
                 <CardHeader m={m} />
               </Link>
               {m.matches.length > 0 && (

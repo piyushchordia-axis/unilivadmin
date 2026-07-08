@@ -26,6 +26,8 @@ export const navGroups: NavGroup[] = [
   { title: "Home", items: [
     { title: "Home", href: "/apps", icon: LayoutGrid },
   ]},
+  /* Hidden for now (PO, 08-Jul): Dashboard + Properties top-level modules.
+     Routes still exist; just removed from the launcher/sidebar. Re-add to restore.
   { title: "Overview", items: [
     { title: "Dashboard", href: "/dashboard", icon: LayoutDashboard, module: "DASHBOARD" },
     { title: "Executive", href: "/dashboard/executive", icon: BarChart3, module: "EXECUTIVE_DASHBOARD" },
@@ -33,6 +35,7 @@ export const navGroups: NavGroup[] = [
   { title: "Properties", items: [
     { title: "Properties", href: "/properties", icon: Building2, module: "PROPERTIES" },
   ]},
+  */
   { title: "Operations", items: [
     { title: "Rooms", href: "/rooms", icon: DoorOpen, module: "PROPERTIES" },
     { title: "Residents", href: "/residents", icon: Users, module: "RESIDENTS" },
