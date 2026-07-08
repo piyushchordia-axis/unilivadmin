@@ -420,7 +420,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
       <div className="flex-1 flex flex-col h-full overflow-hidden">
         <header className="h-16 bg-card border-b border-border grid grid-cols-[1fr_auto_1fr] items-center gap-3 px-4 sm:px-6 shrink-0 z-10">
-          <div className="flex items-center gap-3 min-w-0">
+          <div className="col-start-1 flex items-center gap-3 min-w-0">
             {isLauncher ? (
               /* The launcher has no sidebar, so the brand lives in the header here. */
               <Logo personaLabel={personaLabel} />
@@ -455,7 +455,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
             <kbd className="pointer-events-none hidden lg:inline-flex h-5 select-none items-center gap-0.5 rounded border border-border bg-card px-1.5 font-mono text-[10px] font-medium text-muted-foreground">⌘K</kbd>
           </button>
 
-          <div className="flex items-center justify-end gap-2">
+          <div className="col-start-3 flex items-center justify-end gap-2">
             <ThemeToggle />
             <NotificationBell />
             {/* Property switcher hidden — one property per unit lead, so the scope
