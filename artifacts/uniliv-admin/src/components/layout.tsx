@@ -192,11 +192,13 @@ function SidebarContent({
 }) {
   return (
     <>
+      {/* Property switcher hidden — one property per unit lead, so the scope
+          picker adds no value (re-enable if multi-property scoping returns).
       {showPropertyScope && (
         <div className="px-4 pb-4 border-b border-sidebar-border">
           <PropertyScope properties={properties} propertyId={propertyId} onSelect={onSelectProperty} className="flex w-full" />
         </div>
-      )}
+      )} */}
       <div className="flex-1 overflow-y-auto py-3 scrollbar-thin">
         <nav className="px-3 space-y-1">
           {/* Pinned links (the "Home" group: the module launcher) — always visible. */}
@@ -456,6 +458,8 @@ export function Layout({ children }: { children: React.ReactNode }) {
           <div className="flex items-center justify-end gap-2">
             <ThemeToggle />
             <NotificationBell />
+            {/* Property switcher hidden — one property per unit lead, so the scope
+                picker adds no value (re-enable if multi-property scoping returns).
             <PropertyScope
               tone="header"
               properties={properties}
@@ -463,6 +467,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
               onSelect={setPropertyId}
               className="hidden md:flex w-44 lg:w-56"
             />
+            */}
             <HeaderUserMenu name={me?.name} subtitle={personaLabel} onLogout={handleLogout} />
           </div>
         </header>
