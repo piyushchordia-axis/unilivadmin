@@ -46,6 +46,12 @@
   --color-info: var(--info);
   --color-info-foreground: #FFFFFF;
 
+  /* Soft tinted surfaces for pills/banners (prototype `--*-bg` tokens). */
+  --color-success-soft: var(--success-bg);
+  --color-warning-soft: var(--warning-bg);
+  --color-danger-soft: var(--danger-bg);
+  --color-info-soft: var(--info-bg);
+
   --color-sidebar: var(--sidebar-bg);
   --color-sidebar-foreground: var(--sidebar-fg);
   --color-sidebar-border: var(--sidebar-border);
@@ -84,6 +90,13 @@
   --warning: #9A6206;
   --danger: #C73B33;
   --info: #3666CF;
+
+  /* Soft semantic surfaces — tinted pill/banner backgrounds (from the design
+     prototype: status pills, mismatch highlights, delivered banners). */
+  --success-bg: #E7F3EE;
+  --warning-bg: #F7EEDD;
+  --danger-bg: #F9E9E8;
+  --info-bg: #E9EFFA;
 
   /* Warm neutral surfaces (flat — separated by hairlines, not shadows) */
   --surface: #FCF9F6;
@@ -144,6 +157,11 @@
   --warning: #E0A33A;
   --danger: #F0857C;
   --info: #6FA0F0;
+
+  --success-bg: #12291F;
+  --warning-bg: #2E2410;
+  --danger-bg: #331715;
+  --info-bg: #14213A;
 
   --sidebar-bg: #181210;
   --sidebar-fg: rgba(255, 255, 255, 0.74);
@@ -219,6 +237,18 @@
     font-variant-numeric: tabular-nums;
   }
 
+  /* Motion — gamified redesign. Screen roots fade up on mount; celebration
+     bursts fall; status dots pulse while something is live. */
+  .animate-fade-up {
+    animation: fade-up 0.3s ease both;
+  }
+  .animate-pop-in {
+    animation: pop-in 0.35s ease both;
+  }
+  .animate-pulse-dot {
+    animation: pulse-dot 1.6s ease-in-out infinite;
+  }
+
   /* Real hover / active feedback (the Replit fork left these undefined). */
   .hover-elevate,
   .active-elevate-2 {
@@ -239,5 +269,49 @@
   }
   .active-elevate-2:active::after {
     background: var(--elevate-2);
+  }
+}
+
+/* Keyframes for the gamified motion utilities above. */
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes pop-in {
+  0% {
+    transform: scale(0.4);
+    opacity: 0;
+  }
+  70% {
+    transform: scale(1.12);
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+@keyframes pulse-dot {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+@keyframes confetti-fall {
+  0% {
+    transform: translateY(-10vh) rotate(0deg);
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(105vh) rotate(720deg);
+    opacity: 0.9;
   }
 }

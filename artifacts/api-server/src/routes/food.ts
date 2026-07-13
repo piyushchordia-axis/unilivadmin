@@ -38,6 +38,7 @@ import {
   foodBrandsTable,
   complaintsTable,
   agencyKitchensTable,
+  foodOrderDraftsTable,
 } from "@workspace/db";
 import { and, eq, or, ilike, sql, desc, asc, gte, lte, lt, inArray, isNull, isNotNull } from "drizzle-orm";
 import type { AnyColumn } from "drizzle-orm";
@@ -69,7 +70,7 @@ import { toCsv, toPdf, fmtDate, fmtDateTime, fileDateStamp, sanitizeForFilename 
 // Shared order cut-off enforcement (single source of truth lives in food-ops.ts,
 // alongside resolveCutoff()/atTime()) so /orders and /order-batches stay consistent.
 import { checkOrderCutoff, createDispatchForOrders } from "./food-ops.js";
-import { ymdToIstDayStart } from "../lib/tz.js";
+import { ymdToIstDayStart, todayIstYmd } from "../lib/tz.js";
 
 export const foodRouter: Router = Router();
 
@@ -506,6 +507,119 @@ foodRouter.post("/orders", authenticate, authorize("FOOD_PLACE_ORDER", "create")
     });
 
     res.status(201).json({ success: true, data: { ...order, totalQuantity: order.totalQuantity != null ? Number(order.totalQuantity) : null, items } });
+  } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
+});
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * Order drafts (server-side, per USER)
+ *
+ * Persists a unit lead's in-progress Place-Order form so drafts survive
+ * browser/device switches. Keyed (userId, propertyId, serviceDate) — always
+ * scoped to the AUTHENTICATED user; the payload is opaque frontend state
+ * (size-capped, never interpreted server-side). serviceDate is a bare
+ * 'yyyy-MM-dd' IST calendar day, anchored to 00:00 IST exactly like
+ * food_orders.service_date so upsert/lookup equality is exact.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/** Max serialized draft payload size (bytes of JSON text). */
+const DRAFT_PAYLOAD_MAX_BYTES = 64 * 1024;
+
+const zYmd = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "serviceDate must be yyyy-MM-dd");
+
+const putDraftSchema = z.object({
+  propertyId: zId,
+  serviceDate: zYmd,
+  payload: z.unknown(),
+}).passthrough();
+
+/** Parses the ?propertyId=&serviceDate= pair shared by GET/DELETE; 400s on failure. */
+function parseDraftKey(req: { query: Record<string, unknown> }, res: {
+  status: (code: number) => { json: (body: unknown) => void };
+}): { propertyId: string; serviceDate: Date } | null {
+  const propertyId = req.query["propertyId"];
+  const sdRaw = req.query["serviceDate"];
+  if (typeof propertyId !== "string" || !propertyId) {
+    res.status(400).json({ success: false, error: "propertyId required" });
+    return null;
+  }
+  if (typeof sdRaw !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(sdRaw)) {
+    res.status(400).json({ success: false, error: "serviceDate must be yyyy-MM-dd" });
+    return null;
+  }
+  return { propertyId, serviceDate: ymdToIstDayStart(sdRaw) };
+}
+
+foodRouter.get("/order-draft", authenticate, authorize("FOOD_PLACE_ORDER", "create"), async (req, res) => {
+  try {
+    const key = parseDraftKey(req, res);
+    if (!key) return;
+    const [row] = await db.select({
+      payload: foodOrderDraftsTable.payload,
+      updatedAt: foodOrderDraftsTable.updatedAt,
+    }).from(foodOrderDraftsTable).where(and(
+      eq(foodOrderDraftsTable.userId, req.user!.id),
+      eq(foodOrderDraftsTable.propertyId, key.propertyId),
+      eq(foodOrderDraftsTable.serviceDate, key.serviceDate),
+    ));
+    res.json({
+      success: true,
+      data: row ? { payload: row.payload, updatedAt: row.updatedAt.toISOString() } : null,
+    });
+  } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
+});
+
+foodRouter.put("/order-draft", authenticate, authorize("FOOD_PLACE_ORDER", "create"), async (req, res) => {
+  try {
+    if (!validateBody(putDraftSchema, req, res)) return;
+    const { propertyId, serviceDate, payload } = req.body as {
+      propertyId: string; serviceDate: string; payload: unknown;
+    };
+    if (payload === undefined) { res.status(400).json({ success: false, error: "payload required" }); return; }
+    // Cap the stored draft size (opaque jsonb — bound it so drafts can't balloon).
+    if (Buffer.byteLength(JSON.stringify(payload), "utf8") > DRAFT_PAYLOAD_MAX_BYTES) {
+      res.status(413).json({ success: false, error: "payload too large (max 64KB)" });
+      return;
+    }
+    const sd = ymdToIstDayStart(serviceDate);
+
+    const ids = await resolveAccessiblePropertyIds(req.user!);
+    if (!isAccessible(propertyId, ids)) { res.status(403).json({ success: false, error: "Property not accessible" }); return; }
+
+    const now = new Date();
+    const [row] = await db.insert(foodOrderDraftsTable).values({
+      id: newId(),
+      userId: req.user!.id,
+      propertyId,
+      serviceDate: sd,
+      payload,
+      updatedAt: now,
+    }).onConflictDoUpdate({
+      target: [foodOrderDraftsTable.userId, foodOrderDraftsTable.propertyId, foodOrderDraftsTable.serviceDate],
+      set: { payload, updatedAt: now },
+    }).returning({ updatedAt: foodOrderDraftsTable.updatedAt });
+
+    // Opportunistic sweep: drop this user's drafts for past IST service days so
+    // stale drafts don't pile up (no cron needed; runs on every save).
+    await db.delete(foodOrderDraftsTable).where(and(
+      eq(foodOrderDraftsTable.userId, req.user!.id),
+      lt(foodOrderDraftsTable.serviceDate, ymdToIstDayStart(todayIstYmd())),
+    ));
+
+    res.json({ success: true, data: { updatedAt: row!.updatedAt.toISOString() } });
+  } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
+});
+
+// Called after a successful order placement to clear the saved draft.
+foodRouter.delete("/order-draft", authenticate, authorize("FOOD_PLACE_ORDER", "create"), async (req, res) => {
+  try {
+    const key = parseDraftKey(req, res);
+    if (!key) return;
+    await db.delete(foodOrderDraftsTable).where(and(
+      eq(foodOrderDraftsTable.userId, req.user!.id),
+      eq(foodOrderDraftsTable.propertyId, key.propertyId),
+      eq(foodOrderDraftsTable.serviceDate, key.serviceDate),
+    ));
+    res.json({ success: true, data: null });
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 

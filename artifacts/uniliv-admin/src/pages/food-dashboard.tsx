@@ -1,652 +1,1495 @@
 import * as React from "react";
-import { useLocation, Link } from "wouter";
-import { useQuery } from "@tanstack/react-query";
-import { format, subDays } from "date-fns";
+import { Link } from "wouter";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { addDays, differenceInCalendarDays, differenceInMinutes, format, parseISO, subDays } from "date-fns";
 import {
-  ClipboardList,
-  Package,
-  Truck,
-  PackageCheck,
-  Trash2,
-  ChevronRight,
-  BarChart3,
-  Clock,
-  LayoutDashboard,
-  Compass,
-  Timer,
-  Scale,
-  AlertTriangle,
-  type LucideIcon,
+  AlertTriangle, Check, ChevronLeft, ChevronRight, Clock, History, Lock, MapPin, Pencil, Truck, Trash2,
 } from "lucide-react";
-import { PageHeader } from "@/components/page-header";
-import { GlobalPropertyScopeBanner } from "@/components/property-scope-banner";
-import { StatCard } from "@/components/stat-card";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { DatePicker } from "@/components/ui/date-picker";
-import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { BoundedScroll } from "@/components/ui/bounded-scroll";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
-import {
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Cell,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
+import { useToast } from "@/hooks/use-toast";
+import { useConfetti } from "@/components/ui/confetti";
+import { useAppStore } from "@/lib/store";
+import { usePermissions } from "@/lib/use-permissions";
+import { cn } from "@/lib/utils";
 import {
   foodApi,
   foodKeys,
-  BRANDS,
   MEAL_LABEL,
-  type DashboardData,
-  type FoodLookups,
-  type Kpi,
-  type Cutoff,
-  type VariancePeriod,
-  type WastePendingRow,
+  MEAL_EMOJI,
+  shortMeal,
+  dishEmoji,
+  isFractionalUnit,
+  fmtQty,
+  type FoodOrder,
+  type MealType,
+  type OrderDetail,
+  type OrderStatus,
 } from "@/lib/food-api";
-import { useAppStore } from "@/lib/store";
-import { usePermissions } from "@/lib/use-permissions";
 
-// Status chart shows the full lifecycle distribution, scoped to the SAME
-// property / brand / date filters as the KPI cards above.
-const CHART_STATUSES = ["PLACED", "PREPARING", "DISPATCHED", "DELIVERED", "CANCELLED"] as const;
-const STATUS_COLORS: Record<string, string> = {
-  PLACED: "var(--info)",
-  PREPARING: "var(--warning)",
-  DISPATCHED: "var(--pop)",
-  DELIVERED: "var(--success)",
-  CANCELLED: "var(--destructive)",
+/* ────────────────────────────── helpers ────────────────────────────── */
+
+/** Escalation contact for missed-order incidents. TODO: source from server
+ *  config / the property's cluster manager once such an endpoint exists. */
+const ADMIN_CONTACT_EMAIL = "admin@uniliv.com";
+
+/** Per-dish order-mode override: pin a headcount, an absolute qty, or both. */
+type DishOverride = { qty?: number; persons?: number };
+
+const num = (v: string | null | undefined): number => {
+  const n = v == null ? NaN : parseFloat(v);
+  return Number.isFinite(n) ? n : 0;
 };
 
-const VARIANCE_PERIODS: { key: VariancePeriod; label: string }[] = [
-  { key: "m1", label: "1 month" },
-  { key: "m3", label: "3 months" },
-  { key: "m6", label: "6 months" },
-  { key: "fy", label: "This FY" },
-];
+const fmtTime = (iso: string | null | undefined): string =>
+  iso ? format(parseISO(iso), "h:mm a") : "";
 
-function kpiValue(k?: Kpi): number {
-  return k?.value ?? 0;
-}
-function kpiChange(k?: Kpi): number | undefined {
-  return k?.changePct ?? undefined;
-}
-
-/** Re-renders consumers every `ms` so live countdowns tick. */
-function useTicker(ms: number): void {
-  const [, setTick] = React.useState(0);
+/** Re-render every `ms` so countdowns tick. Countdowns display minute
+ *  granularity, so a 60s tick keeps them honest at half the render cost. */
+function useNow(ms = 60_000): Date {
+  const [now, setNow] = React.useState(() => new Date());
   React.useEffect(() => {
-    const id = setInterval(() => setTick((t) => t + 1), ms);
+    const id = setInterval(() => setNow(new Date()), ms);
     return () => clearInterval(id);
   }, [ms]);
+  return now;
 }
 
-/** "NN min left" (or "<1 min left" / "Expired") from an absolute ISO deadline. */
-function minutesLeftLabel(untilIso: string | null): string {
-  if (!untilIso) return "—";
-  const diffMs = new Date(untilIso).getTime() - Date.now();
-  if (diffMs <= 0) return "Expired";
-  const mins = Math.floor(diffMs / 60000);
-  return mins < 1 ? "<1 min left" : `${mins} min left`;
+/** "Xh Ym" until an ISO deadline (clamped at 0). */
+function untilLabel(iso: string | null | undefined, now: Date): string {
+  if (!iso) return "—";
+  const mins = Math.max(0, differenceInMinutes(parseISO(iso), now));
+  return `${Math.floor(mins / 60)}h ${mins % 60}m`;
 }
+
+/** Journey state of one meal — drives the tab tint + which panel is live.
+ *  done=success, action=needs the user now, cooking=info, waiting=muted. */
+type MealState = "done" | "action-confirm" | "action-waste" | "cooking" | "waiting" | "cancelled" | "none";
+
+const STATE_TINT: Record<MealState, string> = {
+  done: "var(--success)",
+  "action-confirm": "var(--warning)",
+  "action-waste": "var(--pop)",
+  cooking: "var(--info)",
+  waiting: "var(--muted)",
+  cancelled: "var(--muted)",
+  none: "var(--muted)",
+};
+
+const STATE_SHORT: Record<MealState, string> = {
+  done: "Done",
+  "action-confirm": "At gate",
+  "action-waste": "Log waste",
+  cooking: "Cooking",
+  waiting: "Scheduled",
+  cancelled: "Cancelled",
+  none: "Not ordered",
+};
+
+interface MealSlot {
+  mealType: MealType;
+  order: FoodOrder | null;
+  state: MealState;
+  /** Short time shown on the tab ("7:12 AM" / "by 8:00 PM"). */
+  time: string;
+  /** One-line status shown in the detail head. */
+  statusLine: string;
+}
+
+/** Map a real order (or its absence) onto the journey visual state. */
+function slotFor(mealType: MealType, order: FoodOrder | null, now: Date, kitchenName?: string): MealSlot {
+  if (!order) {
+    return { mealType, order, state: "none", time: "—", statusLine: "Not ordered" };
+  }
+  const s = order.status;
+  const wasteOpen =
+    !!order.wasteEditableUntil && parseISO(order.wasteEditableUntil).getTime() > now.getTime();
+  if (s === "CANCELLED" || s === "REJECTED") {
+    return {
+      mealType, order, state: "cancelled",
+      time: fmtTime(order.cancelledAt ?? order.rejectedAt) || "—",
+      statusLine: s === "CANCELLED" ? "Cancelled before the kitchen started" : "Rejected by the kitchen",
+    };
+  }
+  if (s === "DELIVERED") {
+    // Waste already recorded is only knowable from the detail (items); the
+    // caller overrides state to "done" once it has that info.
+    return {
+      mealType, order,
+      state: wasteOpen ? "action-waste" : "done",
+      time: fmtTime(order.deliveredAt) || "—",
+      statusLine: wasteOpen
+        ? "Delivered — record any waste while the window is open"
+        : "Delivered & confirmed",
+    };
+  }
+  if (s === "DISPATCHED") {
+    return {
+      mealType, order, state: "action-confirm",
+      time: fmtTime(order.dispatchedAt) || "now",
+      statusLine: "At your gate — count it in",
+    };
+  }
+  if (s === "PREPARING") {
+    return {
+      mealType, order, state: "cooking",
+      time: order.expectedDeliveryAt ? `by ${fmtTime(order.expectedDeliveryAt)}` : "—",
+      statusLine: kitchenName ? `Cooking at ${kitchenName}` : "Cooking at the kitchen",
+    };
+  }
+  // PLACED / ACCEPTED
+  return {
+    mealType, order, state: "waiting",
+    time: order.expectedDeliveryAt ? `by ${fmtTime(order.expectedDeliveryAt)}` : "—",
+    statusLine: s === "ACCEPTED" ? "Order in — accepted by the kitchen" : "Order in — waiting for the kitchen",
+  };
+}
+
+/** Canonical tracking ladder; events fill in the completed rungs. */
+const LADDER: { status: OrderStatus; label: string }[] = [
+  { status: "PLACED", label: "Order placed" },
+  { status: "ACCEPTED", label: "Accepted by kitchen" },
+  { status: "PREPARING", label: "Preparing" },
+  { status: "DISPATCHED", label: "Dispatched" },
+  { status: "DELIVERED", label: "Delivered & confirmed" },
+];
+
+/* ─────────────────────────── tiny primitives ─────────────────────────── */
+
+function CheckDot({ done, size = 24 }: { done: boolean; size?: number }) {
+  return (
+    <span
+      className={cn(
+        "flex shrink-0 items-center justify-center rounded-full",
+        done ? "bg-success" : "bg-muted border-2 border-border",
+      )}
+      style={{ width: size, height: size }}
+    >
+      {done && <Check className="h-[11px] w-[11px] text-white" strokeWidth={3} />}
+    </span>
+  );
+}
+
+function MiniStepper({
+  value, display, onMinus, onPlus,
+}: {
+  value: number;
+  display: string;
+  onMinus: () => void;
+  onPlus: () => void;
+}) {
+  return (
+    <span className="flex shrink-0 items-center gap-1.5">
+      <button
+        type="button"
+        onClick={onMinus}
+        aria-label="Less"
+        disabled={value <= 0}
+        className="h-[26px] w-[26px] rounded-[7px] border border-border bg-card text-sm text-foreground hover:bg-muted disabled:opacity-40"
+      >
+        −
+      </button>
+      <span className="min-w-[52px] text-center font-mono text-[12.5px] font-semibold tabular-nums">
+        {display}
+      </span>
+      <button
+        type="button"
+        onClick={onPlus}
+        aria-label="More"
+        className="h-[26px] w-[26px] rounded-[7px] border border-border bg-card text-sm text-foreground hover:bg-muted"
+      >
+        +
+      </button>
+    </span>
+  );
+}
+
+function ColumnHead({ icon, label, tone, right }: {
+  icon: React.ReactNode;
+  label: string;
+  tone: string;
+  right?: React.ReactNode;
+}) {
+  return (
+    <div className="mb-3 flex items-center gap-[7px]">
+      <span style={{ color: tone }} className="flex">{icon}</span>
+      <span className="text-[11px] font-bold uppercase tracking-[0.1em]" style={{ color: tone }}>
+        {label}
+      </span>
+      <span className="flex-1" />
+      {right}
+    </div>
+  );
+}
+
+function LockedPanel({ text }: { text: string }) {
+  return (
+    <div className="flex flex-1 flex-col items-center justify-center gap-2.5 px-2 py-[18px] text-center text-muted-foreground">
+      <Lock className="h-[26px] w-[26px]" />
+      <span className="text-[13px]">{text}</span>
+    </div>
+  );
+}
+
+/* ────────────────────────────── the page ────────────────────────────── */
 
 export default function FoodDashboard() {
-  const [, setLocation] = useLocation();
-  const { can } = usePermissions();
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  const { me, can } = usePermissions();
+  const { confetti, fire } = useConfetti();
+  const now = useNow();
 
-  // Selected property from the global app store (null = all properties).
-  const { propertyId: storePropertyId, setPropertyId: setGlobalProperty } = useAppStore();
-  const scopedPropertyId = storePropertyId ?? undefined;
+  const canPlace = can("FOOD_PLACE_ORDER", "create");
+  const canConfirm = can("FOOD_CONFIRM_DELIVERY", "edit") || can("FOOD_CONFIRM_DELIVERY", "create");
+  const canWaste = can("FOOD_WASTE_TRACKING", "edit") || can("FOOD_WASTE_TRACKING", "create");
+  // GET /food/orders(+/:id) is server-gated on FOOD_ALL_ORDERS. Some food
+  // personas (FNB supervisor/manager/zonal head, SVP) hold FOOD_DASHBOARD but
+  // not FOOD_ALL_ORDERS — for them every order query would 403. Gate the
+  // queries and show an honest state instead of silently-empty meal slots.
+  const canReadOrders = can("FOOD_ALL_ORDERS", "view");
 
-  // Today's date as an ISO string, used to scope cut-offs.
-  const todayIso = React.useMemo(() => new Date().toISOString(), []);
-
-  const { data: cutoffs, isLoading: cutoffsLoading } = useQuery<Cutoff[]>({
-    queryKey: foodKeys.cutoffs({ brand: "UNILIV", propertyId: scopedPropertyId, date: todayIso }),
-    queryFn: () =>
-      foodApi.cutoffs({ brand: "UNILIV", propertyId: scopedPropertyId, date: todayIso }),
-  });
-
-  const [propertyId, setPropertyId] = React.useState(storePropertyId ?? "ALL");
-  // Keep the orders-table filter, the banner scope and the sidebar selector as
-  // one: filter changes push to the global store; global changes mirror back.
-  React.useEffect(() => { setPropertyId(storePropertyId ?? "ALL"); }, [storePropertyId]);
-  const selectProperty = (v: string) => {
-    setPropertyId(v);
-    setGlobalProperty(v === "ALL" ? null : v);
-  };
-  const [brand, setBrand] = React.useState("ALL");
-  const [from, setFrom] = React.useState(() => format(subDays(new Date(), 30), "yyyy-MM-dd"));
-  const [to, setTo] = React.useState(() => format(new Date(), "yyyy-MM-dd"));
-  const [variancePeriod, setVariancePeriod] = React.useState<VariancePeriod>("m1");
-
-  const params = React.useMemo(
-    () => ({ propertyId, brand, from, to }),
-    [propertyId, brand, from, to],
-  );
-
-  const { data: lookups } = useQuery<FoodLookups>({
+  /* ── property scope: global store ?? own property ?? sole property ── */
+  const { propertyId: storePropertyId, setPropertyId } = useAppStore();
+  const { data: lookups } = useQuery({
     queryKey: foodKeys.lookups(),
     queryFn: () => foodApi.lookups(),
+    staleTime: 300_000,
   });
   const properties = lookups?.properties ?? [];
+  const propertyId =
+    storePropertyId ??
+    me?.propertyId ??
+    (properties.length === 1 ? properties[0].id : null);
 
-  const { data, isLoading } = useQuery<DashboardData>({
-    queryKey: foodKeys.dashboard(params),
-    queryFn: () => foodApi.dashboard(params),
+  const { data: overview } = useQuery({
+    queryKey: foodKeys.propertyOverview({ propertyId }),
+    queryFn: () => foodApi.propertyOverview({ propertyId: propertyId! }),
+    enabled: !!propertyId,
   });
 
-  const wasteParams = React.useMemo(() => ({ propertyId, brand }), [propertyId, brand]);
-  const { data: wasteRows, isLoading: wasteLoading } = useQuery<WastePendingRow[]>({
-    queryKey: foodKeys.wastePending(wasteParams),
-    queryFn: () => foodApi.wastePending(wasteParams),
+  /* ── journey day: -1 yesterday / 0 today / forward to the next orderable
+     service day (usually +1 tomorrow; +2 once tomorrow's cut-off passes, so
+     ordering ALWAYS happens inline on this page — prototype behaviour). ── */
+  const [journeyDay, setJourneyDay] = React.useState(0);
+  const dayDate = addDays(now, journeyDay);
+  const serviceDate = format(dayDate, "yyyy-MM-dd");
+
+  const { data: dayOrders, isLoading: ordersLoading } = useQuery({
+    queryKey: foodKeys.orders({ serviceDate, propertyId, journey: true }),
+    queryFn: () =>
+      foodApi
+        .listOrders({ serviceDate, propertyId: propertyId ?? undefined, limit: 50 })
+        .then((r) => r.data),
+    enabled: !!propertyId && canReadOrders,
     refetchInterval: 60_000,
   });
 
-  const { data: reports } = useQuery({
-    queryKey: foodKeys.reports(params),
-    queryFn: () => foodApi.reports(params),
+  /* ── tomorrow's order state (hero + order mode) ── */
+  // Cut-off/ordered state changes a handful of times a day — a 5-minute poll
+  // is plenty (mutations invalidate it immediately; the countdown ticks on
+  // the client clock regardless).
+  const { data: nextOrders } = useQuery({
+    queryKey: foodKeys.nextOrders(),
+    queryFn: () => foodApi.nextOrders(),
+    refetchInterval: 300_000,
+  });
+  const myNext = nextOrders?.find((p) => p.propertyId === propertyId) ?? null;
+  const orderedMealTypes = new Set((myNext?.orderedMeals ?? []).map((m) => m.mealType));
+  const missingMeals = (myNext?.availableMeals ?? []).filter((m) => !orderedMealTypes.has(m.mealType));
+  // Days ahead of today for the next orderable service date: 1 = tomorrow;
+  // 2 = the day after, once tomorrow's cut-off has passed (the server rolls
+  // next-orders forward). The journey's forward range extends to this day so
+  // the place-order UI lives inline here in every case.
+  const nextOffset = myNext
+    ? Math.max(1, differenceInCalendarDays(parseISO(myNext.serviceDate), now))
+    : 1;
+  const maxDay = Math.max(1, nextOffset);
+  const nextIsTomorrow = nextOffset === 1;
+  const nextDayLabel = myNext
+    ? nextIsTomorrow ? "Tomorrow" : format(parseISO(myNext.serviceDate), "EEEE")
+    : "Tomorrow";
+  const nextPending =
+    !!myNext && myNext.configured && missingMeals.length > 0 && !myNext.isPastCutoff;
+  const nextPlaced = !!myNext && orderedMealTypes.size > 0 && missingMeals.length === 0;
+
+  // Keep the selected day inside the visible range if the range shrinks
+  // (e.g. next-orders advances after midnight or after placing).
+  React.useEffect(() => {
+    if (journeyDay > maxDay) setJourneyDay(maxDay);
+  }, [journeyDay, maxDay]);
+
+  /* ── missed tomorrow: the cut-off has passed (next-orders rolled beyond
+     tomorrow) and NOTHING was ordered for tomorrow. The app can no longer
+     take that order, so surface it as an incident with an escalation CTA. ── */
+  const tomorrowYmd = format(addDays(now, 1), "yyyy-MM-dd");
+  const { data: tomorrowOrders } = useQuery({
+    queryKey: foodKeys.orders({ serviceDate: tomorrowYmd, propertyId, missCheck: true }),
+    queryFn: () =>
+      foodApi
+        .listOrders({ serviceDate: tomorrowYmd, propertyId: propertyId ?? undefined, limit: 20 })
+        .then((r) => r.data),
+    enabled: !!propertyId && canReadOrders && nextOffset > 1,
+    staleTime: 60_000,
+  });
+  const missedTomorrow =
+    nextOffset > 1 &&
+    tomorrowOrders != null &&
+    !tomorrowOrders.some((o) => o.status !== "CANCELLED" && o.status !== "REJECTED");
+
+  /* ── streak: consecutive days (ending today) with ≥1 live order ── */
+  // `to` is exclusive-ish on the server (serviceDate is a timestamp), so bound
+  // by tomorrow to make sure ALL of today's orders are included. The API
+  // clamps page size to 100, so page through the window (4 meals/day × 35
+  // days can exceed one page) and ask only for live statuses so cancelled
+  // churn doesn't eat the row budget.
+  const streakFrom = format(subDays(now, 35), "yyyy-MM-dd");
+  const streakTo = format(addDays(now, 1), "yyyy-MM-dd");
+  const { data: streakOrders } = useQuery({
+    queryKey: foodKeys.orders({ propertyId, streak: streakFrom }),
+    queryFn: async () => {
+      const params = {
+        propertyId: propertyId ?? undefined,
+        from: streakFrom,
+        to: streakTo,
+        status: "PLACED,ACCEPTED,PREPARING,DISPATCHED,DELIVERED",
+        limit: 100,
+      };
+      const first = await foodApi.listOrders({ ...params, page: 1 });
+      const rows = [...first.data];
+      const totalPages = Math.min(first.meta?.totalPages ?? 1, 3);
+      for (let p = 2; p <= totalPages; p++) {
+        rows.push(...(await foodApi.listOrders({ ...params, page: p })).data);
+      }
+      return rows;
+    },
+    enabled: !!propertyId && canReadOrders,
+    staleTime: 300_000,
+  });
+  const streakDays = React.useMemo(() => {
+    if (!streakOrders?.length) return 0;
+    const days = new Set(
+      streakOrders
+        // Normalise to the LOCAL calendar day (serviceDate is a timestamp).
+        .map((o) => format(parseISO(o.serviceDate), "yyyy-MM-dd")),
+    );
+    let n = 0;
+    let cursor = now;
+    while (n < 60 && days.has(format(cursor, "yyyy-MM-dd"))) {
+      n++;
+      cursor = subDays(cursor, 1);
+    }
+    return n;
+  }, [streakOrders, now]);
+
+  /* ── per-meal service times for the order day ("by 2:00 PM" on the tabs
+     and the detail head, like the prototype) ── */
+  const propertyBrand = properties.find((p) => p.id === propertyId)?.brand ?? null;
+  const { data: dayCutoffs } = useQuery({
+    queryKey: foodKeys.cutoffs({ propertyId, date: myNext?.serviceDate, journey: true }),
+    queryFn: () =>
+      foodApi.cutoffs({ brand: propertyBrand!, propertyId: propertyId!, date: myNext!.serviceDate }),
+    enabled: !!propertyId && !!propertyBrand && !!myNext,
+    staleTime: 300_000,
   });
 
-  const statusData = React.useMemo(() => {
-    const rows = reports?.statusBreakdown ?? [];
-    return rows
-      .filter((r) => (CHART_STATUSES as readonly string[]).includes(r.status))
-      .sort(
-        (a, b) =>
-          CHART_STATUSES.indexOf(a.status as (typeof CHART_STATUSES)[number]) -
-          CHART_STATUSES.indexOf(b.status as (typeof CHART_STATUSES)[number]),
-      );
-  }, [reports]);
+  /* ── meal slots for the selected day ── */
+  const kitchenName = undefined; // kitchen name comes from the order detail below
+  const slots: MealSlot[] = React.useMemo(() => {
+    const byMeal = new Map<MealType, FoodOrder>();
+    (dayOrders ?? []).forEach((o) => {
+      const prev = byMeal.get(o.mealType);
+      // Prefer a live order over a cancelled one for the same meal.
+      if (!prev || prev.status === "CANCELLED" || prev.status === "REJECTED") byMeal.set(o.mealType, o);
+    });
+    // "by 2:00 PM" from the meal's configured service time (order day only).
+    const svcTime = (mt: MealType): string => {
+      const t = dayCutoffs?.find((c) => c.mealType === mt)?.serviceTime;
+      if (!t) return "—";
+      const [h, m] = t.split(":").map(Number);
+      const d = new Date();
+      d.setHours(h, m || 0, 0, 0);
+      return `by ${format(d, "h:mm a")}`;
+    };
+    // On the next orderable day the tab list comes from next-orders'
+    // availableMeals (the day's actual menu); other days show the four meals.
+    const orderDayView = journeyDay === nextOffset && !!myNext?.availableMeals.length;
+    const mealsToShow: MealType[] = orderDayView
+      ? myNext!.availableMeals.map((m) => m.mealType)
+      : (["BREAKFAST", "LUNCH", "SNACKS", "DINNER"] as MealType[]);
+    const ordered = new Set((myNext?.orderedMeals ?? []).map((m) => m.mealType));
+    return mealsToShow.map((mt) => {
+      const slot = slotFor(mt, byMeal.get(mt) ?? null, now, kitchenName);
+      // Meals still orderable on the order day (none or only a cancelled
+      // order) show their service-window time, not the cancelled stamp.
+      if (orderDayView && !ordered.has(mt)) slot.time = svcTime(mt);
+      return slot;
+    });
+  }, [dayOrders, journeyDay, myNext, nextOffset, dayCutoffs, now]);
 
-  const kpis = data?.kpis;
-  const pending = data?.pendingActions;
-  const varianceValue = kpis?.variance?.[variancePeriod] ?? 0;
+  /* ── order day: the journey day where the inline place-order UI lives ── */
+  const orderDay = journeyDay === nextOffset && nextPending && canPlace;
+  const isMissing = (mt: MealType) => missingMeals.some((m) => m.mealType === mt);
 
-  // Absolute deadline for placing TOMORROW's order = TODAY @ cut-off time.
-  // The /cutoffs endpoint anchors cutoffAt on the day before the service date,
-  // and we query it with date=today, so cutoffAt is yesterday@cut-off. Recompute
-  // today@cut-off from the returned cutoffTime instead.
-  const orderDeadline = React.useMemo(() => {
-    const t = cutoffs?.[0]?.cutoffTime;
-    if (!t) return null;
-    const [h, m] = t.split(":").map(Number);
-    if (h == null || Number.isNaN(h)) return null;
-    const d = new Date();
-    d.setHours(h, m || 0, 0, 0);
-    return d;
-  }, [cutoffs]);
+  /* ── selected meal tab (auto-focus the meal that needs action; on the
+     order day, the first meal that still needs ordering) ── */
+  const [pickedMeal, setPickedMeal] = React.useState<MealType | null>(null);
+  const actionSlot = slots.find((s) => s.state.startsWith("action"));
+  const firstMissingSlot = orderDay ? slots.find((s) => isMissing(s.mealType)) : undefined;
+  const selected =
+    (pickedMeal && slots.find((s) => s.mealType === pickedMeal)) ||
+    firstMissingSlot ||
+    actionSlot ||
+    slots[0] ||
+    null;
 
-  return (
-    <div className="space-y-6">
-      <PageHeader
-        title="Food Dashboard"
-        subtitle="Kitchen operations at a glance — orders, dispatch, and delivery"
-      />
+  // Reset the manual pick when flipping days so auto-focus works again.
+  React.useEffect(() => { setPickedMeal(null); }, [journeyDay]);
 
-      <GlobalPropertyScopeBanner properties={lookups?.properties} />
+  /* ── the selected meal's full detail (items/events/dispatch) ── */
+  const selectedOrderId = selected?.order?.id ?? null;
+  const { data: detail } = useQuery<OrderDetail>({
+    queryKey: foodKeys.order(selectedOrderId ?? "none"),
+    queryFn: () => foodApi.getOrder(selectedOrderId!),
+    enabled: !!selectedOrderId,
+  });
 
-      {/* Filters */}
-      <div className="flex flex-wrap items-end gap-3">
-        <Select value={propertyId} onValueChange={selectProperty}>
-          <SelectTrigger className="w-52">
-            <SelectValue placeholder="Property" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="ALL">All Properties</SelectItem>
-            {properties.map((p) => (
-              <SelectItem key={p.id} value={p.id}>
-                {p.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+  // Waste already recorded? (any item has a non-null wastedQty)
+  const wasteRecorded = !!detail?.items?.some((i) => i.wastedQty != null);
+  const displayState: MealState =
+    selected?.state === "action-waste" && (wasteRecorded || !canWaste) ? "done" : (selected?.state ?? "none");
 
-        <Select value={brand} onValueChange={setBrand}>
-          <SelectTrigger className="w-40">
-            <SelectValue placeholder="Brand" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="ALL">All Brands</SelectItem>
-            {BRANDS.map((b) => (
-              <SelectItem key={b} value={b}>
-                {b}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+  /* ── order mode: on the order day, tabs whose meal still needs ordering
+     show the inline place-order UI (prototype); already-ordered meals show
+     their normal Track/Received/Waste detail. ── */
+  const orderMode = orderDay && !!selected && isMissing(selected.mealType);
+  const [headcount, setHeadcount] = React.useState<number | null>(null);
+  const effectiveHead = headcount ?? myNext?.activeGuests ?? overview?.activeGuests ?? 1;
+  const { data: preview } = useQuery({
+    queryKey: foodKeys.orderPreview({ propertyId, serviceDate: myNext?.serviceDate, persons: 1 }),
+    queryFn: () =>
+      foodApi.orderPreview({ propertyId: propertyId!, serviceDate: myNext!.serviceDate, persons: 1 }),
+    enabled: orderDay && !!propertyId && !!myNext,
+  });
+  // Per-dish overrides, keyed `${mealType}:${dishId}`. `persons` pins a
+  // per-dish headcount (qty recomputes from it); `qty` pins an absolute
+  // quantity (wins over everything) — same model as the full builder.
+  const [dishOverrides, setDishOverrides] = React.useState<Record<string, DishOverride>>({});
+  // Order-mode edits belong to ONE property — dishIds are a shared catalogue,
+  // so carrying overrides (or a manual headcount) across a property switch
+  // would place the next property's order with the previous one's numbers.
+  React.useEffect(() => {
+    setHeadcount(null);
+    setDishOverrides({});
+  }, [propertyId]);
+  const dishStep = (unit: string) => (isFractionalUnit(unit) ? 0.5 : 5);
+  const dishKey = (mealType: MealType, dishId: string) => `${mealType}:${dishId}`;
+  const dishPersons = (mealType: MealType, dishId: string): number =>
+    dishOverrides[dishKey(mealType, dishId)]?.persons ?? effectiveHead;
+  const dishQty = (mealType: MealType, dishId: string, perResident: number, unit: string): number => {
+    const o = dishOverrides[dishKey(mealType, dishId)];
+    if (o?.qty != null) return o.qty;
+    const raw = perResident * (o?.persons ?? effectiveHead);
+    return isFractionalUnit(unit) ? Math.round(raw * 10) / 10 : Math.round(raw);
+  };
+  const bumpDish = (mealType: MealType, dishId: string, perResident: number, unit: string, dir: 1 | -1) => {
+    const cur = dishQty(mealType, dishId, perResident, unit);
+    const next = Math.max(0, Math.round((cur + dir * dishStep(unit)) * 10) / 10);
+    setDishOverrides((q) => ({
+      ...q,
+      [dishKey(mealType, dishId)]: { ...q[dishKey(mealType, dishId)], qty: next },
+    }));
+  };
+  const setDishPersonsOverride = (mealType: MealType, dishId: string, persons: number) => {
+    // Pinning persons clears any absolute qty so the quantity recomputes.
+    setDishOverrides((q) => ({
+      ...q,
+      [dishKey(mealType, dishId)]: { persons: Math.max(1, persons), qty: undefined },
+    }));
+  };
 
-        <div className="flex flex-col gap-1">
-          <Label className="text-xs text-muted-foreground">From</Label>
-          <DatePicker value={from} max={to} onChange={setFrom} className="w-40" />
+  /* ── server-side draft: a half-built order follows the unit lead across
+     browsers/devices (stored per user+property+serviceDate). ── */
+  const draftParams =
+    propertyId && myNext ? { propertyId, serviceDate: myNext.serviceDate } : null;
+  const draftId = draftParams ? `${draftParams.propertyId}:${draftParams.serviceDate}` : null;
+  const { data: serverDraft } = useQuery({
+    queryKey: foodKeys.orderDraft({ propertyId, serviceDate: myNext?.serviceDate }),
+    queryFn: () => foodApi.orderDraft(draftParams!),
+    enabled: !!draftParams && nextPending && canPlace,
+    staleTime: 60_000,
+    refetchOnWindowFocus: false, // never clobber in-progress edits
+  });
+  // Restore the draft ONCE per property+day, then let live edits win.
+  const restoredFor = React.useRef<string | null>(null);
+  React.useEffect(() => {
+    if (!draftId || restoredFor.current === draftId || serverDraft === undefined) return;
+    restoredFor.current = draftId;
+    const p = serverDraft?.payload as
+      | { v: number; headcount: number | null; overrides: Record<string, DishOverride> }
+      | null
+      | undefined;
+    if (p && p.v === 1) {
+      if (p.headcount != null) setHeadcount(p.headcount);
+      if (p.overrides && typeof p.overrides === "object") setDishOverrides(p.overrides);
+    }
+  }, [serverDraft, draftId]);
+  // Debounced autosave of every edit (headcount / per-dish overrides).
+  const draftDirty = headcount != null || Object.keys(dishOverrides).length > 0;
+  const [draftSavedAt, setDraftSavedAt] = React.useState<Date | null>(null);
+  React.useEffect(() => {
+    if (!draftParams || !nextPending || !canPlace || !draftDirty) return;
+    if (restoredFor.current !== draftId) return; // wait for the restore pass
+    const t = setTimeout(() => {
+      foodApi
+        .saveOrderDraft({ ...draftParams, payload: { v: 1, headcount, overrides: dishOverrides } })
+        .then(() => setDraftSavedAt(new Date()))
+        .catch(() => {/* draft persistence is best-effort */});
+    }, 800);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [headcount, dishOverrides, draftId, nextPending, canPlace, draftDirty]);
+
+  const placeMutation = useMutation({
+    mutationFn: () => {
+      const missing = new Set(missingMeals.map((m) => m.mealType));
+      const meals = (preview?.meals ?? [])
+        .filter((m) => missing.has(m.mealType))
+        .map((m) => ({
+          mealType: m.mealType,
+          items: m.items
+            .map((it) => ({
+              dishId: it.dishId,
+              personsCount: dishPersons(m.mealType, it.dishId),
+              orderedQty: dishQty(m.mealType, it.dishId, it.qtyPerResident, it.unit),
+              unit: it.unit,
+            }))
+            .filter((it) => it.orderedQty > 0),
+        }))
+        .filter((m) => m.items.length > 0);
+      return foodApi.placeOrderBatch({
+        propertyId: propertyId!,
+        serviceDate: myNext!.serviceDate,
+        persons: effectiveHead,
+        meals,
+      });
+    },
+    onSuccess: (res) => {
+      // The draft served its purpose — clear it (server + local, best-effort).
+      if (draftParams) void foodApi.deleteOrderDraft(draftParams).catch(() => {});
+      setDishOverrides({});
+      setHeadcount(null);
+      setDraftSavedAt(null);
+      // Targeted refresh: order lists (incl. streak + journey), the placed
+      // day's details, next-orders state and the (now deleted) draft. A broad
+      // ["food"] invalidation would also re-fetch lookups/overview needlessly.
+      qc.invalidateQueries({ queryKey: ["food", "orders"] });
+      qc.invalidateQueries({ queryKey: ["food", "order"] });
+      qc.invalidateQueries({ queryKey: foodKeys.nextOrders() });
+      qc.invalidateQueries({ queryKey: ["food", "order-draft"] });
+      fire();
+      toast({
+        variant: "success",
+        title: `${nextIsTomorrow ? "Tomorrow" : nextDayLabel}'s order sent`,
+        description: `1 group order, ${res.orders.length} child order${res.orders.length === 1 ? "" : "s"}`,
+      });
+    },
+    onError: (e: unknown) => {
+      toast({
+        title: "Couldn't send the order",
+        description: e instanceof Error ? e.message : "Please try again",
+        variant: "destructive",
+      });
+    },
+  });
+
+  /* ── receive (confirm delivery) panel state ── */
+  const [ack, setAck] = React.useState(false);
+  const [received, setReceived] = React.useState<Record<string, number>>({});
+  const [reason, setReason] = React.useState<string | null>(null);
+  React.useEffect(() => {
+    // Reset the receive form whenever the focused order changes.
+    setAck(false);
+    setReceived({});
+    setReason(null);
+  }, [selectedOrderId]);
+
+  const sentOf = (i: { orderedQty: string; preparedQty: string | null }) =>
+    num(i.preparedQty ?? i.orderedQty);
+  const receivedOf = (i: { id: string; orderedQty: string; preparedQty: string | null }) =>
+    received[i.id] ?? sentOf(i);
+  const mismatches = (detail?.items ?? []).filter((i) => receivedOf(i) !== sentOf(i));
+  const confirmDisabled = mismatches.length > 0 && !reason;
+
+  const confirmMutation = useMutation({
+    mutationFn: () =>
+      foodApi.confirmDelivery(
+        detail!.id,
+        detail!.items.map((i) => ({ itemId: i.id, receivedQty: receivedOf(i) })),
+        mismatches.length > 0 && reason ? reason : undefined,
+      ),
+    onSuccess: () => {
+      // Order lists + details cover everything a confirm changes.
+      qc.invalidateQueries({ queryKey: ["food", "orders"] });
+      qc.invalidateQueries({ queryKey: ["food", "order"] });
+      fire();
+      toast({
+        variant: mismatches.length > 0 ? "warning" : "success",
+        title: "Delivery confirmed",
+        description:
+          mismatches.length > 0
+            ? `${mismatches.length} short item${mismatches.length > 1 ? "s" : ""} noted — the kitchen has been told`
+            : "Everything matched the kitchen's numbers",
+      });
+    },
+    onError: (e: unknown) => {
+      toast({
+        title: "Couldn't confirm the delivery",
+        description: e instanceof Error ? e.message : "Please try again",
+        variant: "destructive",
+      });
+    },
+  });
+
+  /* ── waste panel state ── */
+  const [wasteQty, setWasteQty] = React.useState<Record<string, number>>({});
+  React.useEffect(() => { setWasteQty({}); }, [selectedOrderId]);
+  const wasteMutation = useMutation({
+    mutationFn: () =>
+      foodApi.recordWaste(
+        detail!.id,
+        detail!.items.map((i) => ({ itemId: i.id, wastedQty: wasteQty[i.id] ?? 0 })),
+      ),
+    onSuccess: () => {
+      const any = Object.values(wasteQty).some((v) => v > 0);
+      // Order lists + details cover everything a waste entry changes.
+      qc.invalidateQueries({ queryKey: ["food", "orders"] });
+      qc.invalidateQueries({ queryKey: ["food", "order"] });
+      fire();
+      toast({
+        variant: "success",
+        title: any ? "Waste recorded — thanks for keeping it honest" : "Zero waste recorded — brilliant! 🎉",
+      });
+    },
+    onError: (e: unknown) => {
+      toast({
+        title: "Couldn't record waste",
+        description: e instanceof Error ? e.message : "Please try again",
+        variant: "destructive",
+      });
+    },
+  });
+
+  /* ────────────────────────────── render ────────────────────────────── */
+
+  // No property resolvable yet → pick one (managers with many properties).
+  if (!propertyId) {
+    return (
+      <div className="mx-auto flex max-w-[760px] animate-fade-up flex-col gap-6">
+        <div>
+          <h1 className="mb-1 font-display text-2xl font-bold tracking-[-0.012em]">Food</h1>
+          <p className="text-sm text-muted-foreground">Pick a property to see its food day.</p>
         </div>
-        <div className="flex flex-col gap-1">
-          <Label className="text-xs text-muted-foreground">To</Label>
-          <DatePicker value={to} min={from} onChange={setTo} className="w-40" />
-        </div>
-      </div>
-
-      {/* Sticky KPI row — stays in view as the overview scrolls */}
-      <div className="sticky top-0 z-10 -mx-1 bg-background/95 px-1 py-2 backdrop-blur supports-[backdrop-filter]:bg-background/80">
-        {isLoading ? (
-          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-            {Array.from({ length: 4 }).map((_, i) => (
-              <Skeleton key={i} className="h-24 w-full rounded-xl" />
-            ))}
-          </div>
-        ) : (
-          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-            <StatCard
-              title="Total Orders"
-              value={kpiValue(kpis?.totalOrders)}
-              change={kpiChange(kpis?.totalOrders)}
-              icon={ClipboardList}
-            />
-            <StatCard
-              title="Active"
-              value={kpiValue(kpis?.active)}
-              change={kpiChange(kpis?.active)}
-              icon={Package}
-            />
-            <StatCard
-              title="Awaiting Confirmation"
-              value={kpiValue(kpis?.awaitingConfirmation)}
-              change={kpiChange(kpis?.awaitingConfirmation)}
-              icon={PackageCheck}
-            />
-            <VarianceCard
-              value={varianceValue}
-              period={variancePeriod}
-              onPeriodChange={setVariancePeriod}
-            />
-          </div>
-        )}
-      </div>
-
-      <Tabs defaultValue="overview" className="w-full">
-        <TabsList className="flex h-auto w-full flex-wrap justify-start gap-1 sm:w-auto">
-          <TabsTrigger value="overview" className="gap-1.5">
-            <LayoutDashboard className="h-3.5 w-3.5" /> Overview
-          </TabsTrigger>
-          <TabsTrigger value="insights" className="gap-1.5">
-            <Compass className="h-3.5 w-3.5" /> Insights
-          </TabsTrigger>
-        </TabsList>
-
-        {/* OVERVIEW — cut-offs + pending actions */}
-        <TabsContent value="overview" className="mt-4 space-y-4">
-          {/* Today's cut-offs + order-deadline countdown */}
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-            <Card className="lg:col-span-2">
-              <CardHeader className="pb-3">
-                <CardTitle className="flex items-center gap-2 text-base">
-                  <Timer className="h-4 w-4 text-muted-foreground" />
-                  Today's Cut-offs
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                {cutoffsLoading ? (
-                  <div className="space-y-2">
-                    {Array.from({ length: 4 }).map((_, i) => (
-                      <Skeleton key={i} className="h-10 w-full rounded-lg" />
-                    ))}
-                  </div>
-                ) : !cutoffs || cutoffs.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center gap-1 py-6 text-center">
-                    <Clock className="h-6 w-6 text-muted-foreground" />
-                    <p className="text-sm font-medium text-foreground">No cut-offs configured</p>
-                    <p className="text-xs text-muted-foreground">
-                      Set meal windows in Settings to see ordering cut-offs.
-                    </p>
-                  </div>
-                ) : (
-                  <div>
-                    {/* Single cut-off applies to all meals; each meal keeps its own service time. */}
-                    <div className="mb-3 flex items-center justify-between gap-3 rounded-lg border bg-muted/30 px-3 py-2.5">
-                      <div className="flex items-center gap-2.5">
-                        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-muted/50">
-                          <Clock className="h-3.5 w-3.5 text-muted-foreground" />
-                        </span>
-                        <div>
-                          <p className="text-sm font-medium text-foreground">Cut-off — all meals</p>
-                          <p className="font-mono text-xs text-muted-foreground">{cutoffs[0]?.cutoffTime ?? "Not set"}</p>
-                        </div>
-                      </div>
-                      {cutoffs[0]?.cutoffTime ? (
-                        cutoffs[0]?.isPastCutoff ? <Badge variant="destructive">Closed</Badge> : <Badge variant="success">Open</Badge>
-                      ) : <Badge variant="secondary">—</Badge>}
-                    </div>
-                    <BoundedScroll maxHeight="220px" className="pr-2">
-                      <ul className="divide-y divide-border">
-                        {cutoffs.map((c) => (
-                          <li key={c.mealType} className="flex items-center justify-between gap-3 py-2 first:pt-0 last:pb-0">
-                            <span className="text-sm text-foreground">{MEAL_LABEL[c.mealType] ?? c.mealType}</span>
-                            <span className="font-mono text-xs text-muted-foreground">{c.serviceTime ? `Serves ${c.serviceTime}` : "—"}</span>
-                          </li>
-                        ))}
-                      </ul>
-                    </BoundedScroll>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-
-            <OrderDeadlineCard deadline={orderDeadline} loading={cutoffsLoading} />
-          </div>
-
-          {/* Pending Actions */}
-          <div>
-            <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3">
-              Pending Actions
-            </h2>
-            {isLoading ? (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {Array.from({ length: 2 }).map((_, i) => (
-                  <Skeleton key={i} className="h-24 w-full rounded-xl" />
+        <div className="rounded-[14px] border border-border bg-card p-5">
+          {properties.length === 0 ? (
+            <Skeleton className="h-10 w-full" />
+          ) : (
+            <Select onValueChange={(v) => setPropertyId(v)}>
+              <SelectTrigger className="w-full" aria-label="Choose a property">
+                <SelectValue placeholder="Choose a property…" />
+              </SelectTrigger>
+              <SelectContent>
+                {properties.map((p) => (
+                  <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
                 ))}
-              </div>
-            ) : (
-              <div className={`grid grid-cols-1 gap-4 ${can("FOOD_DISPATCH", "view") ? "md:grid-cols-2" : ""}`}>
-                {/* Dispatch left the unit lead — only FnB roles (FOOD_DISPATCH) see this. */}
-                {can("FOOD_DISPATCH", "view") && (
-                  <PendingActionCard
-                    icon={Truck}
-                    label="Awaiting Dispatch"
-                    count={pending?.awaitingDispatch ?? 0}
-                    accent="text-info"
-                    onClick={() => setLocation("/food/dispatch")}
-                  />
-                )}
-                <WastePendingCard
-                  rows={wasteRows ?? []}
-                  loading={wasteLoading}
-                  count={pending?.wastePending ?? 0}
-                  onAct={() => setLocation("/food/waste")}
-                />
-              </div>
-            )}
-          </div>
-        </TabsContent>
-
-        {/* INSIGHTS — secondary status chart */}
-        <TabsContent value="insights" className="mt-4 space-y-4">
-          {/* Status overview chart */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-base">
-                <BarChart3 className="w-4 h-4 text-muted-foreground" />
-                Order Status Breakdown
-              </CardTitle>
-            </CardHeader>
-            <CardContent style={{ height: 280 }}>
-              {statusData.length === 0 ? (
-                <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-                  No active or awaiting-confirmation orders in the selected range.
-                </div>
-              ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={statusData} margin={{ top: 8, right: 8, left: 0, bottom: 8 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-                    <XAxis
-                      dataKey="status"
-                      tick={{ fontSize: 11 }}
-                      tickFormatter={(v: string) => v.replace(/_/g, " ")}
-                    />
-                    <YAxis allowDecimals={false} tick={{ fontSize: 11 }} />
-                    <Tooltip
-                      cursor={{ fill: "rgba(0,0,0,0.04)" }}
-                      formatter={(value: number) => [value, "Orders"]}
-                    />
-                    <Bar dataKey="count" radius={[4, 4, 0, 0]}>
-                      {statusData.map((d) => (
-                        <Cell key={d.status} fill={STATUS_COLORS[d.status] ?? "var(--muted)"} />
-                      ))}
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
-              )}
-            </CardContent>
-          </Card>
-        </TabsContent>
-      </Tabs>
-    </div>
-  );
-}
-
-/** Variance KPI card with a 1mo / 3mo / 6mo / FY period toggle. */
-function VarianceCard({
-  value,
-  period,
-  onPeriodChange,
-}: {
-  value: number;
-  period: VariancePeriod;
-  onPeriodChange: (p: VariancePeriod) => void;
-}) {
-  return (
-    <div className="rounded-xl border bg-card p-4 shadow-sm">
-      <div className="flex items-start justify-between">
-        <div className="flex items-center gap-2">
-          <span className="flex h-9 w-9 items-center justify-center rounded-full bg-muted/40">
-            <Scale className="h-4 w-4 text-muted-foreground" />
-          </span>
-          <span className="text-sm font-medium text-foreground">Variance</span>
+              </SelectContent>
+            </Select>
+          )}
         </div>
       </div>
-      <div className="mt-2 font-display text-3xl font-bold text-foreground">{value}</div>
-      <p className="text-xs text-muted-foreground">orders with qty variance</p>
-      <div className="mt-3 flex flex-wrap gap-1">
-        {VARIANCE_PERIODS.map((p) => (
-          <button
-            key={p.key}
-            type="button"
-            onClick={() => onPeriodChange(p.key)}
-            className={`rounded-md px-2 py-0.5 text-[11px] font-medium transition-colors ${
-              p.key === period
-                ? "bg-primary text-primary-foreground"
-                : "bg-muted/50 text-muted-foreground hover:bg-muted"
-            }`}
-          >
-            {p.label}
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-/** Live "time left to place tomorrow's order" countdown card. */
-function OrderDeadlineCard({ deadline, loading }: { deadline: Date | null; loading: boolean }) {
-  useTicker(30_000);
-  const now = Date.now();
-  const diffMs = deadline ? deadline.getTime() - now : null;
-  const closed = diffMs !== null && diffMs <= 0;
-
-  let body: React.ReactNode;
-  if (loading) {
-    body = <Skeleton className="h-8 w-32 rounded-lg" />;
-  } else if (diffMs === null) {
-    body = <p className="text-sm text-muted-foreground">No cut-off configured.</p>;
-  } else if (closed) {
-    body = (
-      <div className="flex items-center gap-2 text-destructive">
-        <AlertTriangle className="h-4 w-4" />
-        <span className="text-sm font-medium">Ordering closed for tomorrow</span>
-      </div>
-    );
-  } else {
-    const totalMin = Math.floor(diffMs / 60000);
-    const hours = Math.floor(totalMin / 60);
-    const mins = totalMin % 60;
-    body = (
-      <p className="font-display text-2xl font-bold text-foreground">
-        {hours > 0 ? `${hours}h ` : ""}
-        {mins}m <span className="text-sm font-medium text-muted-foreground">left</span>
-      </p>
     );
   }
 
-  return (
-    <Card>
-      <CardHeader className="pb-3">
-        <CardTitle className="flex items-center gap-2 text-base">
-          <Clock className="h-4 w-4 text-muted-foreground" />
-          Place Tomorrow's Order
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-1">
-        {body}
-        {!loading && diffMs !== null && !closed ? (
-          <p className="text-xs text-muted-foreground">
-            until today's {deadline ? format(deadline, "HH:mm") : ""} cut-off
-          </p>
-        ) : null}
-      </CardContent>
-    </Card>
-  );
-}
+  const dayLabel =
+    journeyDay === -1 ? "Yesterday"
+    : journeyDay === 0 ? "Today"
+    : journeyDay === 1 ? "Tomorrow"
+    : format(dayDate, "EEEE");
 
-/** Waste-Pending card: a table of DELIVERED orders with live "NN min left" countdowns. */
-function WastePendingCard({
-  rows,
-  loading,
-  count,
-  onAct,
-}: {
-  rows: WastePendingRow[];
-  loading: boolean;
-  count: number;
-  onAct: () => void;
-}) {
-  useTicker(30_000);
   return (
-    <Card>
-      <CardHeader className="pb-3">
-        <CardTitle className="flex items-center gap-2 text-base">
-          <Trash2 className="h-4 w-4 text-destructive" />
-          Waste Pending
-          {count > 0 ? <Badge variant="destructive">{count}</Badge> : null}
-        </CardTitle>
-      </CardHeader>
-      <CardContent>
-        {loading ? (
-          <div className="space-y-2">
-            {Array.from({ length: 3 }).map((_, i) => (
-              <Skeleton key={i} className="h-9 w-full rounded-lg" />
+    <div className="mx-auto flex max-w-[760px] animate-fade-up flex-col gap-6">
+      {confetti}
+
+      {/* ── missed tomorrow: cut-off passed with no order in — incident ── */}
+      {missedTomorrow && (
+        <section className="flex flex-wrap items-center gap-3.5 rounded-[14px] border border-destructive/30 bg-danger-soft px-[22px] py-4">
+          <span className="flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-full bg-destructive">
+            <AlertTriangle className="h-4 w-4 text-white" strokeWidth={2.5} />
+          </span>
+          <div className="min-w-[220px] flex-1">
+            <div className="font-display font-bold tracking-[-0.012em] text-destructive">
+              Tomorrow has no food order — the cut-off has passed
+            </div>
+            <div className="mt-0.5 text-[13px] text-muted-foreground">
+              Nothing was ordered for {format(addDays(now, 1), "EEEE, dd MMM")} before the cut-off, and
+              the app can't take it anymore. Contact your admin right away so the kitchen can still plan
+              tomorrow's meals.
+            </div>
+          </div>
+          <a
+            href={`mailto:${ADMIN_CONTACT_EMAIL}?subject=${encodeURIComponent(
+              `URGENT: missed food order for ${format(addDays(now, 1), "EEE, dd MMM")} — ${properties.find((p) => p.id === propertyId)?.name ?? "my property"}`,
+            )}&body=${encodeURIComponent(
+              `Hi,\n\nThe order cut-off for ${format(addDays(now, 1), "EEEE, dd MMM")} has passed and no food order is in for ${properties.find((p) => p.id === propertyId)?.name ?? "my property"}. Please help arrange tomorrow's meals with the kitchen.\n\nThanks`,
+            )}`}
+            className="shrink-0"
+          >
+            <span className="inline-flex h-11 cursor-pointer items-center gap-2 rounded-[10px] bg-destructive px-5 text-sm font-bold text-white transition-[filter] hover:brightness-105">
+              Contact admin
+            </span>
+          </a>
+        </section>
+      )}
+
+      {/* ── tomorrow's order hero ── */}
+      {nextPending && canPlace && (
+        <section className="rounded-[14px] bg-brand-gradient p-[2px]">
+          <div className="flex flex-wrap items-center gap-[18px] rounded-[12px] bg-card px-6 py-5">
+            <div className="min-w-[220px] flex-1">
+              <div className="font-display text-lg font-bold tracking-[-0.012em]">
+                {nextDayLabel}'s order isn't in yet
+              </div>
+              <div className="mt-1 text-[13px] text-muted-foreground">
+                {!nextIsTomorrow && myNext && !missedTomorrow ? (
+                  <>Tomorrow's cut-off has passed — next up is {format(parseISO(myNext.serviceDate), "EEEE, dd MMM")}. </>
+                ) : null}
+                Send it before {myNext?.cutoffTime ?? "the cut-off"} to keep your{" "}
+                <strong className="text-accent-strong">{streakDays}-day streak</strong> alive 🔥
+              </div>
+            </div>
+            <div className="text-center">
+              <div className="font-mono text-[22px] font-semibold tabular-nums text-warning">
+                {untilLabel(myNext?.cutoffAt, now)}
+              </div>
+              <div className="text-[11px] text-muted-foreground">left</div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setJourneyDay(nextOffset)}
+              className="h-[52px] rounded-[12px] bg-accent px-6 font-display text-base font-bold tracking-[-0.012em] text-white transition-[filter] hover:brightness-105"
+            >
+              Send {nextIsTomorrow ? "tomorrow" : nextDayLabel}'s order →
+            </button>
+          </div>
+        </section>
+      )}
+      {/* Placed-day status. Next to a missed-day incident it compresses to a
+          quiet one-liner — celebrating a streak that the miss is about to
+          break would be wrong, and the incident must stay dominant. */}
+      {nextPlaced && !missedTomorrow && (
+        <section className="flex items-center gap-3.5 rounded-[14px] bg-success-soft px-[22px] py-4">
+          <span className="flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-full bg-success">
+            <Check className="h-4 w-4 text-white" strokeWidth={3} />
+          </span>
+          <div className="flex-1">
+            <div className="font-display font-bold tracking-[-0.012em] text-success">
+              {nextDayLabel}'s order is in — streak safe at {streakDays + 1} days 🔥
+            </div>
+            <div className="mt-0.5 text-[13px] text-muted-foreground">
+              {myNext ? format(parseISO(myNext.serviceDate), "EEEE, dd MMM") : ""} ·{" "}
+              {myNext?.activeGuests ?? "—"} people · {orderedMealTypes.size} meal{orderedMealTypes.size === 1 ? "" : "s"}
+            </div>
+          </div>
+        </section>
+      )}
+      {nextPlaced && missedTomorrow && (
+        <div className="flex items-center gap-2.5 rounded-[10px] border border-border bg-card px-4 py-2.5 text-[13px] text-muted-foreground">
+          <Check className="h-4 w-4 shrink-0 text-success" strokeWidth={3} />
+          <span>
+            <strong className="font-semibold text-foreground">
+              {myNext ? format(parseISO(myNext.serviceDate), "EEEE, dd MMM") : nextDayLabel}
+            </strong>{" "}
+            is covered — {myNext?.activeGuests ?? "—"} people · {orderedMealTypes.size} meal{orderedMealTypes.size === 1 ? "" : "s"}
+          </span>
+        </div>
+      )}
+
+      {/* ── food journey ── */}
+      <section>
+        <div className="mb-3 flex items-center gap-3">
+          <h2 className="flex-1 font-display text-base font-bold tracking-[-0.012em]">Food journey</h2>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setJourneyDay((d) => Math.max(-1, d - 1))}
+              aria-label="Previous day"
+              disabled={journeyDay <= -1}
+              className="flex h-[34px] w-[34px] items-center justify-center rounded-[9px] border border-border bg-card text-foreground disabled:text-border"
+            >
+              <ChevronLeft className="h-[15px] w-[15px]" />
+            </button>
+            <span className="min-w-[130px] text-center">
+              <span className="block font-display text-sm font-bold tracking-[-0.012em]">{dayLabel}</span>
+              <span className="block font-mono text-[11px] text-muted-foreground">
+                {format(dayDate, "EEE, dd MMM")}
+              </span>
+            </span>
+            <button
+              type="button"
+              onClick={() => setJourneyDay((d) => Math.min(maxDay, d + 1))}
+              aria-label="Next day"
+              disabled={journeyDay >= maxDay}
+              className="flex h-[34px] w-[34px] items-center justify-center rounded-[9px] border border-border bg-card text-foreground disabled:text-border"
+            >
+              <ChevronRight className="h-[15px] w-[15px]" />
+            </button>
+          </div>
+        </div>
+
+        {/* meal tabs */}
+        {!canReadOrders ? (
+          /* FNB/executive roles hold FOOD_DASHBOARD but not FOOD_ALL_ORDERS —
+             the order-level endpoints would 403, so say so instead of
+             rendering confidently-empty meal slots. */
+          <div className="rounded-2xl border border-dashed border-border bg-card px-6 py-10 text-center text-sm text-muted-foreground">
+            Your role doesn't include order-level tracking, so the meal journey
+            can't be shown here. Kitchen Summary and Dispatch have your live
+            queues.
+          </div>
+        ) : ordersLoading ? (
+          <div className="mb-4 flex flex-wrap gap-3">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <Skeleton key={i} className="h-[92px] min-w-[150px] flex-1 rounded-[14px]" />
             ))}
           </div>
-        ) : rows.length === 0 ? (
-          <div className="flex flex-col items-center justify-center gap-1 py-6 text-center">
-            <PackageCheck className="h-6 w-6 text-muted-foreground" />
-            <p className="text-sm font-medium text-foreground">All caught up</p>
-            <p className="text-xs text-muted-foreground">No deliveries awaiting waste entry.</p>
-          </div>
         ) : (
-          <BoundedScroll maxHeight="260px" className="pr-1">
-            <table className="w-full text-left text-sm">
-              <thead>
-                <tr className="text-xs uppercase tracking-wide text-muted-foreground">
-                  <th className="py-1.5 pr-2 font-medium">Order #</th>
-                  <th className="py-1.5 pr-2 font-medium">Property</th>
-                  <th className="py-1.5 pr-2 font-medium">Meal</th>
-                  <th className="py-1.5 pr-2 font-medium">Delivered</th>
-                  <th className="py-1.5 pr-2 font-medium">Time left</th>
-                  <th className="py-1.5 font-medium text-right">Action</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border">
-                {rows.map((r) => (
-                  <tr key={r.orderId}>
-                    <td className="py-2 pr-2 font-mono text-xs text-foreground">{r.orderNumber}</td>
-                    <td className="py-2 pr-2 text-foreground">{r.propertyName ?? "—"}</td>
-                    <td className="py-2 pr-2 text-muted-foreground">{MEAL_LABEL[r.mealType] ?? r.mealType}</td>
-                    <td className="py-2 pr-2 font-mono text-xs text-muted-foreground">
-                      {r.deliveredAt ? format(new Date(r.deliveredAt), "dd MMM HH:mm") : "—"}
-                    </td>
-                    <td className="py-2 pr-2">
-                      <Badge variant="warning">{minutesLeftLabel(r.wasteEditableUntil)}</Badge>
-                    </td>
-                    <td className="py-2 text-right">
-                      <Link
-                        href="/food/waste"
-                        className="inline-flex items-center gap-0.5 text-xs font-medium text-accent hover:text-accent/80"
+          <div className="mb-4 flex flex-wrap gap-3">
+            {slots.map((s) => {
+              const st = s.mealType === selected?.mealType ? displayState : s.state;
+              const tint = STATE_TINT[st];
+              const isSel = s.mealType === selected?.mealType;
+              // Prototype: while a meal is still being ordered its tab shows
+              // just emoji + name + dot — no time or status pill.
+              const showMeta = !(orderDay && isMissing(s.mealType));
+              return (
+                <button
+                  key={s.mealType}
+                  type="button"
+                  onClick={() => setPickedMeal(s.mealType)}
+                  className="flex min-w-[150px] flex-1 basis-[160px] flex-col items-start gap-[7px] rounded-[14px] px-4 py-3.5 text-left transition-shadow"
+                  style={{
+                    background: isSel ? `color-mix(in srgb, ${tint} 12%, var(--card))` : "var(--card)",
+                    border: isSel ? `1.5px solid ${tint}` : "1px solid var(--border)",
+                    boxShadow: isSel ? `0 6px 18px color-mix(in srgb, ${tint} 16%, transparent)` : "none",
+                  }}
+                >
+                  <span className="flex w-full items-center gap-2">
+                    <span className="text-lg leading-none">{MEAL_EMOJI[s.mealType]}</span>
+                    <span className="flex-1 text-left font-display text-[15px] font-bold tracking-[-0.012em]">
+                      {shortMeal(s.mealType)}
+                    </span>
+                    <span
+                      className={cn("h-[9px] w-[9px] shrink-0 rounded-full", st.startsWith("action") && "animate-pulse-dot")}
+                      style={{ background: tint }}
+                    />
+                  </span>
+                  {showMeta && (
+                    <>
+                      <span className="font-mono text-xs text-muted-foreground">{s.time}</span>
+                      <span
+                        className="self-start rounded-full px-[9px] py-[3px] text-[11px] font-bold"
+                        style={{ background: `color-mix(in srgb, ${tint} 16%, var(--card))`, color: tint }}
                       >
-                        Log <ChevronRight className="h-3.5 w-3.5" />
-                      </Link>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </BoundedScroll>
+                        {STATE_SHORT[st]}
+                      </span>
+                    </>
+                  )}
+                </button>
+              );
+            })}
+          </div>
         )}
-        {rows.length > 0 ? (
+
+        {/* detail panel */}
+        {canReadOrders && (
+        <div className="rounded-2xl border border-border bg-card p-[18px]">
+          {selected ? (
+            <>
+              {/* Meal head — shown in every mode (prototype: "Lunch by 2:00 PM · Not ordered yet") */}
+              <div className="mb-4 flex flex-wrap items-center gap-2.5">
+                <span className="font-display text-[17px] font-bold tracking-[-0.012em]">
+                  {MEAL_LABEL[selected.mealType]}
+                </span>
+                <span className="font-mono text-xs text-muted-foreground">{selected.time}</span>
+                <span className="flex-1" />
+                <span
+                  className="rounded-full px-[11px] py-1 text-xs font-bold"
+                  style={{
+                    background: `color-mix(in srgb, ${STATE_TINT[displayState]} 16%, var(--card))`,
+                    color: STATE_TINT[displayState],
+                  }}
+                >
+                  {orderMode
+                    ? "Not ordered yet"
+                    : selected.order == null
+                      ? "Not ordered"
+                      : displayState === "done" && wasteRecorded
+                        ? "Delivered & confirmed · waste recorded ✓"
+                        : selected.statusLine}
+                </span>
+              </div>
+
+              {orderMode ? (
+                <OrderModePanel
+                  myNextCutoffAt={myNext?.cutoffAt ?? null}
+                  myNextCutoffTime={myNext?.cutoffTime ?? null}
+                  now={now}
+                  dayWord={nextIsTomorrow ? "tomorrow" : `on ${nextDayLabel}`}
+                  dayPossessive={nextIsTomorrow ? "tomorrow's" : `${nextDayLabel}'s`}
+                  headcount={effectiveHead}
+                  setHeadcount={setHeadcount}
+                  previewMeals={(preview?.meals ?? []).filter((m) =>
+                    missingMeals.some((x) => x.mealType === m.mealType),
+                  )}
+                  selectedMeal={selected.mealType}
+                  dishQty={dishQty}
+                  dishPersons={dishPersons}
+                  setDishPersons={setDishPersonsOverride}
+                  bumpDish={bumpDish}
+                  onSend={() => placeMutation.mutate()}
+                  sending={placeMutation.isPending}
+                  mealsCount={missingMeals.length}
+                  draftSavedAt={draftSavedAt}
+                />
+              ) : selected.order == null ? (
+                <div className="rounded-[12px] border border-dashed border-border px-4 py-9 text-center text-sm text-muted-foreground">
+                  No {shortMeal(selected.mealType)} order for {dayLabel.toLowerCase()}.
+                </div>
+              ) : (
+                <div className="grid items-stretch gap-3 md:grid-cols-3">
+                  <TrackColumn detail={detail ?? null} order={selected.order} />
+                  <ReceiveColumn
+                    detail={detail ?? null}
+                    state={displayState}
+                    canConfirm={canConfirm}
+                    ack={ack}
+                    onAck={() => setAck(true)}
+                    receivedOf={receivedOf}
+                    sentOf={sentOf}
+                    setReceived={setReceived}
+                    mismatchCount={mismatches.length}
+                    reason={reason}
+                    setReason={setReason}
+                    confirmDisabled={confirmDisabled}
+                    onConfirm={() => confirmMutation.mutate()}
+                    confirming={confirmMutation.isPending}
+                    journeyDay={journeyDay}
+                  />
+                  <WasteColumn
+                    detail={detail ?? null}
+                    state={displayState}
+                    canWaste={canWaste}
+                    wasteRecorded={wasteRecorded}
+                    now={now}
+                    wasteQty={wasteQty}
+                    setWasteQty={setWasteQty}
+                    onSave={() => wasteMutation.mutate()}
+                    saving={wasteMutation.isPending}
+                  />
+                </div>
+              )}
+            </>
+          ) : (
+            <Skeleton className="h-40 w-full" />
+          )}
+        </div>
+        )}
+      </section>
+
+      {/* ── footer: previous orders ── */}
+      <div className="flex justify-end">
+        <Link href="/food/orders">
+          <span className="inline-flex cursor-pointer items-center gap-[7px] rounded-full border border-border bg-card px-3.5 py-2 text-[13px] font-semibold text-muted-foreground transition-colors hover:border-accent hover:text-foreground">
+            <History className="h-3.5 w-3.5" />
+            Previous orders
+            <ChevronRight className="h-[13px] w-[13px]" />
+          </span>
+        </Link>
+      </div>
+    </div>
+  );
+}
+
+/* ───────────────────────── detail sub-panels ───────────────────────── */
+
+function TrackColumn({ detail, order }: { detail: OrderDetail | null; order: FoodOrder }) {
+  // Completed rungs from real events; future rungs from the canonical ladder.
+  const events = detail?.events ?? [];
+  const doneBy = new Map<OrderStatus, string>();
+  events.forEach((e) => { doneBy.set(e.status, e.createdAt); });
+  const cancelled = order.status === "CANCELLED" || order.status === "REJECTED";
+  const rows = LADDER.map((step) => {
+    const at = doneBy.get(step.status);
+    return {
+      label: step.label,
+      done: !!at,
+      time: at
+        ? format(parseISO(at), "EEE, h:mm a")
+        : step.status === "DELIVERED" && order.expectedDeliveryAt
+          ? `Expected ${fmtTime(order.expectedDeliveryAt)}`
+          : "—",
+    };
+  });
+  return (
+    <div className="rounded-[12px] border border-border bg-background px-4 py-3.5">
+      <ColumnHead
+        icon={<MapPin className="h-[13px] w-[13px]" strokeWidth={2.5} />}
+        label="Track"
+        tone="var(--info)"
+        right={<span className="font-mono text-[11px] text-muted-foreground">{order.orderNumber}</span>}
+      />
+      {cancelled ? (
+        <div className="px-1 py-4 text-[13px] text-muted-foreground">
+          This order was {order.status.toLowerCase()}.
+          {order.cancelReason ? ` Reason: ${order.cancelReason}` : ""}
+        </div>
+      ) : (
+        <div className="flex flex-col">
+          {rows.map((r, i) => (
+            <div key={r.label} className="flex gap-2.5">
+              <div className="flex flex-col items-center">
+                <CheckDot done={r.done} />
+                {i < rows.length - 1 && <span className="w-[2px] flex-1 bg-border" style={{ minHeight: 10 }} />}
+              </div>
+              <div className="min-w-0 pb-[9px]">
+                <span className={cn("block text-[13.5px]", r.done ? "font-semibold text-foreground" : "font-medium text-muted-foreground")}>
+                  {r.label}
+                </span>
+                <span className="block font-mono text-[11px] text-muted-foreground">{r.time}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ReceiveColumn({
+  detail, state, canConfirm, ack, onAck, receivedOf, sentOf, setReceived,
+  mismatchCount, reason, setReason, confirmDisabled, onConfirm, confirming, journeyDay,
+}: {
+  detail: OrderDetail | null;
+  state: MealState;
+  canConfirm: boolean;
+  ack: boolean;
+  onAck: () => void;
+  receivedOf: (i: OrderDetail["items"][number]) => number;
+  sentOf: (i: OrderDetail["items"][number]) => number;
+  setReceived: React.Dispatch<React.SetStateAction<Record<string, number>>>;
+  mismatchCount: number;
+  reason: string | null;
+  setReason: (r: string) => void;
+  confirmDisabled: boolean;
+  onConfirm: () => void;
+  confirming: boolean;
+  journeyDay: number;
+}) {
+  const delivered = detail?.status === "DELIVERED";
+  const atGate = state === "action-confirm" && canConfirm;
+  const REASONS = ["Spilled in transit", "Short from kitchen", "Counting mistake"];
+  return (
+    <div className="flex flex-col rounded-[12px] border border-border bg-background px-4 py-3.5">
+      <ColumnHead
+        icon={<Check className="h-[13px] w-[13px]" strokeWidth={2.5} />}
+        label="Received"
+        tone="var(--success)"
+      />
+      {delivered || state === "done" || state === "action-waste" ? (
+        <>
+          <div className="mb-2 flex items-center gap-2">
+            <CheckDot done />
+            <span className="text-[13px] font-semibold text-success">Delivered & confirmed</span>
+          </div>
+          <div className="flex flex-col">
+            {(detail?.items ?? []).map((i) => (
+              <div key={i.id} className="flex items-center justify-between gap-2 border-b border-dashed border-border py-1.5 last:border-0">
+                <span className="text-[13px]">{i.dishName ?? "Item"}</span>
+                <span className="font-mono text-[12.5px] font-semibold tabular-nums text-muted-foreground">
+                  {fmtQty(num(i.receivedQty ?? i.preparedQty ?? i.orderedQty), i.unit)}
+                </span>
+              </div>
+            ))}
+          </div>
+          {detail?.deliveryRemarks && (
+            <div className="mt-2 text-xs text-muted-foreground">{detail.deliveryRemarks}</div>
+          )}
+        </>
+      ) : atGate && !ack ? (
+        <div className="flex flex-1 flex-col items-center justify-center gap-2.5 px-2 py-[18px] text-center">
+          <span className="flex h-[34px] w-[34px] items-center justify-center rounded-full bg-warning">
+            <Truck className="h-4 w-4 text-white" strokeWidth={2.5} />
+          </span>
+          <span className="text-[13px] text-muted-foreground">
+            {detail?.deliveryPartnerName ? `${detail.deliveryPartnerName} · ` : ""}
+            arrived {fmtTime(detail?.dispatchedAt) || "just now"}
+          </span>
           <button
             type="button"
-            onClick={onAct}
-            className="mt-3 inline-flex items-center gap-1 text-sm font-medium text-accent hover:text-accent/80 focus:outline-none focus:ring-2 focus:ring-accent/40 rounded-md"
+            onClick={onAck}
+            className="h-10 rounded-[9px] bg-warning px-4 text-[13px] font-bold text-white transition-[filter] hover:brightness-105"
           >
-            Go to Waste log <ChevronRight className="h-4 w-4" />
+            I've received this order ✓
           </button>
-        ) : null}
-      </CardContent>
-    </Card>
-  );
-}
-
-function PendingActionCard({
-  icon: Icon,
-  label,
-  count,
-  accent,
-  onClick,
-}: {
-  icon: LucideIcon;
-  label: string;
-  count: number;
-  accent: string;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="group text-left w-full rounded-xl border bg-card p-4 shadow-sm transition-all hover:border-primary/40 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-primary/40"
-    >
-      <div className="flex items-start justify-between">
-        <div className="flex items-center gap-2">
-          <span className="flex h-9 w-9 items-center justify-center rounded-full bg-muted/40">
-            <Icon className={`h-4 w-4 ${count > 0 ? accent : "text-muted-foreground"}`} />
-          </span>
-          <span className="text-sm font-medium text-foreground">{label}</span>
         </div>
-        <ChevronRight className="h-4 w-4 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
-      </div>
-      <div className="mt-3 flex items-baseline gap-2">
-        <span
-          className={`font-display text-3xl font-bold ${count > 0 ? "text-foreground" : "text-muted-foreground"}`}
-        >
-          {count}
-        </span>
-        <span className="text-xs text-muted-foreground">
-          {count === 1 ? "order" : "orders"}
-          {count > 0 ? " need attention" : " pending"}
-        </span>
-      </div>
-    </button>
+      ) : atGate && ack ? (
+        <>
+          <div className="flex flex-col">
+            {(detail?.items ?? []).map((i) => {
+              const sent = sentOf(i);
+              const rec = receivedOf(i);
+              const diff = rec !== sent;
+              return (
+                <div key={i.id} className={cn("flex items-center gap-2 border-b border-dashed border-border py-[7px] last:border-0", diff && "rounded bg-warning-soft px-1")}>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[13px] font-semibold">{i.dishName ?? "Item"}</span>
+                    <span className="block text-[11px] text-muted-foreground">sent {fmtQty(sent, i.unit)}</span>
+                  </span>
+                  <MiniStepper
+                    value={rec}
+                    display={String(rec)}
+                    onMinus={() => setReceived((r) => ({ ...r, [i.id]: Math.max(0, rec - 1) }))}
+                    onPlus={() => setReceived((r) => ({ ...r, [i.id]: Math.min(sent, rec + 1) }))}
+                  />
+                </div>
+              );
+            })}
+          </div>
+          {mismatchCount > 0 && (
+            <div className="mt-2.5 rounded-[9px] bg-warning-soft px-3 py-2.5">
+              <div className="mb-1.5 text-xs font-semibold">
+                {mismatchCount} item{mismatchCount > 1 ? "s are" : " is"} less than what was sent
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {REASONS.map((r) => (
+                  <button
+                    key={r}
+                    type="button"
+                    onClick={() => setReason(r)}
+                    className={cn(
+                      "rounded-full px-3 py-1.5 text-xs font-semibold",
+                      reason === r ? "bg-warning text-white" : "border border-border bg-card text-foreground",
+                    )}
+                  >
+                    {r}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          <button
+            type="button"
+            disabled={confirmDisabled || confirming}
+            onClick={onConfirm}
+            className={cn(
+              "mt-3 h-10 w-full rounded-[9px] text-[13px] font-bold transition-[filter]",
+              confirmDisabled || confirming
+                ? "cursor-not-allowed bg-muted text-muted-foreground"
+                : "bg-success text-white hover:brightness-105",
+            )}
+          >
+            {confirming
+              ? "Saving…"
+              : mismatchCount > 0
+                ? reason ? "Save received — short noted" : "Pick a reason first"
+                : "Save received ✓"}
+          </button>
+        </>
+      ) : (
+        <LockedPanel
+          text={
+            state === "cooking"
+              ? "Cooking now — confirm once it arrives at your gate"
+              : journeyDay === 1
+                ? "Arrives tomorrow — confirm at the gate"
+                : state === "action-confirm" && !canConfirm
+                  ? "Awaiting confirmation by the property team"
+                  : "Waiting for delivery"
+          }
+        />
+      )}
+    </div>
   );
 }
 
+function WasteColumn({
+  detail, state, canWaste, wasteRecorded, now, wasteQty, setWasteQty, onSave, saving,
+}: {
+  detail: OrderDetail | null;
+  state: MealState;
+  canWaste: boolean;
+  wasteRecorded: boolean;
+  now: Date;
+  wasteQty: Record<string, number>;
+  setWasteQty: React.Dispatch<React.SetStateAction<Record<string, number>>>;
+  onSave: () => void;
+  saving: boolean;
+}) {
+  const active = state === "action-waste" && canWaste && !wasteRecorded;
+  const minsLeft = detail?.wasteEditableUntil
+    ? Math.max(0, differenceInMinutes(parseISO(detail.wasteEditableUntil), now))
+    : 0;
+  const wasteStep = (unit: string) => (isFractionalUnit(unit) ? 0.5 : 1);
+  const capOf = (i: OrderDetail["items"][number]) => num(i.receivedQty ?? i.preparedQty ?? i.orderedQty);
+  const summary = (detail?.items ?? []).filter((i) => num(i.wastedQty) > 0);
+  return (
+    <div className="flex flex-col rounded-[12px] border border-border bg-background px-4 py-3.5">
+      <ColumnHead
+        icon={<Trash2 className="h-[13px] w-[13px]" strokeWidth={2.5} />}
+        label="Food waste"
+        tone="var(--pop)"
+        right={active ? (
+          <span className="font-mono text-[11px] font-semibold text-pop">closes in {minsLeft}m</span>
+        ) : undefined}
+      />
+      {wasteRecorded ? (
+        <>
+          <div className="mb-2 flex items-center gap-2">
+            <CheckDot done />
+            <span className="text-[13px] font-semibold text-success">Waste recorded</span>
+          </div>
+          {summary.length > 0 ? (
+            <div className="flex flex-col">
+              {summary.map((i) => (
+                <div key={i.id} className="flex items-center justify-between gap-2 border-b border-dashed border-border py-1.5 last:border-0">
+                  <span className="text-[13px]">{i.dishName ?? "Item"}</span>
+                  <span className="font-mono text-[12.5px] font-semibold tabular-nums text-muted-foreground">
+                    {fmtQty(num(i.wastedQty), i.unit)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="text-xs text-muted-foreground">Zero waste recorded — brilliant! 🎉</div>
+          )}
+        </>
+      ) : active ? (
+        <>
+          <div className="flex flex-col">
+            {(detail?.items ?? []).map((i) => {
+              const v = wasteQty[i.id] ?? 0;
+              const step = wasteStep(i.unit);
+              return (
+                <div key={i.id} className="flex items-center gap-2 border-b border-dashed border-border py-[7px] last:border-0">
+                  <span className="min-w-0 flex-1 truncate text-[13px] font-semibold">{i.dishName ?? "Item"}</span>
+                  <MiniStepper
+                    value={v}
+                    display={fmtQty(v, i.unit)}
+                    onMinus={() =>
+                      setWasteQty((q) => ({ ...q, [i.id]: Math.max(0, Math.round((v - step) * 10) / 10) }))
+                    }
+                    onPlus={() =>
+                      setWasteQty((q) => ({ ...q, [i.id]: Math.min(capOf(i), Math.round((v + step) * 10) / 10) }))
+                    }
+                  />
+                </div>
+              );
+            })}
+          </div>
+          <button
+            type="button"
+            disabled={saving}
+            onClick={onSave}
+            className="mt-3 h-10 w-full rounded-[9px] bg-success text-[13px] font-bold text-white transition-[filter] hover:brightness-105 disabled:opacity-60"
+          >
+            {saving ? "Saving…" : "Save waste ✓"}
+          </button>
+        </>
+      ) : state === "done" && !wasteRecorded ? (
+        <LockedPanel text="The waste window has closed for this meal" />
+      ) : (
+        <LockedPanel text="Opens once the delivery is confirmed" />
+      )}
+    </div>
+  );
+}
+
+/* ───────────────────────── order mode (tomorrow) ───────────────────────── */
+
+function OrderModePanel({
+  myNextCutoffAt, myNextCutoffTime, now, dayWord, dayPossessive, headcount, setHeadcount, previewMeals,
+  selectedMeal, dishQty, dishPersons, setDishPersons, bumpDish, onSend, sending, mealsCount, draftSavedAt,
+}: {
+  myNextCutoffAt: string | null;
+  myNextCutoffTime: string | null;
+  now: Date;
+  /** "tomorrow" or "on Wednesday" — for the headcount heading. */
+  dayWord: string;
+  /** "tomorrow's" or "Wednesday's" — for the send button. */
+  dayPossessive: string;
+  headcount: number;
+  setHeadcount: (updater: number | null) => void;
+  previewMeals: Array<{
+    mealType: MealType;
+    label: string;
+    items: Array<{ dishId: string; dishName: string; unit: string; qtyPerResident: number }>;
+  }>;
+  selectedMeal: MealType | null;
+  dishQty: (mealType: MealType, dishId: string, perResident: number, unit: string) => number;
+  dishPersons: (mealType: MealType, dishId: string) => number;
+  setDishPersons: (mealType: MealType, dishId: string, persons: number) => void;
+  bumpDish: (mealType: MealType, dishId: string, perResident: number, unit: string, dir: 1 | -1) => void;
+  onSend: () => void;
+  sending: boolean;
+  mealsCount: number;
+  draftSavedAt: Date | null;
+}) {
+  // The dish grid shows the selected meal (tabs above switch meals); the send
+  // button submits every missing meal at once — exactly like the prototype.
+  const meal =
+    previewMeals.find((m) => m.mealType === selectedMeal) ?? previewMeals[0] ?? null;
+  // One dish editable at a time (pencil → persons/qty steppers → check).
+  const [editing, setEditing] = React.useState<string | null>(null);
+  return (
+    <>
+      <div className="mb-3.5 flex items-center gap-2.5 rounded-[10px] bg-warning-soft px-3.5 py-2.5 text-[13px]">
+        <Clock className="h-[15px] w-[15px] shrink-0 text-warning" />
+        <span>
+          Order closes at <strong>{myNextCutoffTime ?? "the cut-off"}</strong> —{" "}
+          <span className="font-mono font-semibold text-warning">{untilLabel(myNextCutoffAt, now)}</span> left
+        </span>
+      </div>
+
+      <div className="mb-3.5 flex flex-wrap items-center gap-3.5">
+        <div className="min-w-[160px] flex-1">
+          <div className="font-display text-sm font-bold tracking-[-0.012em]">Who's eating {dayWord}?</div>
+          <div className="mt-0.5 text-xs text-muted-foreground">
+            Dishes below adjust automatically. Switch tabs above to edit each meal.
+          </div>
+        </div>
+        <div className="flex items-center gap-2.5">
+          <button
+            type="button"
+            onClick={() => setHeadcount(Math.max(1, headcount - 1))}
+            aria-label="Fewer people"
+            className="h-[38px] w-[38px] rounded-[10px] border border-border bg-background text-lg text-foreground hover:bg-muted"
+          >
+            −
+          </button>
+          <span className="min-w-[64px] text-center font-mono text-base font-semibold tabular-nums">
+            {headcount} ppl
+          </span>
+          <button
+            type="button"
+            onClick={() => setHeadcount(headcount + 1)}
+            aria-label="More people"
+            className="h-[38px] w-[38px] rounded-[10px] border border-border bg-background text-lg text-foreground hover:bg-muted"
+          >
+            +
+          </button>
+        </div>
+      </div>
+
+      {meal == null ? (
+        <Skeleton className="h-32 w-full" />
+      ) : (
+        /* Bounded scroll keeps long menus manageable — the send button and
+           headcount stay in view no matter how many dishes a meal has. */
+        <div className="-mr-1 max-h-[420px] overflow-y-auto pr-1">
+          <div className="grid gap-2.5 sm:grid-cols-2">
+            {meal.items.map((d) => {
+              const key = `${meal.mealType}:${d.dishId}`;
+              const qty = dishQty(meal.mealType, d.dishId, d.qtyPerResident, d.unit);
+              const ppl = dishPersons(meal.mealType, d.dishId);
+              const isEditing = editing === key;
+              return (
+                <div
+                  key={d.dishId}
+                  className={cn(
+                    "rounded-[12px] border bg-background px-3 py-2.5",
+                    isEditing ? "border-accent/50" : "border-border",
+                  )}
+                >
+                  <div className="flex items-center gap-2.5">
+                    <span
+                      className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[10px] text-xl"
+                      style={{ background: "color-mix(in srgb, #FF9A3D 16%, var(--card))" }}
+                    >
+                      {dishEmoji(d.dishName, meal.mealType)}
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-[13.5px] font-semibold">{d.dishName}</span>
+                      <span className="block text-[11px] text-muted-foreground">{d.unit.toLowerCase()}</span>
+                    </span>
+                    {isEditing ? (
+                      <button
+                        type="button"
+                        onClick={() => setEditing(null)}
+                        aria-label="Done editing"
+                        className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-lg border border-border bg-card text-accent hover:bg-muted"
+                      >
+                        <Check className="h-4 w-4" strokeWidth={3} />
+                      </button>
+                    ) : (
+                      <span className="flex shrink-0 items-center gap-2">
+                        <span className="text-right">
+                          <span className="font-mono text-[13.5px] font-semibold tabular-nums">{qty}</span>{" "}
+                          <span className="text-[11px] text-muted-foreground">
+                            {d.unit.toLowerCase()} · {ppl} ppl
+                          </span>
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setEditing(key)}
+                          aria-label={`Edit ${d.dishName}`}
+                          className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-lg border border-border bg-card text-muted-foreground hover:bg-muted hover:text-foreground"
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                        </button>
+                      </span>
+                    )}
+                  </div>
+                  {isEditing && (
+                    <div className="mt-2 flex flex-wrap items-center justify-end gap-x-3 gap-y-2 border-t border-dashed border-border pt-2">
+                      <span className="text-[11px] text-muted-foreground">persons</span>
+                      <MiniStepper
+                        value={ppl}
+                        display={String(ppl)}
+                        onMinus={() => setDishPersons(meal.mealType, d.dishId, ppl - 1)}
+                        onPlus={() => setDishPersons(meal.mealType, d.dishId, ppl + 1)}
+                      />
+                      <span className="text-[11px] text-muted-foreground">qty</span>
+                      <MiniStepper
+                        value={qty}
+                        display={String(qty)}
+                        onMinus={() => bumpDish(meal.mealType, d.dishId, d.qtyPerResident, d.unit, -1)}
+                        onPlus={() => bumpDish(meal.mealType, d.dishId, d.qtyPerResident, d.unit, 1)}
+                      />
+                      <span className="text-[11px] text-muted-foreground">{d.unit.toLowerCase()}</span>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {draftSavedAt && (
+        <div className="mt-2 text-center text-[11px] text-muted-foreground">
+          Draft saved to your account · {format(draftSavedAt, "h:mm a")} — it follows you on any device
+        </div>
+      )}
+      <button
+        type="button"
+        disabled={sending || previewMeals.length === 0}
+        onClick={onSend}
+        className="mt-3.5 h-[52px] w-full rounded-[12px] bg-success font-display text-[15px] font-bold tracking-[-0.012em] text-white transition-[filter] hover:brightness-105 disabled:opacity-60"
+      >
+        {sending ? "Sending…" : `Send ${dayPossessive} order — all ${mealsCount} meal${mealsCount === 1 ? "" : "s"} ✓`}
+      </button>
+    </>
+  );
+}

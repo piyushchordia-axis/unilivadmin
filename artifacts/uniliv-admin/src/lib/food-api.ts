@@ -5,6 +5,7 @@
  * and a query-key factory. Pages compose these with @tanstack/react-query
  * (useQuery / useMutation), matching the codebase's custom-endpoint convention.
  */
+import { format, parseISO } from "date-fns";
 import { apiFetch } from "@/lib/api-fetch";
 
 // ─── Domain types ────────────────────────────────────────────────────────────
@@ -438,6 +439,7 @@ export const foodKeys = {
   kitchenByPincode: (pincode: string) => ["food", "kitchen-by-pincode", pincode] as const,
   // WS9 — standalone order tracking by order number / id.
   trackOrder: (term: string) => ["food", "track", term] as const,
+  orderDraft: (p: Record<string, unknown>) => ["food", "order-draft", p] as const,
 };
 
 // ─── API surface ─────────────────────────────────────────────────────────────
@@ -479,6 +481,14 @@ export const foodApi = {
     apiFetch<Envelope<OrderDetail>>(`/food/orders/track${qs({ orderNumber: term })}`).then((r) => r.data),
   placeOrder: (body: Record<string, unknown>) =>
     apiFetch<Envelope<OrderDetail>>(`/food/orders`, { method: "POST", body: JSON.stringify(body) }).then((r) => r.data),
+  // Server-side place-order drafts — per (user, property, serviceDate) so a
+  // half-built order follows the unit lead across browsers/devices.
+  orderDraft: (p: { propertyId: string; serviceDate: string }) =>
+    apiFetch<Envelope<{ payload: unknown; updatedAt: string } | null>>(`/food/order-draft${qs(p)}`).then((r) => r.data),
+  saveOrderDraft: (body: { propertyId: string; serviceDate: string; payload: unknown }) =>
+    apiFetch<Envelope<{ updatedAt: string }>>(`/food/order-draft`, { method: "PUT", body: JSON.stringify(body) }).then((r) => r.data),
+  deleteOrderDraft: (p: { propertyId: string; serviceDate: string }) =>
+    apiFetch<Envelope<null>>(`/food/order-draft${qs(p)}`, { method: "DELETE" }).then((r) => r.data),
   updateOrder: (id: string, body: Record<string, unknown>) =>
     apiFetch<Envelope<OrderDetail>>(`/food/orders/${id}`, { method: "PUT", body: JSON.stringify(body) }).then((r) => r.data),
   // B3-6 — edit an order's people count (the only editable quantity input). Item
@@ -728,6 +738,47 @@ export const foodApi = {
 export const MEAL_LABEL: Record<MealType, string> = {
   BREAKFAST: "Breakfast", LUNCH: "Lunch", SNACKS: "High Tea / Evening Snacks", DINNER: "Dinner",
 };
+/** Canonical order-status pill (label + soft-token tone) — one source of truth
+ *  for every status badge across the food pages. */
+export const ORDER_STATUS_PILL: Record<OrderStatus, { label: string; cls: string }> = {
+  PLACED:    { label: "Placed",      cls: "bg-info-soft text-info" },
+  ACCEPTED:  { label: "Accepted",    cls: "bg-info-soft text-info" },
+  PREPARING: { label: "In kitchen",  cls: "bg-warning-soft text-warning" },
+  DISPATCHED:{ label: "Dispatched",  cls: "bg-warning-soft text-warning" },
+  DELIVERED: { label: "Delivered ✓", cls: "bg-success-soft text-success" },
+  CANCELLED: { label: "Cancelled",   cls: "bg-muted text-muted-foreground" },
+  REJECTED:  { label: "Rejected",    cls: "bg-danger-soft text-destructive" },
+};
+/** Normalise a serviceDate ISO timestamp to its LOCAL calendar-day key ("yyyy-MM-dd"). */
+export const serviceDayKey = (iso: string) => format(parseISO(iso), "yyyy-MM-dd");
+/** Meal emoji for the gamified journey/order surfaces (one source of truth). */
+export const MEAL_EMOJI: Record<MealType, string> = {
+  BREAKFAST: "🍳", LUNCH: "🍛", SNACKS: "🍪", DINNER: "🍜",
+};
+/** Short display name — "High Tea / Evening Snacks" → "High Tea". */
+export const shortMeal = (m: MealType): string => MEAL_LABEL[m].split(" /")[0];
+/** Best-effort emoji for a dish name; falls back to the meal's emoji. */
+export function dishEmoji(name: string, mealType: MealType): string {
+  const n = name.toLowerCase();
+  if (/\b(tea|chai|coffee)\b/.test(n)) return "☕";
+  if (/\b(milk|lassi|buttermilk)\b/.test(n)) return "🥛";
+  if (/\b(juice)\b/.test(n)) return "🧃";
+  if (/\b(egg|omelette|omelet)\b/.test(n)) return "🥚";
+  if (/\b(rice|pulao|biryani|jeera|khichdi)\b/.test(n)) return "🍚";
+  if (/\b(roti|chapati|paratha|naan|puri|bread|toast)\b/.test(n)) return "🫓";
+  if (/\b(dal|sambar|rajma|chole|curry|kadhi)\b/.test(n)) return "🍲";
+  if (/\b(salad)\b/.test(n)) return "🥗";
+  if (/\b(fruit|banana|apple)\b/.test(n)) return "🍎";
+  if (/\b(samosa|pakora|vada|cutlet)\b/.test(n)) return "🥟";
+  if (/\b(sweet|halwa|kheer|gulab|dessert|laddu|ladoo)\b/.test(n)) return "🍮";
+  if (/\b(chicken)\b/.test(n)) return "🍗";
+  if (/\b(fish)\b/.test(n)) return "🐟";
+  if (/\b(paneer)\b/.test(n)) return "🧀";
+  return MEAL_EMOJI[mealType];
+}
+/** True for units ordered in fractional steps (0.5) with 1-decimal display.
+ *  Unit values are the DB enum: G/KG/ML/LITRE/PCS/PLATE/SERVING. */
+export const isFractionalUnit = (u: string): boolean => /^(kg|litre)$/i.test(u.trim());
 export const DAY_LABEL = ["", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 export function fmtQty(qty: number | string | null | undefined, unit?: string): string {
   if (qty === null || qty === undefined || qty === "") return "—";

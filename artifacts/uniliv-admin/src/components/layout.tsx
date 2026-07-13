@@ -1,17 +1,11 @@
 import * as React from "react"
 import { Link, useLocation } from "wouter"
 import { useQueryClient } from "@tanstack/react-query"
-import { useAuthStore, useAppStore } from "@/lib/store"
-import { useLogout, useGetProperties, getGetPropertiesQueryKey } from "@workspace/api-client-react"
+import { useAuthStore } from "@/lib/store"
+import { useLogout } from "@workspace/api-client-react"
 import {
-  LogOut, Search, Menu, Check, ChevronsUpDown, Building2,
+  LogOut, Search, Menu, ChevronLeft, LayoutGrid,
 } from "lucide-react"
-import {
-  Popover, PopoverContent, PopoverTrigger,
-} from "@/components/ui/popover"
-import {
-  Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList,
-} from "@/components/ui/command"
 import {
   Sheet, SheetContent, SheetHeader, SheetTitle,
 } from "@/components/ui/sheet"
@@ -32,28 +26,133 @@ import { cn } from "@/lib/utils"
 import { navGroups, type NavGroup, type NavItem } from "@/lib/nav"
 import { CommandPalette, type CommandNavItem } from "@/components/command-palette"
 
-/** Live greeting + date/time/day shown in the topbar (Persona st.37, st.39). */
-function GreetingClock({ name }: { name?: string }) {
-  const [now, setNow] = React.useState(new Date())
-  React.useEffect(() => {
-    const t = setInterval(() => setNow(new Date()), 15_000)
-    return () => clearInterval(t)
-  }, [])
-  const h = now.getHours()
-  const greeting = h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : "Good evening"
-  const first = name?.split(" ")[0]
-  const dateStr = now.toLocaleDateString("en-IN", { weekday: "long", day: "2-digit", month: "short", year: "numeric" })
-  const timeStr = now.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })
+function isItemActive(location: string, href: string) {
+  return location === href || (href !== "/" && location.startsWith(href))
+}
+
+/** Desktop rail nav link — collapses to a centred icon; expanded shows the
+ *  label. Active state gets the 3px gradient rail + accent tint. */
+function RailNavLink({
+  item, location, collapsed,
+}: {
+  item: NavItem
+  location: string
+  collapsed: boolean
+}) {
+  const isActive = isItemActive(location, item.href)
   return (
-    <div className="hidden lg:flex flex-col leading-tight">
-      <span className="text-sm font-semibold text-foreground">{greeting}{first ? `, ${first}` : ""}</span>
-      <span className="text-xs text-muted-foreground tabular-nums">{dateStr} · {timeStr}</span>
-    </div>
+    <Link href={item.href}>
+      <span
+        title={item.title}
+        aria-current={isActive ? "page" : undefined}
+        className={cn(
+          "relative flex items-center rounded-[10px] text-sm transition-colors cursor-pointer w-full",
+          collapsed ? "justify-center py-[11px]" : "gap-2.5 pl-4 pr-3.5 py-2.5",
+          isActive
+            ? "bg-accent/5 text-accent-strong font-semibold"
+            : "text-muted-foreground hover:bg-muted hover:text-foreground",
+        )}
+      >
+        {isActive && (
+          <span aria-hidden className="absolute left-0 top-[7px] bottom-[7px] w-[3px] rounded-full bg-rail-gradient" />
+        )}
+        <item.icon className="h-[17px] w-[17px] shrink-0" />
+        {!collapsed && <span className="flex-1 truncate text-left">{item.title}</span>}
+      </span>
+    </Link>
   )
 }
 
-function isItemActive(location: string, href: string) {
-  return location === href || (href !== "/" && location.startsWith(href))
+/** The collapsible desktop sidebar (68px ↔ 248px), shown inside modules only.
+ *  Head: logo (expanded) + collapse toggle. Then a pinned "All Modules" link
+ *  back to the launcher, the module's label, and its pages. */
+function DesktopSidebar({
+  activeModule, location, collapsed, onToggle,
+}: {
+  activeModule: NavGroup | null
+  location: string
+  collapsed: boolean
+  onToggle: () => void
+}) {
+  return (
+    <aside
+      className={cn(
+        "hidden md:flex flex-col h-full shrink-0 bg-card border-r border-border z-20 overflow-y-auto overflow-x-hidden transition-[width] duration-200 gap-0.5",
+        collapsed ? "w-[68px] px-2.5 pb-3.5" : "w-[248px] px-3 pb-3.5",
+      )}
+    >
+      {collapsed ? (
+        /* Collapsed head — the square brand mark stacked over the expand
+           toggle, so the brand stays visible even as an icon rail. */
+        <div className="-mx-2.5 mb-2.5 flex shrink-0 flex-col items-center gap-2 border-b border-border py-3">
+          <Link href="/apps">
+            <img
+              src="/brand/uniliv-mark.svg"
+              alt="Uniliv"
+              className="h-9 w-9 shrink-0 cursor-pointer select-none rounded-[10px]"
+              draggable={false}
+            />
+          </Link>
+          <button
+            type="button"
+            onClick={onToggle}
+            aria-label="Expand sidebar"
+            className="flex h-7 w-8 shrink-0 items-center justify-center rounded-lg border border-border bg-card text-muted-foreground transition-colors hover:bg-muted"
+          >
+            <ChevronLeft className="h-[15px] w-[15px] rotate-180" />
+          </button>
+        </div>
+      ) : (
+        <div className="-mx-3 mb-2.5 flex h-16 shrink-0 items-center justify-between border-b border-border pl-5 pr-3.5">
+          <Link href="/apps">
+            <img
+              src="/brand/uniliv-logo.svg"
+              alt="Uniliv"
+              className="h-8 w-auto shrink-0 cursor-pointer select-none"
+              draggable={false}
+            />
+          </Link>
+          <button
+            type="button"
+            onClick={onToggle}
+            aria-label="Collapse sidebar"
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-border bg-card text-muted-foreground transition-colors hover:bg-muted"
+          >
+            <ChevronLeft className="h-[15px] w-[15px]" />
+          </button>
+        </div>
+      )}
+
+      <Link href="/apps">
+        <span
+          title="All Modules"
+          className={cn(
+            "flex items-center rounded-[10px] text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground cursor-pointer w-full",
+            collapsed ? "justify-center py-[11px]" : "gap-2.5 px-3.5 py-2.5",
+          )}
+        >
+          <LayoutGrid className="h-4 w-4 shrink-0" />
+          {!collapsed && <span className="flex-1 truncate text-left">All Modules</span>}
+        </span>
+      </Link>
+
+      {activeModule && (
+        collapsed ? (
+          <div aria-hidden className="mx-0.5 mt-2.5 mb-1 border-t border-border" />
+        ) : (
+          <p className="mx-0.5 mt-2.5 mb-1 border-t border-border pt-3 pl-3 text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+            {activeModule.title}
+          </p>
+        )
+      )}
+
+      <nav className="flex flex-col gap-0.5">
+        {activeModule?.items.map((item) => (
+          <RailNavLink key={item.href} item={item} location={location} collapsed={collapsed} />
+        ))}
+      </nav>
+    </aside>
+  )
 }
 
 /** A single nav link with the gradient active-rail (no layout shift: pl-4 in both states). */
@@ -103,102 +202,26 @@ function ActiveModuleSection({
   )
 }
 
-/** Searchable, scroll-capped property scope selector (Popover + cmdk). */
-function PropertyScope({
-  properties, propertyId, onSelect, className, tone = "sidebar",
-}: {
-  properties: Array<{ id: string; name: string }>
-  propertyId: string | null
-  onSelect: (id: string | null) => void
-  className?: string
-  /** "sidebar" tints to the sidebar surface; "header" tints to the card header. */
-  tone?: "sidebar" | "header"
-}) {
-  const [open, setOpen] = React.useState(false)
-  const current = properties.find((p) => p.id === propertyId)
-  const label = propertyId ? (current?.name ?? "Property") : "All Properties"
-  const toneCls = tone === "header"
-    ? "border-border bg-surface text-foreground hover:bg-muted/50"
-    : "border-sidebar-border bg-sidebar-foreground/[0.04] text-sidebar-foreground hover:bg-sidebar-foreground/[0.07]"
-  const mutedCls = tone === "header" ? "text-muted-foreground" : "text-sidebar-foreground/60"
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          role="combobox"
-          aria-expanded={open}
-          aria-label="Select property scope"
-          className={cn(
-            "items-center gap-2 rounded-lg border px-3 py-2 text-sm transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-accent",
-            toneCls,
-            className,
-          )}
-        >
-          <Building2 className={cn("w-4 h-4 shrink-0", mutedCls)} />
-          <span className="flex-1 truncate text-left">{label}</span>
-          <ChevronsUpDown className={cn("w-4 h-4 shrink-0", mutedCls)} />
-        </button>
-      </PopoverTrigger>
-      <PopoverContent align="start" className="w-[--radix-popover-trigger-width] min-w-56 p-0">
-        <Command>
-          <CommandInput placeholder="Search properties…" />
-          <CommandList className="max-h-64">
-            <CommandEmpty>No properties found.</CommandEmpty>
-            <CommandGroup>
-              <CommandItem
-                value="All Properties"
-                onSelect={() => { onSelect(null); setOpen(false) }}
-              >
-                <Check className={cn("w-4 h-4", propertyId === null ? "opacity-100" : "opacity-0")} />
-                <span>All Properties</span>
-              </CommandItem>
-              {properties.map((p) => (
-                <CommandItem
-                  key={p.id}
-                  value={p.name}
-                  onSelect={() => { onSelect(p.id); setOpen(false) }}
-                >
-                  <Check className={cn("w-4 h-4", propertyId === p.id ? "opacity-100" : "opacity-0")} />
-                  <span className="truncate">{p.name}</span>
-                </CommandItem>
-              ))}
-            </CommandGroup>
-          </CommandList>
-        </Command>
-      </PopoverContent>
-    </Popover>
-  )
-}
+/* The former PropertyScope selector (Popover + cmdk) was removed with the
+   redesign — property scoping now lives on the pages that need it (e.g. the
+   Food journey's property Select). See git history to resurrect it. */
 
-/** Shared sidebar inner content — reused by the desktop rail and the mobile Sheet. */
+/** Shared sidebar inner content — used by the mobile Sheet drawer. */
 function SidebarContent({
-  filteredGroups, location, activeGroup, properties, propertyId, onSelectProperty,
-  me, onLogout, onNavigate, showFooter = true, showPropertyScope = true,
+  filteredGroups, location, activeGroup,
+  me, onLogout, onNavigate, showFooter = true,
 }: {
   filteredGroups: NavGroup[]
   location: string
   /** Title of the module the current route belongs to (null on module-less pages). */
   activeGroup: string | null
-  properties: Array<{ id: string; name: string }>
-  propertyId: string | null
-  onSelectProperty: (id: string | null) => void
   me: ReturnType<typeof usePermissions>["me"]
   onLogout: () => void
   onNavigate?: () => void
   showFooter?: boolean
-  /** Hidden on desktop (the property scope lives in the header there); shown in the mobile drawer. */
-  showPropertyScope?: boolean
 }) {
   return (
     <>
-      {/* Property switcher hidden — one property per unit lead, so the scope
-          picker adds no value (re-enable if multi-property scoping returns).
-      {showPropertyScope && (
-        <div className="px-4 pb-4 border-b border-sidebar-border">
-          <PropertyScope properties={properties} propertyId={propertyId} onSelect={onSelectProperty} className="flex w-full" />
-        </div>
-      )} */}
       <div className="flex-1 overflow-y-auto py-3 scrollbar-thin">
         <nav className="px-3 space-y-1">
           {/* Pinned links (the "Home" group: the module launcher) — always visible. */}
@@ -274,8 +297,12 @@ function HeaderUserMenu({ name, subtitle, onLogout }: {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="icon" className="shrink-0 rounded-full" aria-label="Account menu">
-          <UserAvatar name={name} className="h-8 w-8" />
+        <Button variant="ghost" size="icon" className="h-[38px] w-[38px] shrink-0 rounded-full" aria-label="Account menu">
+          <UserAvatar
+            name={name}
+            className="h-[38px] w-[38px]"
+            fallbackClassName="bg-brand-gradient text-white font-bold text-sm font-display"
+          />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-56">
@@ -298,17 +325,20 @@ function HeaderUserMenu({ name, subtitle, onLogout }: {
 export function Layout({ children }: { children: React.ReactNode }) {
   const [location, setLocation] = useLocation()
   const { setToken } = useAuthStore()
-  const { propertyId, setPropertyId } = useAppStore()
-  const { me, can } = usePermissions()
-  const { data: propertiesRes } = useGetProperties(undefined, { query: { queryKey: getGetPropertiesQueryKey() } })
+  const { me, can, role } = usePermissions()
   const logout = useLogout()
   const queryClient = useQueryClient()
-  const properties = (propertiesRes?.data || []) as Array<{ id: string; name: string }>
 
   // Persona/role pill shown next to the wordmark (undefined while `me` loads).
   const personaLabel = me ? (me.designation || roleLabel(me.role)) || undefined : undefined
 
   const [mobileOpen, setMobileOpen] = React.useState(false)
+
+  // Desktop sidebar collapse — icon rail (68px) by default, expands to 248px.
+  // Deliberately NOT persisted (matches the design prototype): every page
+  // load starts collapsed; expanding is a within-session choice.
+  const [collapsed, setCollapsed] = React.useState(true)
+  const toggleCollapsed = React.useCallback(() => setCollapsed((c) => !c), [])
 
   const handleLogout = () => {
     logout.mutate(undefined, {
@@ -322,9 +352,15 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
   const filteredGroups = React.useMemo(
     () => navGroups
-      .map((g) => ({ ...g, items: g.items.filter((i) => !i.module || can(i.module, "view")) }))
+      .map((g) => ({
+        ...g,
+        items: g.items.filter((i) =>
+          (!i.module || can(i.module, "view")) &&
+          !(role && i.hideFor?.includes(role)),
+        ),
+      }))
       .filter((g) => g.items.length > 0),
-    [can],
+    [can, role],
   )
 
   // Flatten permission-filtered nav for the command palette.
@@ -365,7 +401,17 @@ export function Layout({ children }: { children: React.ReactNode }) {
   // The launcher (/apps) is a full-width page: no sidebar, logo in the header.
   const isLauncher = location === "/apps"
 
-  const pageTitle = active?.item.title ?? "Dashboard"
+  // The group object for the module the user is inside (drives the desktop rail).
+  const activeModuleGroup = React.useMemo(
+    () => (activeGroup && activeGroup !== "Home"
+      ? filteredGroups.find((g) => g.title === activeGroup) ?? null
+      : null),
+    [activeGroup, filteredGroups],
+  )
+
+  // Pages without a nav item (e.g. /food/track) fall back to their module's
+  // group title so the tab doesn't misleadingly read "Dashboard".
+  const pageTitle = active?.item.title ?? activeGroup ?? "Home"
   // A detail route is a deeper path than the matched nav item (e.g. /residents/:id, /food/orders/:id).
   const isDetail = !!active && location !== active.item.href && location.startsWith(active.item.href)
 
@@ -374,24 +420,14 @@ export function Layout({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex h-screen bg-surface overflow-hidden">
       {/* Desktop sidebar — hidden on the launcher, which is the module switcher itself */}
-      {!isLauncher && <aside
-        className="w-64 bg-sidebar text-sidebar-foreground flex flex-col h-full shrink-0 border-r border-sidebar-border z-20 hidden md:flex"
-      >
-        <div className="pl-7 pr-5 py-4 border-b border-sidebar-border">
-          <Logo personaLabel={personaLabel} />
-        </div>
-        <SidebarContent
-          filteredGroups={filteredGroups}
+      {!isLauncher && (
+        <DesktopSidebar
+          activeModule={activeModuleGroup}
           location={location}
-          activeGroup={activeGroup}
-          properties={properties}
-          propertyId={propertyId}
-          onSelectProperty={setPropertyId}
-          me={me}
-          onLogout={handleLogout}
-          showPropertyScope={false}
+          collapsed={collapsed}
+          onToggle={toggleCollapsed}
         />
-      </aside>}
+      )}
 
       {/* Mobile nav drawer */}
       {!isLauncher && <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
@@ -408,9 +444,6 @@ export function Layout({ children }: { children: React.ReactNode }) {
             filteredGroups={filteredGroups}
             location={location}
             activeGroup={activeGroup}
-            properties={properties}
-            propertyId={propertyId}
-            onSelectProperty={setPropertyId}
             me={me}
             onLogout={handleLogout}
             onNavigate={() => setMobileOpen(false)}
@@ -419,55 +452,41 @@ export function Layout({ children }: { children: React.ReactNode }) {
       </Sheet>}
 
       <div className="flex-1 flex flex-col h-full overflow-hidden">
-        <header className="h-16 bg-card border-b border-border grid grid-cols-[1fr_auto_1fr] items-center gap-3 px-4 sm:px-6 shrink-0 z-10">
-          <div className="col-start-1 flex items-center gap-3 min-w-0">
-            {isLauncher ? (
-              /* The launcher has no sidebar, so the brand lives in the header here. */
+        <header className="h-16 bg-card border-b border-border flex items-center gap-4 px-4 sm:px-6 shrink-0 z-10">
+          {isLauncher ? (
+            /* The launcher has no sidebar, so the brand lives in the header here. */
+            <Link href="/apps" className="shrink-0">
               <Logo personaLabel={personaLabel} />
-            ) : (
-              <>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="md:hidden shrink-0"
-                  aria-label="Open navigation"
-                  onClick={() => setMobileOpen(true)}
-                >
-                  <Menu className="w-5 h-5" />
-                </Button>
-                {/* Page heading lives in the page body. The detail-page breadcrumb is
-                    rendered as a bar at the top of <main>, not in the header. */}
-                <GreetingClock name={me?.name} />
-              </>
-            )}
-          </div>
+            </Link>
+          ) : (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="md:hidden shrink-0"
+              aria-label="Open navigation"
+              onClick={() => setMobileOpen(true)}
+            >
+              <Menu className="w-5 h-5" />
+            </Button>
+          )}
 
-          {/* Centered global search — the auto-width middle column with 1fr on each
-              side keeps it centered in the header regardless of the side content. */}
+          {/* Global search — left-aligned pill (prototype), opens the ⌘K palette. */}
           <button
             type="button"
             onClick={() => document.dispatchEvent(new KeyboardEvent("keydown", { key: "k", metaKey: true }))}
-            className="hidden md:flex items-center gap-2 w-72 lg:w-96 rounded-lg border border-border bg-surface px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-muted/50 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            className="hidden md:flex items-center gap-2 w-80 rounded-[10px] border border-border bg-surface px-3 py-[9px] text-sm text-muted-foreground transition-colors hover:bg-muted/50 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
             aria-label="Search (Command-K)"
           >
-            <Search className="h-4 w-4 shrink-0" />
+            <Search className="h-[15px] w-[15px] shrink-0" />
             <span className="flex-1 text-left">Search…</span>
-            <kbd className="pointer-events-none hidden lg:inline-flex h-5 select-none items-center gap-0.5 rounded border border-border bg-card px-1.5 font-mono text-[10px] font-medium text-muted-foreground">⌘K</kbd>
+            <kbd className="pointer-events-none hidden lg:inline-flex h-5 select-none items-center gap-0.5 rounded-[5px] border border-border bg-card px-1.5 font-mono text-[10px] font-medium text-muted-foreground">⌘K</kbd>
           </button>
 
-          <div className="col-start-3 flex items-center justify-end gap-2">
+          <div className="flex-1" />
+
+          <div className="flex items-center gap-2">
             <ThemeToggle />
             <NotificationBell />
-            {/* Property switcher hidden — one property per unit lead, so the scope
-                picker adds no value (re-enable if multi-property scoping returns).
-            <PropertyScope
-              tone="header"
-              properties={properties}
-              propertyId={propertyId}
-              onSelect={setPropertyId}
-              className="hidden md:flex w-44 lg:w-56"
-            />
-            */}
             <HeaderUserMenu name={me?.name} subtitle={personaLabel} onLogout={handleLogout} />
           </div>
         </header>

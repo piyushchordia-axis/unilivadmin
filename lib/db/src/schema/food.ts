@@ -22,6 +22,7 @@ import {
   numeric,
   doublePrecision,
   json,
+  jsonb,
   index,
   uniqueIndex,
   pgEnum,
@@ -580,6 +581,36 @@ export const foodOrderBatchesTable = pgTable("food_order_batches", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+/**
+ * Server-side order draft. Persists a unit lead's in-progress Place-Order form
+ * per USER (not per browser) so a draft survives device/browser switches. One
+ * row per (user, property, service day); the payload is the frontend's opaque
+ * draft state (jsonb, capped at the route layer). serviceDate is stored
+ * day-anchored to 00:00 IST — the same anchoring parseServiceDate applies to
+ * food_orders.service_date — so upsert/lookup equality is exact.
+ */
+export const foodOrderDraftsTable = pgTable("food_order_drafts", {
+  id: text("id").primaryKey(),
+  userId: text("user_id")
+    .notNull()
+    .references(() => usersTable.id, { onDelete: "cascade" }),
+  propertyId: text("property_id")
+    .notNull()
+    .references(() => propertiesTable.id),
+  /** IST calendar day the draft order is for (00:00 IST instant). */
+  serviceDate: timestamp("service_date").notNull(),
+  /** Opaque frontend draft state (validated only for size at the route). */
+  payload: jsonb("payload").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => ({
+  userPropDayIdx: uniqueIndex("idx_food_order_drafts_user_prop_day").on(
+    t.userId, t.propertyId, t.serviceDate,
+  ),
+  /** Backs the opportunistic stale-draft sweep (user's past service days). */
+  userDayIdx: index("idx_food_order_drafts_user_day").on(t.userId, t.serviceDate),
+}));
+
 /* ────────────────────────────────────────────────────────────────────────────
  * Orders & lifecycle (PRD §7.2–7.7)
  * ──────────────────────────────────────────────────────────────────────────── */
@@ -759,6 +790,7 @@ export type FoodDispatchEvent = typeof foodDispatchEventsTable.$inferSelect;
 export type Kitchen = typeof kitchensTable.$inferSelect;
 export type FoodDispatch = typeof foodDispatchesTable.$inferSelect;
 export type FoodOrderBatch = typeof foodOrderBatchesTable.$inferSelect;
+export type FoodOrderDraft = typeof foodOrderDraftsTable.$inferSelect;
 export type FoodMealConfig = typeof foodMealConfigTable.$inferSelect;
 export type FoodMealWindow = typeof foodMealWindowsTable.$inferSelect;
 export type FoodCutoffRow = typeof foodCutoffsTable.$inferSelect;

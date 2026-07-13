@@ -11,11 +11,16 @@ import {
   CalendarClock, FileStack, Library,
   type LucideIcon,
 } from "lucide-react"
-import { type Module } from "@/lib/permissions"
+import { type Module, type UserRole } from "@/lib/permissions"
 
 /** `module` gates the item to roles that can view it; an item without a module
- *  (e.g. the Home launcher) is visible to every signed-in user. */
-export type NavItem = { title: string; href: string; icon: LucideIcon; module?: Module }
+ *  (e.g. the Home launcher) is visible to every signed-in user. `hideFor`
+ *  additionally hides the item from specific roles even when their module
+ *  grants would allow it — used to keep the unit-lead Food nav down to the
+ *  three prototype items (the journey dashboard absorbs the other flows).
+ *  The page routes stay reachable (deep links, in-page CTAs); only nav +
+ *  launcher + palette entries are hidden. */
+export type NavItem = { title: string; href: string; icon: LucideIcon; module?: Module; hideFor?: UserRole[] }
 export type NavGroup = { title: string; items: NavItem[] }
 
 export const navGroups: NavGroup[] = [
@@ -65,20 +70,23 @@ export const navGroups: NavGroup[] = [
     { title: "Recipes", href: "/recipes", icon: ChefHat, module: "RECIPES" },
     { title: "Menu Planning", href: "/menu-planning", icon: CalendarDays, module: "MENU_PLANNING" },
   ]},
+  // Unit leads get the prototype's three-item Food nav (Food Overview / All
+  // Orders / Reports) — the journey dashboard absorbs place-order, confirm,
+  // waste and guests, so those entries are hidden for that role only.
   { title: "Food", items: [
-    { title: "My Dashboard", href: "/home", icon: Home, module: "FOOD_DASHBOARD" },
-    { title: "My Properties", href: "/food/my-properties", icon: Building2, module: "FOOD_DASHBOARD" },
-    { title: "Active Guests", href: "/food/guests", icon: Users, module: "FOOD_DASHBOARD" },
+    { title: "My Dashboard", href: "/home", icon: Home, module: "FOOD_DASHBOARD", hideFor: ["UNIT_LEAD"] },
+    { title: "My Properties", href: "/food/my-properties", icon: Building2, module: "FOOD_DASHBOARD", hideFor: ["UNIT_LEAD"] },
+    { title: "Active Guests", href: "/food/guests", icon: Users, module: "FOOD_DASHBOARD", hideFor: ["UNIT_LEAD"] },
     { title: "Food Overview", href: "/food/dashboard", icon: UtensilsCrossed, module: "FOOD_DASHBOARD" },
     { title: "Organization", href: "/food/organization", icon: Network, module: "FOOD_ORG" },
     { title: "All Orders", href: "/food/orders", icon: ListOrdered, module: "FOOD_ALL_ORDERS" },
-    { title: "Place Order", href: "/food/place-order", icon: FilePlus2, module: "FOOD_PLACE_ORDER" },
+    { title: "Place Order", href: "/food/place-order", icon: FilePlus2, module: "FOOD_PLACE_ORDER", hideFor: ["UNIT_LEAD"] },
     { title: "Kitchen Summary", href: "/food/kitchen-summary", icon: Soup, module: "FOOD_KITCHEN_SUMMARY" },
     { title: "Dispatch", href: "/food/dispatch", icon: Send, module: "FOOD_DISPATCH" },
-    { title: "Confirm Delivery", href: "/food/confirm-delivery", icon: CheckCircle2, module: "FOOD_CONFIRM_DELIVERY" },
-    { title: "Waste Tracking", href: "/food/waste", icon: Trash2, module: "FOOD_WASTE_TRACKING" },
+    { title: "Confirm Delivery", href: "/food/confirm-delivery", icon: CheckCircle2, module: "FOOD_CONFIRM_DELIVERY", hideFor: ["UNIT_LEAD"] },
+    { title: "Waste Tracking", href: "/food/waste", icon: Trash2, module: "FOOD_WASTE_TRACKING", hideFor: ["UNIT_LEAD"] },
     { title: "Reports", href: "/food/reports", icon: BarChart3, module: "FOOD_REPORTS" },
-    { title: "Waste Analytics", href: "/food/waste-analytics", icon: Recycle, module: "FOOD_REPORTS" },
+    { title: "Waste Analytics", href: "/food/waste-analytics", icon: Recycle, module: "FOOD_REPORTS", hideFor: ["UNIT_LEAD"] },
     { title: "Settings", href: "/food/settings", icon: SlidersHorizontal, module: "FOOD_SETTINGS" },
   ]},
   { title: "Audits", items: [

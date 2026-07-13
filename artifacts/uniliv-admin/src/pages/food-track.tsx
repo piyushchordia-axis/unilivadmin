@@ -1,24 +1,15 @@
 import * as React from "react";
 import { Link, useLocation } from "wouter";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { format } from "date-fns";
-import {
-  Search, PackageSearch, Loader2, Soup, Building2, CalendarDays, Users,
-  Clock, Truck, ChefHat, ExternalLink, AlertCircle,
-} from "lucide-react";
-import { PageHeader } from "@/components/page-header";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Badge } from "@/components/ui/badge";
-import { Separator } from "@/components/ui/separator";
+import { ChevronLeft, Check, X, Loader2, ExternalLink, PackageSearch } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
-import { EmptyState } from "@/components/ui/empty-state";
-import { StatusBadge } from "@/components/status-badge";
-import { OrderTimeline } from "@/components/order-timeline";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { foodApi, foodKeys, MEAL_LABEL, fmtQty, type OrderStatus } from "@/lib/food-api";
+import { useToast } from "@/hooks/use-toast";
+import { usePermissions } from "@/lib/use-permissions";
+import {
+  foodApi, foodKeys, MEAL_LABEL, ORDER_STATUS_PILL, shortMeal, fmtQty,
+  type OrderStatus, type FoodOrderEvent,
+} from "@/lib/food-api";
 import { useQueryParam } from "@/lib/nav-helpers";
 import { cn } from "@/lib/utils";
 
@@ -27,6 +18,10 @@ const fmtDate = (s?: string | null) => (s ? format(new Date(s), "EEE, dd MMM yyy
 
 export default function FoodTrack() {
   const [, navigate] = useLocation();
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  const { can } = usePermissions();
+
   // Pre-fill from ?order=<orderNumber> or ?id=<uuid>.
   const paramOrder = useQueryParam("order");
   const paramId = useQueryParam("id");
@@ -35,11 +30,13 @@ export default function FoodTrack() {
   const [input, setInput] = React.useState(initial);
   // The submitted term that actually drives the lookup (so typing doesn't refetch).
   const [term, setTerm] = React.useState(initial.trim());
+  // Arm-twice cancel: first tap arms, second tap confirms.
+  const [cancelArm, setCancelArm] = React.useState(false);
 
   // Keep the query in sync when the URL param changes (success-page links).
   React.useEffect(() => {
     const next = (paramOrder ?? paramId ?? "").trim();
-    if (next) { setInput(next); setTerm(next); }
+    if (next) { setInput(next); setTerm(next); setCancelArm(false); }
   }, [paramOrder, paramId]);
 
   const { data: order, isLoading, isError, error, isFetching } = useQuery({
@@ -50,17 +47,22 @@ export default function FoodTrack() {
   });
 
   // The user's ACTIVE orders, offered as a quick-pick instead of typing an id.
+  // ACCEPTED is a live pre-dispatch stage (kitchen has taken the order), so it
+  // belongs here too. Only 8 pills render — no need for a bigger page.
   const { data: activeOrders = [] } = useQuery({
-    queryKey: foodKeys.orders({ status: "PLACED,PREPARING,DISPATCHED", limit: 100, scope: "track-active" }),
-    queryFn: () => foodApi.listOrders({ status: "PLACED,PREPARING,DISPATCHED", limit: 100 }).then((r) => r.data),
+    queryKey: foodKeys.orders({ status: "PLACED,ACCEPTED,PREPARING,DISPATCHED", limit: 8, scope: "track-active" }),
+    queryFn: () =>
+      foodApi.listOrders({ status: "PLACED,ACCEPTED,PREPARING,DISPATCHED", limit: 8 }).then((r) => r.data),
+    staleTime: 60_000,
   });
 
-  // Run the tracking lookup for a given order number (shared by the form + picker).
+  // Run the tracking lookup for a given order number (shared by the form + pills).
   const runLookup = (raw: string) => {
     const t = raw.trim();
     if (!t) return;
     setInput(t);
     setTerm(t);
+    setCancelArm(false);
     // Reflect the lookup in the URL so it can be shared / refreshed.
     navigate(`/food/track?order=${encodeURIComponent(t)}`, { replace: true });
   };
@@ -70,162 +72,314 @@ export default function FoodTrack() {
     runLookup(input);
   };
 
-  const events = order?.events ?? [];
+  const cancelMut = useMutation({
+    mutationFn: (id: string) => foodApi.cancelOrder(id),
+    onSuccess: () => {
+      // Same broad invalidation the order-detail page uses — refreshes the
+      // tracked order, order lists and dashboard counters.
+      qc.invalidateQueries({ queryKey: ["food"] });
+      setCancelArm(false);
+      toast({ title: "Order cancelled — the kitchen has been told", variant: "warning" });
+    },
+    onError: (e: any) => {
+      setCancelArm(false);
+      toast({ title: e?.message || "Failed to cancel", variant: "destructive" });
+    },
+  });
+
+  // Mirrors food-order-detail.tsx: cancellable while pre-dispatch, by order
+  // placers or kitchen staff.
+  const isPreDispatch =
+    order?.status === "PLACED" || order?.status === "ACCEPTED" || order?.status === "PREPARING";
+  const canCancel =
+    !!order && isPreDispatch &&
+    (can("FOOD_PLACE_ORDER", "edit") || can("FOOD_KITCHEN_SUMMARY", "edit"));
+
+  const pill = order ? ORDER_STATUS_PILL[order.status] : null;
 
   return (
-    <div className="space-y-6">
-      <PageHeader
-        title="Track an order"
-        subtitle="Enter an order number to follow its kitchen-to-delivery status."
-        breadcrumbs={[{ label: "Food", href: "/food/orders" }, { label: "Track" }]}
-      />
+    <div className="mx-auto flex w-full max-w-[640px] flex-col gap-[18px] animate-fade-up">
+      <Link
+        href="/food/orders"
+        className="inline-flex items-center gap-1.5 self-start text-sm text-muted-foreground transition-colors hover:text-foreground"
+      >
+        <ChevronLeft className="h-[15px] w-[15px]" /> All orders
+      </Link>
 
-      <Card className="mx-auto w-full max-w-3xl">
-        <CardContent className="p-4">
-          <form onSubmit={submit} className="flex flex-col gap-2 sm:flex-row sm:items-end">
-            <div className="flex-1 space-y-1.5">
-              <Label htmlFor="track-input" className="text-xs text-muted-foreground">Order number or ID</Label>
-              <div className="relative">
-                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                <Input id="track-input" value={input} onChange={(e) => setInput(e.target.value)}
-                  placeholder="e.g. ORD-2026-000123" className="pl-9 font-mono" autoComplete="off" />
-              </div>
-            </div>
-            <Button type="submit" disabled={!input.trim() || isFetching}>
-              {isFetching ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <PackageSearch className="mr-2 h-4 w-4" />}
-              Track
-            </Button>
-          </form>
+      <div>
+        <h1 className="font-display text-2xl font-bold tracking-[-0.012em]">Track an order</h1>
+        <p className="mt-1 text-sm text-muted-foreground">Type an order number, or tap one of today's orders.</p>
+      </div>
 
-          {activeOrders.length > 0 && (
-            <div className="mt-3 space-y-1.5">
-              <Label className="text-xs text-muted-foreground">Or pick an active order</Label>
-              <Select value={term || undefined} onValueChange={(v) => runLookup(v)}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Select one of your active orders…" />
-                </SelectTrigger>
-                <SelectContent>
-                  {activeOrders.map((o) => (
-                    <SelectItem key={o.id} value={o.orderNumber}>
-                      <span className="font-mono">{o.orderNumber}</span>
-                      {" · "}{MEAL_LABEL[o.mealType] ?? o.mealType}{" · "}{o.status}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+      {/* Lookup card */}
+      <div className="rounded-[14px] border border-border bg-card p-[18px]">
+        <form onSubmit={submit} className="flex gap-2.5">
+          <input
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            placeholder="e.g. ORD-2026-000123"
+            aria-label="Order number"
+            autoComplete="off"
+            className="h-12 min-w-0 flex-1 rounded-[10px] border border-border bg-background px-3.5 font-mono text-[15px] text-foreground outline-none transition-colors placeholder:text-muted-foreground/70 focus:border-accent"
+          />
+          <button
+            type="submit"
+            disabled={!input.trim() || isFetching}
+            className="inline-flex h-12 items-center gap-2 rounded-[10px] bg-accent px-[22px] text-[15px] font-bold text-white transition-[filter] hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {isFetching && <Loader2 className="h-4 w-4 animate-spin" />}
+            Track
+          </button>
+        </form>
 
-      <div className="mx-auto w-full max-w-3xl">
-        {!term ? (
-          <Card><CardContent className="py-10">
-            <EmptyState icon={PackageSearch} title="Track any order" description="Paste an order number above to see its current status and timeline." />
-          </CardContent></Card>
-        ) : isLoading ? (
-          <Card><CardContent className="space-y-3 py-6">
-            <Skeleton className="h-24 w-full rounded-lg" />
-            <Skeleton className="h-32 w-full rounded-lg" />
-          </CardContent></Card>
-        ) : isError || !order ? (
-          <Card><CardContent className="py-10">
-            <EmptyState icon={AlertCircle} title="Order not found"
-              description={(error as any)?.message || "No order matches that number in your accessible properties."} />
-          </CardContent></Card>
-        ) : (
-          <div className="space-y-5">
-            {/* Header card */}
-            <Card>
-              <CardHeader className="pb-3">
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div>
-                    <CardTitle className="font-display flex items-center gap-2 text-base">
-                      <Soup className="h-5 w-5 text-accent" /> {MEAL_LABEL[order.mealType] ?? order.mealType}
-                    </CardTitle>
-                    <CardDescription className="mt-1 font-mono text-xs">{order.orderNumber}</CardDescription>
-                  </div>
-                  <StatusBadge status={order.status} />
-                </div>
-              </CardHeader>
-              <Separator />
-              <CardContent className="grid grid-cols-2 gap-3 p-4 sm:grid-cols-4">
-                <Stat icon={Building2} label="Property">{order.propertyName ?? "—"}</Stat>
-                <Stat icon={CalendarDays} label="Service date">{fmtDate(order.serviceDate)}</Stat>
-                <Stat icon={Users} label="People">{order.residentsCount}</Stat>
-                <Stat icon={ChefHat} label="Brand">{order.brand}</Stat>
-              </CardContent>
-            </Card>
-
-            {/* Timeline — order journey from placement to delivery */}
-            <Card>
-              <CardHeader className="pb-3">
-                <CardTitle className="flex items-center gap-2 text-base"><Clock className="h-4 w-4 text-accent" /> Timeline</CardTitle>
-                <CardDescription>Order journey from placement to delivery.</CardDescription>
-              </CardHeader>
-              <Separator />
-              <CardContent className="p-4 sm:p-6">
-                <OrderTimeline status={order.status} events={events} />
-              </CardContent>
-            </Card>
-
-            {/* Items */}
-            <Card>
-              <CardHeader className="pb-3">
-                <CardTitle className="text-base font-display">Items</CardTitle>
-              </CardHeader>
-              <Separator />
-              <CardContent className="p-0">
-                <ul className="divide-y">
-                  {(order.items ?? []).map((it) => (
-                    <li key={it.id} className="flex items-center justify-between gap-2 px-4 py-2.5 text-sm">
-                      <span className="truncate">{it.dishName ?? it.dishId}</span>
-                      <span className="shrink-0 tabular-nums text-muted-foreground">{fmtQty(it.orderedQty, it.unit)}</span>
-                    </li>
-                  ))}
-                  {(order.items ?? []).length === 0 && (
-                    <li className="px-4 py-4 text-sm text-muted-foreground">No items on this order.</li>
+        {activeOrders.length > 0 && (
+          <div className="mt-3 flex flex-wrap gap-2">
+            {activeOrders.slice(0, 8).map((o) => {
+              const active = term === o.orderNumber;
+              return (
+                <button
+                  key={o.id}
+                  type="button"
+                  onClick={() => runLookup(o.orderNumber)}
+                  className={cn(
+                    "h-10 rounded-full border px-3.5 font-mono text-[13px] font-semibold transition-colors",
+                    active
+                      ? "border-transparent bg-accent text-white"
+                      : "border-border bg-card text-foreground hover:bg-muted",
                   )}
-                </ul>
-              </CardContent>
-            </Card>
-
-            {/* Dispatch info (when present) */}
-            {order.dispatch && (
-              <Card>
-                <CardHeader className="pb-3">
-                  <CardTitle className="flex items-center gap-2 text-base"><Truck className="h-4 w-4 text-accent" /> Delivery</CardTitle>
-                </CardHeader>
-                <Separator />
-                <CardContent className="grid grid-cols-2 gap-3 p-4 sm:grid-cols-3">
-                  <Stat icon={Truck} label="Vehicle">{order.dispatch.vehicleNumber ?? "—"}</Stat>
-                  <Stat icon={Users} label="Driver">{order.dispatch.driverName ?? "—"}</Stat>
-                  <Stat icon={Clock} label="ETA">{fmtDateTime(order.dispatch.estimatedArrivalAt)}</Stat>
-                </CardContent>
-              </Card>
-            )}
-
-            <div className="flex justify-end">
-              <Button asChild variant="outline" size="sm">
-                <Link href={`/food/orders/${order.id}`}>
-                  Open full order detail <ExternalLink className="ml-1.5 h-3.5 w-3.5" />
-                </Link>
-              </Button>
-            </div>
+                >
+                  {o.orderNumber} · {shortMeal(o.mealType)}
+                </button>
+              );
+            })}
           </div>
         )}
       </div>
+
+      {!term ? (
+        <div className="rounded-[14px] border border-dashed border-border px-6 py-9 text-center text-muted-foreground">
+          <PackageSearch className="mx-auto mb-2 h-6 w-6" />
+          <p className="mb-1 text-sm font-semibold text-foreground">Track any order</p>
+          <p className="text-[13px]">Paste an order number above to see its current status and timeline.</p>
+        </div>
+      ) : isLoading ? (
+        <div className="space-y-3 rounded-[14px] border border-border bg-card p-5">
+          <Skeleton className="h-6 w-2/3 rounded-md" />
+          <Skeleton className="h-4 w-1/3 rounded-md" />
+          <Skeleton className="h-44 w-full rounded-[12px]" />
+        </div>
+      ) : isError || !order ? (
+        <div className="rounded-[14px] border border-dashed border-border px-6 py-9 text-center text-muted-foreground">
+          <p className="mb-1 text-sm font-semibold text-foreground">No order with that number</p>
+          <p className="text-[13px]">
+            {(error as any)?.message || "Check the number and try again — no match in your accessible properties."}
+          </p>
+        </div>
+      ) : (
+        <>
+          {/* Status + timeline card */}
+          <div className="rounded-[14px] border border-border bg-card p-5">
+            <div className="flex flex-wrap items-center gap-2.5">
+              <span className="font-mono text-sm font-semibold tabular-nums">{order.orderNumber}</span>
+              <span className="flex-1 font-display text-base font-bold tracking-[-0.012em]">
+                {MEAL_LABEL[order.mealType] ?? order.mealType}
+              </span>
+              {pill && (
+                <span className={cn("rounded-full px-[9px] py-[3px] text-[11px] font-bold", pill.cls)}>
+                  {pill.label}
+                </span>
+              )}
+            </div>
+            <div className="mt-1 text-[13px] text-muted-foreground">
+              {order.propertyName ?? "—"} · {order.residentsCount} people · {fmtDate(order.serviceDate)}
+            </div>
+
+            <TrackTimeline status={order.status} events={order.events ?? []} />
+          </div>
+
+          {/* Delivery card */}
+          {order.dispatch && order.status !== "CANCELLED" && (
+            <div className="grid grid-cols-3 gap-3 rounded-[14px] border border-border bg-card px-5 py-4">
+              <div>
+                <div className="text-[11px] uppercase tracking-[.06em] text-muted-foreground">Vehicle</div>
+                <div className="mt-[3px] truncate font-mono text-sm font-semibold tabular-nums">
+                  {order.dispatch.vehicleNumber ?? "—"}
+                </div>
+              </div>
+              <div>
+                <div className="text-[11px] uppercase tracking-[.06em] text-muted-foreground">Driver</div>
+                <div className="mt-[3px] truncate text-sm font-semibold">
+                  {order.dispatch.driverName
+                    ? `${order.dispatch.driverName}${order.dispatch.driverPhone ? ` · ${order.dispatch.driverPhone}` : ""}`
+                    : "—"}
+                </div>
+              </div>
+              <div>
+                <div className="text-[11px] uppercase tracking-[.06em] text-muted-foreground">Arrival</div>
+                <div className="mt-[3px] truncate font-mono text-sm font-semibold tabular-nums">
+                  {order.deliveredAt
+                    ? `Arrived ${format(new Date(order.deliveredAt), "HH:mm")}`
+                    : fmtDateTime(order.dispatch.estimatedArrivalAt)}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Items card */}
+          <div className="overflow-hidden rounded-[14px] border border-border bg-card">
+            <div className="border-b border-border px-5 py-3 font-display text-[13px] font-bold tracking-[-0.012em]">
+              What's in this order
+            </div>
+            {(order.items ?? []).map((it) => (
+              <div
+                key={it.id}
+                className="flex items-center justify-between gap-2.5 border-b border-dashed border-border px-5 py-2.5 last:border-b-0"
+              >
+                <span className="truncate text-sm">{it.dishName ?? it.dishId}</span>
+                <span className="shrink-0 font-mono text-[13px] tabular-nums text-muted-foreground">
+                  {fmtQty(it.orderedQty, it.unit)}
+                </span>
+              </div>
+            ))}
+            {(order.items ?? []).length === 0 && (
+              <div className="px-5 py-4 text-sm text-muted-foreground">No items on this order.</div>
+            )}
+          </div>
+
+          {/* Cancel — arm twice to confirm */}
+          {canCancel && (
+            <div className="flex flex-wrap items-center gap-3 rounded-[12px] border border-dashed border-border bg-background px-4 py-3">
+              <span className="flex-1 text-[13px] text-muted-foreground">
+                Plans changed? You can cancel until the kitchen dispatches it.
+              </span>
+              <button
+                type="button"
+                disabled={cancelMut.isPending}
+                onClick={() => {
+                  if (!cancelArm) { setCancelArm(true); return; }
+                  cancelMut.mutate(order.id);
+                }}
+                className={cn(
+                  "h-12 rounded-[10px] px-5 text-sm font-bold transition-colors disabled:cursor-not-allowed disabled:opacity-60",
+                  cancelArm
+                    ? "border border-transparent bg-destructive text-white"
+                    : "border border-border bg-card text-destructive hover:bg-muted",
+                )}
+              >
+                {cancelMut.isPending
+                  ? "Cancelling…"
+                  : cancelArm
+                    ? "Tap again to confirm cancel"
+                    : "Cancel this order"}
+              </button>
+            </div>
+          )}
+
+          <Link
+            href={`/food/orders/${order.id}`}
+            className="inline-flex items-center gap-1.5 self-end text-[13px] font-semibold text-accent-strong hover:underline"
+          >
+            Full order detail <ExternalLink className="h-3.5 w-3.5" />
+          </Link>
+        </>
+      )}
     </div>
   );
 }
 
-function Stat({ icon: Icon, label, children }: { icon: React.ComponentType<{ className?: string }>; label: string; children: React.ReactNode }) {
+// ─── Vertical journey timeline ───────────────────────────────────────────────
+// Always renders the full canonical path (Placed → Accepted → Preparing →
+// Dispatched → Delivered) so an order shows where it IS and what's ahead;
+// terminal states (Cancelled / Rejected) end the path with a red node.
+const HAPPY_PATH: { key: OrderStatus; label: string }[] = [
+  { key: "PLACED", label: "Order placed" },
+  { key: "ACCEPTED", label: "Accepted by kitchen" },
+  { key: "PREPARING", label: "Preparing" },
+  { key: "DISPATCHED", label: "Dispatched" },
+  { key: "DELIVERED", label: "Delivered" },
+];
+
+type StepState = "done" | "pending" | "terminal";
+type Step = { key: string; label: string; time: string | null; state: StepState; note?: string | null };
+
+function TrackTimeline({ status, events }: { status: OrderStatus; events: FoodOrderEvent[] }) {
+  // Earliest event per status = the moment the order entered that stage.
+  const eventByStatus = React.useMemo(() => {
+    const sorted = [...events].sort(
+      (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
+    );
+    const m = new Map<string, FoodOrderEvent>();
+    for (const e of sorted) if (!m.has(e.status)) m.set(e.status, e);
+    return m;
+  }, [events]);
+
+  const isTerminal = status === "CANCELLED" || status === "REJECTED";
+  const happyIdx = HAPPY_PATH.findIndex((s) => s.key === status);
+  const reachedIdx = isTerminal
+    ? HAPPY_PATH.reduce((max, s, i) => (eventByStatus.has(s.key) ? i : max), 0)
+    : Math.max(0, happyIdx);
+
+  const steps: Step[] = [];
+  if (isTerminal) {
+    for (let i = 0; i <= reachedIdx; i++) {
+      const st = HAPPY_PATH[i]!;
+      steps.push({
+        key: st.key, label: st.label, state: "done",
+        time: fmtDateTime(eventByStatus.get(st.key)?.createdAt),
+      });
+    }
+    const te = eventByStatus.get(status);
+    steps.push({
+      key: status,
+      label: status === "CANCELLED" ? "Cancelled" : "Rejected",
+      state: "terminal",
+      time: fmtDateTime(te?.createdAt),
+      note: te?.note,
+    });
+  } else {
+    HAPPY_PATH.forEach((st, i) => {
+      const done = i <= reachedIdx;
+      steps.push({
+        key: st.key, label: st.label, state: done ? "done" : "pending",
+        time: done ? fmtDateTime(eventByStatus.get(st.key)?.createdAt) : null,
+      });
+    });
+  }
+
   return (
-    <div className="flex flex-col gap-1">
-      <span className="inline-flex items-center gap-1 text-[11px] uppercase tracking-wider text-muted-foreground">
-        <Icon className="h-3 w-3" /> {label}
-      </span>
-      <span className="truncate text-sm font-medium">{children}</span>
+    <div className="mt-[18px] flex flex-col">
+      {steps.map((st, i) => (
+        <div key={st.key} className="flex gap-3.5">
+          <div className="flex flex-col items-center">
+            <span
+              className={cn(
+                "flex h-[26px] w-[26px] flex-none items-center justify-center rounded-full",
+                st.state === "done" && "bg-success text-white",
+                st.state === "terminal" && "bg-destructive text-white",
+                st.state === "pending" && "border-2 border-border bg-muted",
+              )}
+            >
+              {st.state === "done" && <Check className="h-[13px] w-[13px]" strokeWidth={3} />}
+              {st.state === "terminal" && <X className="h-[13px] w-[13px]" strokeWidth={3} />}
+            </span>
+            {i < steps.length - 1 && <span className="min-h-[22px] w-[2px] flex-1 bg-border" />}
+          </div>
+          <div className="pb-4">
+            <span
+              className={cn(
+                "block text-sm",
+                st.state === "pending" ? "font-medium text-muted-foreground" : "font-semibold text-foreground",
+              )}
+            >
+              {st.label}
+            </span>
+            <span className="mt-px block font-mono text-xs tabular-nums text-muted-foreground">
+              {st.time ?? "Pending"}
+            </span>
+            {st.note && <span className="mt-0.5 block text-xs text-muted-foreground">{st.note}</span>}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }

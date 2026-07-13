@@ -194,6 +194,11 @@ export const PATH_TO_MODULE: Array<[RegExp, Module]> = [
   [/^\/food\/organization/, "FOOD_ORG"],
   [/^\/food\/my-properties/, "FOOD_DASHBOARD"],
   [/^\/food\/orders/, "FOOD_ALL_ORDERS"],
+  // Track calls GET /food/orders/track + /food/orders, which the SERVER gates
+  // on FOOD_ALL_ORDERS — mirror that here so under-permissioned roles get the
+  // Forbidden screen instead of a dead search page. (If track should open up
+  // to kitchen personas, gate BOTH sides on FOOD_DELIVERY_TRACKING instead.)
+  [/^\/food\/track/, "FOOD_ALL_ORDERS"],
   [/^\/food\/place-order/, "FOOD_PLACE_ORDER"],
   [/^\/food\/kitchen-summary/, "FOOD_KITCHEN_SUMMARY"],
   [/^\/food\/dispatch/, "FOOD_DISPATCH"],

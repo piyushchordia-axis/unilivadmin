@@ -4,42 +4,29 @@ import { withQuery } from "@/lib/nav-helpers";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { format, subDays } from "date-fns";
 import {
-  Download, CalendarRange, ClipboardList, UtensilsCrossed, Users, BarChart3,
-  FileText, Trash2, Clock, TrendingDown, Scale, Timer, Check,
+  ArrowRight, Check, Clock, Download, Settings2, Timer, Trash2, Trophy, Users,
 } from "lucide-react";
-import {
-  ResponsiveContainer, AreaChart, Area, LineChart, Line, BarChart, Bar, Cell,
-  XAxis, YAxis, CartesianGrid, Tooltip, Legend,
-} from "recharts";
-import { PageHeader } from "@/components/page-header";
-import { StatCard } from "@/components/stat-card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { DatePicker } from "@/components/ui/date-picker";
 import { Label } from "@/components/ui/label";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSub,
+  DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useToast } from "@/hooks/use-toast";
 import { usePermissions } from "@/lib/use-permissions";
 import { isSuperAdminRole } from "@/lib/permissions";
 import { apiDownload } from "@/lib/api-fetch";
 import {
-  foodApi, foodKeys, BRANDS, ORDER_STATUSES,
-  type ReportsData, type AnalyticsData, type OrderStatus, type FoodLookups,
+  foodApi, foodKeys, BRANDS,
+  type ReportsData, type AnalyticsData, type FoodLookups,
   type OnTimeReport, type OnTimeTolerance, type VarianceByDayData, type MealType,
 } from "@/lib/food-api";
-
-// Chart palette — keyed to the design-system CSS variables (raw hex values).
-const ACCENT = "var(--accent)";
-const PRIMARY = "var(--primary)";
-const SUCCESS = "var(--success)";
-const WARNING = "var(--warning)";
-const DESTRUCTIVE = "var(--destructive)";
-const INFO = "var(--info)";
 
 // Period presets — drive both the analytics `period` param and the from/to window.
 type PeriodKey = "week" | "month" | "quarter" | "year";
@@ -56,7 +43,7 @@ const MEAL_FILTERS: { key: MealFilter; label: string }[] = [
   { key: "ALL", label: "All" },
   { key: "BREAKFAST", label: "Breakfast" },
   { key: "LUNCH", label: "Lunch" },
-  { key: "SNACKS", label: "High Tea / Evening Snacks" },
+  { key: "SNACKS", label: "High Tea" },
   { key: "DINNER", label: "Dinner" },
 ];
 
@@ -75,33 +62,30 @@ const EXPORT_REPORTS: { key: ExportReport; label: string; base: string }[] = [
   { key: "ontime", label: "On-time", base: "food-ontime" },
 ];
 
-// StatusBadge-aligned colors for the status breakdown chart.
-const STATUS_COLOR: Record<OrderStatus, string> = {
-  PLACED: INFO,
-  ACCEPTED: ACCENT,
-  REJECTED: DESTRUCTIVE,
-  PREPARING: WARNING,
-  DISPATCHED: INFO,
-  DELIVERED: SUCCESS,
-  CANCELLED: DESTRUCTIVE,
-};
+// Prototype bar colors (brand gradient tint) — inline styles per the style kit.
+const BAR_GRAD = "linear-gradient(180deg,#FF9A3D,#F2603C)";
+const BAR_TINT = "color-mix(in srgb, #F2603C 22%, var(--muted-bg))";
+const BAR_OK = "var(--success)";
+const BAR_OK_TINT = "color-mix(in srgb, var(--success) 30%, var(--muted-bg))";
+const BAR_OVER = "var(--warning)";
 
-/** Small empty state shown inside a chart card when its dataset is empty. */
-function ChartEmpty({ icon: Icon, label }: { icon: React.ElementType; label: string }) {
+/** Skeleton shaped like the 7-bar chart while a widget loads. */
+function BarsSkeleton() {
   return (
-    <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-2">
-      <Icon className="w-8 h-8 opacity-40" />
-      <p className="text-sm">{label}</p>
+    <div className="flex h-full w-full items-end gap-2">
+      {[60, 80, 45, 90, 70, 55, 75].map((h, i) => (
+        <Skeleton key={i} className="flex-1 rounded-[6px]" style={{ height: `${h}%` }} />
+      ))}
     </div>
   );
 }
 
-function ChartSkeleton() {
+/** Small empty state shown inside a chart card when its dataset is empty. */
+function BarsEmpty({ icon: Icon, label }: { icon: React.ElementType; label: string }) {
   return (
-    <div className="h-full w-full flex items-end gap-2 px-2 pb-2">
-      {[60, 80, 45, 90, 70, 55, 75].map((h, i) => (
-        <Skeleton key={i} className="flex-1" style={{ height: `${h}%` }} />
-      ))}
+    <div className="flex h-full w-full flex-col items-center justify-center gap-1.5 text-muted-foreground">
+      <Icon className="h-6 w-6 opacity-40" />
+      <p className="text-xs">{label}</p>
     </div>
   );
 }
@@ -116,13 +100,13 @@ export default function FoodReports() {
 
   const [from, setFrom] = React.useState(thirtyDaysAgo);
   const [to, setTo] = React.useState(today);
-  const [status, setStatus] = React.useState<string>("ALL");
   const [propertyId, setPropertyId] = React.useState<string>("ALL");
   const [brand, setBrand] = React.useState<string>("ALL");
   const [period, setPeriod] = React.useState<PeriodKey>("month");
   const [downloading, setDownloading] = React.useState(false);
 
-  const filters: Record<string, string> = { from, to, status, propertyId, brand };
+  // Same key shape as before; the status dimension is fixed to ALL in this view.
+  const filters: Record<string, string> = { from, to, status: "ALL", propertyId, brand };
 
   // Apply a period preset: sets `period` and recomputes the from/to window.
   const applyPeriod = (p: PeriodKey) => {
@@ -169,7 +153,6 @@ export default function FoodReports() {
     queryKey: foodKeys.reportsOnTime(onTimeParams),
     queryFn: () => foodApi.reportsOnTime(onTimeParams),
   });
-  const onTimeByDay = onTime?.byDay ?? [];
 
   // O16 — global on-time tolerance (read by any food user, written by SUPER_ADMIN).
   const { role } = usePermissions();
@@ -179,7 +162,7 @@ export default function FoodReports() {
     queryKey: foodKeys.ontimeTolerance(),
     queryFn: () => foodApi.ontimeTolerance(),
   });
-  // Local draft for the inline tolerance editor; reseeds when the server value loads.
+  // Local draft for the tolerance editor; reseeds when the server value loads.
   const [toleranceDraft, setToleranceDraft] = React.useState<string>("");
   React.useEffect(() => {
     if (tolerance) setToleranceDraft(String(tolerance.minutes));
@@ -213,37 +196,80 @@ export default function FoodReports() {
 
   const ordersPerDay = data?.ordersPerDay ?? [];
   const residentTrend = data?.residentTrend ?? [];
-  const statusBreakdown = data?.statusBreakdown ?? [];
-
-  const wastageTrend = analytics?.wastageTrend ?? [];
-  const topWasteItems = analytics?.topWasteItems ?? [];
-  const delays = analytics?.delays ?? [];
   const summary = analytics?.summary;
 
-  // Shaped horizontal bar series for top-wastage items.
-  const topWasteChartData = topWasteItems
-    .slice(0, 8)
-    .map((w) => ({
-      name: w.dishName ?? "—",
-      wasted: w.wasted,
-      wastePct: w.wastePct,
-      unit: w.unit,
-    }))
-    .reverse();
-
-  // Derived headline metrics.
+  // Derived headline metrics (shown as footnotes under the bar cards).
   const totalOrders = ordersPerDay.reduce((s, d) => s + (d.count || 0), 0);
   const peakResidents = residentTrend.reduce((m, d) => Math.max(m, d.residents || 0), 0);
 
-  // Shaped chart series.
-  const statusChartData = statusBreakdown.map((s) => ({
-    name: (s.status || "").replace(/_/g, " "),
-    value: s.count,
-    status: s.status,
-  }));
-  const dayTickFmt = (v: string) => {
-    try { return format(new Date(v), "dd MMM"); } catch { return v; }
+  const weekday = (v: string) => {
+    try { return format(new Date(v), "EEE"); } catch { return v; }
   };
+
+  // ---- "People fed daily" — last 7 days of the resident trend, hand-rolled bars.
+  const peopleBars = residentTrend.slice(-7);
+  const peopleMax = peopleBars.reduce((m, d) => Math.max(m, d.residents || 0), 0);
+  // Heights are relative to max * 1.07 so the tallest bar leaves headroom for its label.
+  const peopleHeight = (v: number) =>
+    peopleMax > 0 ? Math.round((v / (peopleMax * 1.07)) * 100) : 0;
+
+  // ---- "Food waste %" — last 7 variance days, pct = wasted/ordered per day.
+  const wasteRows = varianceByDayRows.slice(-7);
+  const wasteBars = wasteRows.map((r) => ({
+    date: r.date,
+    wasted: r.wasted || 0,
+    pct: r.ordered > 0 ? ((r.wasted || 0) / r.ordered) * 100 : 0,
+  }));
+  // Scale floor of 4% keeps within-goal (<=3%) bars visually low, like the prototype.
+  const wasteMax = Math.max(4, ...wasteBars.map((b) => b.pct));
+  const wasteHeight = (pct: number) => Math.round((pct / (wasteMax * 1.07)) * 100);
+
+  // ---- Milestones, derived client-side from the widgets' data.
+  // (a) Zero-waste week — earned when every one of the last 7 variance days
+  //     recorded zero waste; otherwise in progress at zeroDays/7.
+  const zeroDays = wasteRows.filter((r) => (r.wasted || 0) === 0).length;
+  const zeroWasteEarned = wasteRows.length === 7 && zeroDays === 7;
+  // (b) Mismatch-free deliveries — consecutive most-recent days where ordered ==
+  //     received (variance 0), scanned backwards from the latest day. Target: 8.
+  const MISMATCH_TARGET = 8;
+  let mismatchRun = 0;
+  for (let i = varianceByDayRows.length - 1; i >= 0; i--) {
+    if ((varianceByDayRows[i].variance || 0) === 0) mismatchRun++;
+    else break;
+  }
+  const mismatchEarned = mismatchRun >= MISMATCH_TARGET;
+  // (c) Full month of on-time orders — from the O15 on-time report over the
+  //     selected window: earned when every delivered order was on time.
+  const onTimeCount = onTime?.onTimeCount ?? 0;
+  const totalDelivered = onTime?.totalDelivered ?? 0;
+  const onTimeEarned = totalDelivered > 0 && (onTime?.onTimePct ?? 0) >= 100;
+  const onTimeProgress = totalDelivered > 0 ? Math.min(1, onTimeCount / totalDelivered) : 0;
+
+  const milestones = [
+    {
+      name: "Zero-waste week",
+      earned: zeroWasteEarned,
+      pct: zeroDays / 7,
+      sub: zeroWasteEarned
+        ? "All of the last 7 days waste-free"
+        : `${zeroDays} of 7 days waste-free`,
+    },
+    {
+      name: "Mismatch-free deliveries",
+      earned: mismatchEarned,
+      pct: Math.min(1, mismatchRun / MISMATCH_TARGET),
+      sub: mismatchEarned
+        ? `${mismatchRun} days in a row — earned`
+        : `${mismatchRun} of ${MISMATCH_TARGET} days in a row`,
+    },
+    {
+      name: "Full month of on-time orders",
+      earned: onTimeEarned,
+      pct: onTimeProgress,
+      sub: `${onTimeCount} of ${totalDelivered} on time`,
+    },
+  ];
+  const milestonesLoading = varianceByDayLoading || onTimeLoading;
 
   React.useEffect(() => {
     if (isError) {
@@ -256,10 +282,6 @@ export default function FoodReports() {
       toast({ title: (analyticsErr as any)?.message || "Failed to load analytics", variant: "destructive" });
     }
   }, [analyticsError, analyticsErr, toast]);
-
-  // O20 — selected export format + report widget.
-  const [exportFmt, setExportFmt] = React.useState<ExportFmt>("csv");
-  const [exportReport, setExportReport] = React.useState<ExportReport>("orders");
 
   // Clean export params — drop ALL sentinels so the API receives only real filters.
   // `status` only applies to the orders report; omit it for the others.
@@ -283,12 +305,12 @@ export default function FoodReports() {
     return `${base}${prop}-${format(new Date(), "yyyy-MM-dd")}.${ext}`;
   };
 
-  const runExport = async () => {
+  const runExport = async (report: ExportReport, fmt: ExportFmt) => {
     setDownloading(true);
-    const filename = exportFilename(exportReport, exportFmt);
+    const filename = exportFilename(report, fmt);
     try {
       await apiDownload(
-        foodApi.reportsExportFmtUrl(exportFmt, buildExportParams(exportReport)),
+        foodApi.reportsExportFmtUrl(fmt, buildExportParams(report)),
         filename,
       );
       toast({ title: "Export ready", description: filename });
@@ -299,45 +321,256 @@ export default function FoodReports() {
     }
   };
 
-  return (
-    <div className="space-y-6">
-      <PageHeader
-        title="Food Reports"
-        subtitle="Order volume, meal mix, resident demand, and fulfilment status"
-      />
+  const scopeName = propertyId !== "ALL" && propName(propertyId) !== "—"
+    ? propName(propertyId)
+    : null;
 
-      {/* KPI summary */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <StatCard title="Total Orders" value={isLoading ? 0 : totalOrders} icon={ClipboardList} />
-        <StatCard title="Peak Residents" value={isLoading ? 0 : peakResidents} icon={Users} />
+  return (
+    <div className="mx-auto flex w-full max-w-[760px] flex-col gap-6 animate-fade-up">
+      {/* Header + export dropdown */}
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="font-display text-2xl font-bold tracking-[-0.012em]">Reports</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {scopeName
+              ? `How ${scopeName} is doing — people fed, waste and milestones.`
+              : "How your properties are doing — people fed, waste and milestones."}
+          </p>
+        </div>
+        {/* O20 — Export: report → format dropdown */}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="outline" size="sm" disabled={downloading} className="gap-1.5">
+              <Download className="h-4 w-4" />
+              {downloading ? "Preparing…" : "Download"}
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            {EXPORT_REPORTS.map((r) => (
+              <DropdownMenuSub key={r.key}>
+                <DropdownMenuSubTrigger>{r.label}</DropdownMenuSubTrigger>
+                <DropdownMenuSubContent>
+                  {EXPORT_FORMATS.map((f) => (
+                    <DropdownMenuItem key={f.key} onClick={() => runExport(r.key, f.key)}>
+                      {f.label}
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuSubContent>
+              </DropdownMenuSub>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
 
-      {/* O15/O16 — On-time delivery widget + (admin) tolerance config */}
-      <Card>
-        <CardHeader className="flex flex-row items-start justify-between gap-4 space-y-0">
-          <CardTitle className="text-base flex items-center gap-2">
-            <Timer className="w-4 h-4 text-accent" /> On-Time Delivery
-          </CardTitle>
-          {/* O16 — SUPER_ADMIN only inline tolerance control. */}
-          {isSuperAdmin && (
-            <div className="flex flex-col items-end gap-1.5">
-              <Label className="text-xs text-muted-foreground">
-                Preferable arrival within
-              </Label>
-              <div className="flex items-center gap-2">
-                <Input
-                  type="number"
-                  min={0}
-                  max={240}
-                  value={toleranceDraft}
-                  onChange={(e) => setToleranceDraft(e.target.value)}
-                  className="w-20 text-right tabular-nums"
-                  aria-label="On-time tolerance in minutes"
-                />
-                <span className="text-sm text-muted-foreground">min of service time</span>
+      {/* Slim filter row: period presets + property/brand scope */}
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="inline-flex items-center rounded-[10px] border border-border bg-card p-0.5">
+          {PERIOD_PRESETS.map((p) => (
+            <button
+              key={p.key}
+              type="button"
+              onClick={() => applyPeriod(p.key)}
+              aria-pressed={period === p.key}
+              className={`rounded-[8px] px-3 py-1 text-xs font-semibold transition-colors ${
+                period === p.key
+                  ? "bg-accent text-white shadow-sm"
+                  : "text-muted-foreground hover:bg-muted hover:text-foreground"
+              }`}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+        <Select value={propertyId} onValueChange={setPropertyId}>
+          <SelectTrigger className="h-8 w-44 text-xs" aria-label="Property">
+            <SelectValue placeholder="Property" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="ALL">All Properties</SelectItem>
+            {properties.map((p) => (
+              <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Select value={brand} onValueChange={setBrand}>
+          <SelectTrigger className="h-8 w-32 text-xs" aria-label="Brand">
+            <SelectValue placeholder="Brand" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="ALL">All Brands</SelectItem>
+            {BRANDS.map((b) => (
+              <SelectItem key={b} value={b}>{b}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <span className="ml-auto font-mono text-[11px] text-muted-foreground tabular-nums">
+          {format(new Date(from), "dd MMM")} – {format(new Date(to), "dd MMM yyyy")}
+        </span>
+      </div>
+
+      {/* Weekly bar cards */}
+      <section className="grid gap-3.5 [grid-template-columns:repeat(auto-fit,minmax(300px,1fr))]">
+        {/* People fed daily */}
+        <div className="rounded-[14px] border border-border bg-card p-[18px]">
+          <h3 className="font-display text-[15px] font-bold tracking-[-0.012em]">People fed daily</h3>
+          <p className="mb-3.5 mt-0.5 text-xs text-muted-foreground">Last 7 days</p>
+          <div className="flex h-[90px] items-end gap-2">
+            {isLoading ? (
+              <BarsSkeleton />
+            ) : peopleBars.length === 0 ? (
+              <BarsEmpty icon={Users} label="No resident data in this range" />
+            ) : (
+              peopleBars.map((d, i) => (
+                <div
+                  key={d.date}
+                  className="flex h-full flex-1 flex-col items-center justify-end gap-1"
+                >
+                  <span className="font-mono text-[10px] text-muted-foreground tabular-nums">
+                    {d.residents ?? 0}
+                  </span>
+                  <div
+                    className="w-full"
+                    style={{
+                      height: `${peopleHeight(d.residents || 0)}%`,
+                      minHeight: 2,
+                      borderRadius: "6px 6px 3px 3px",
+                      background: i === peopleBars.length - 1 ? BAR_GRAD : BAR_TINT,
+                    }}
+                  />
+                  <span className="text-[10px] text-muted-foreground">{weekday(d.date)}</span>
+                </div>
+              ))
+            )}
+          </div>
+          {!isLoading && peopleBars.length > 0 && (
+            <p className="mt-3 text-[11px] text-muted-foreground">
+              {totalOrders} orders in range · peak {peakResidents} people
+            </p>
+          )}
+        </div>
+
+        {/* Food waste % */}
+        <div className="rounded-[14px] border border-border bg-card p-[18px]">
+          <div className="flex items-start justify-between gap-2">
+            <div>
+              <h3 className="font-display text-[15px] font-bold tracking-[-0.012em]">Food waste %</h3>
+              <p className="mt-0.5 text-xs text-muted-foreground">Last 7 days · goal under 3%</p>
+            </div>
+          </div>
+          {/* O17 — meal filter badges; selecting one refetches with that mealType. */}
+          <div className="mb-3.5 mt-2 flex flex-wrap gap-1.5">
+            {MEAL_FILTERS.map((m) => (
+              <button
+                key={m.key}
+                type="button"
+                onClick={() => setMealFilter(m.key)}
+                aria-pressed={mealFilter === m.key}
+                className={`rounded-full px-2.5 py-0.5 text-[11px] font-bold transition-colors ${
+                  mealFilter === m.key
+                    ? "bg-accent text-white"
+                    : "bg-muted text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {m.label}
+              </button>
+            ))}
+          </div>
+          <div className="flex h-[90px] items-end gap-2">
+            {varianceByDayLoading ? (
+              <BarsSkeleton />
+            ) : wasteBars.length === 0 ? (
+              <BarsEmpty icon={Trash2} label="No waste data in this range" />
+            ) : (
+              wasteBars.map((b, i) => (
+                <div
+                  key={b.date}
+                  className="flex h-full flex-1 flex-col items-center justify-end gap-1"
+                >
+                  <span className="font-mono text-[10px] text-muted-foreground tabular-nums">
+                    {b.pct.toFixed(1)}
+                  </span>
+                  <div
+                    className="w-full"
+                    style={{
+                      height: `${wasteHeight(b.pct)}%`,
+                      minHeight: 2,
+                      borderRadius: "6px 6px 3px 3px",
+                      background:
+                        b.pct > 3
+                          ? BAR_OVER
+                          : i === wasteBars.length - 1
+                            ? BAR_OK
+                            : BAR_OK_TINT,
+                    }}
+                  />
+                  <span className="text-[10px] text-muted-foreground">{weekday(b.date)}</span>
+                </div>
+              ))
+            )}
+          </div>
+          {!analyticsLoading && summary && (
+            <p className="mt-3 text-[11px] text-muted-foreground">
+              In range: {summary.totalWasted ?? 0} wasted · {summary.wastePct ?? 0}% ·{" "}
+              {summary.delayedOrders ?? 0}/{summary.deliveredOrders ?? 0} delayed
+            </p>
+          )}
+        </div>
+      </section>
+
+      {/* O15/O16 — on-time stat strip + (super admin) tolerance settings */}
+      <section className="flex flex-wrap items-center gap-3 rounded-[14px] border border-border bg-card px-[18px] py-3.5">
+        <span className="flex h-[34px] w-[34px] flex-none items-center justify-center rounded-full bg-muted text-accent">
+          <Timer className="h-4 w-4" />
+        </span>
+        {onTimeLoading ? (
+          <Skeleton className="h-7 w-20" />
+        ) : (
+          <span className="font-mono text-xl font-bold tabular-nums">
+            {(onTime?.onTimePct ?? 0).toFixed(1)}%
+          </span>
+        )}
+        <div className="min-w-0">
+          <div className="text-sm font-semibold">On-time deliveries</div>
+          <div className="text-xs text-muted-foreground">
+            {onTimeLoading
+              ? "Loading…"
+              : `${onTimeCount} on-time · ${onTime?.lateCount ?? 0} late of ${totalDelivered} delivered · within ${onTime?.toleranceMinutes ?? tolerance?.minutes ?? 45} min`}
+          </div>
+        </div>
+        {/* O16 — SUPER_ADMIN only tolerance editor, behind a settings icon. */}
+        {isSuperAdmin && (
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="ml-auto h-8 w-8 text-muted-foreground"
+                aria-label="On-time tolerance settings"
+              >
+                <Settings2 className="h-4 w-4" />
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent align="end" className="w-72">
+              <div className="flex flex-col gap-2.5">
+                <Label className="text-xs text-muted-foreground">
+                  Preferable arrival within
+                </Label>
+                <div className="flex items-center gap-2">
+                  <Input
+                    type="number"
+                    min={0}
+                    max={240}
+                    value={toleranceDraft}
+                    onChange={(e) => setToleranceDraft(e.target.value)}
+                    className="w-20 text-right tabular-nums"
+                    aria-label="On-time tolerance in minutes"
+                  />
+                  <span className="text-sm text-muted-foreground">min of service time</span>
+                </div>
                 <Button
                   size="sm"
                   variant="outline"
+                  className="self-end"
                   disabled={
                     saveTolerance.isPending ||
                     toleranceDraft === "" ||
@@ -345,447 +578,78 @@ export default function FoodReports() {
                   }
                   onClick={() => saveTolerance.mutate(toleranceDraft)}
                 >
-                  <Check className="w-3.5 h-3.5 mr-1" />
+                  <Check className="mr-1 h-3.5 w-3.5" />
                   {saveTolerance.isPending ? "Saving…" : "Save"}
                 </Button>
               </div>
-            </div>
-          )}
-        </CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-center">
-            {/* Big % on-time */}
-            <div className="flex flex-col gap-1">
-              {onTimeLoading ? (
-                <Skeleton className="h-12 w-28" />
-              ) : (
-                <span className="text-4xl font-bold tabular-nums text-foreground">
-                  {(onTime?.onTimePct ?? 0).toFixed(1)}%
-                </span>
-              )}
-              <p className="text-sm text-muted-foreground">
-                {onTimeLoading
-                  ? "Loading…"
-                  : `${onTime?.onTimeCount ?? 0} on-time / ${onTime?.lateCount ?? 0} late of ${onTime?.totalDelivered ?? 0} delivered`}
-              </p>
-              {!isSuperAdmin && (
-                <p className="text-xs text-muted-foreground">
-                  Within {onTime?.toleranceMinutes ?? tolerance?.minutes ?? 45} min of service time
-                </p>
-              )}
-            </div>
-            {/* Per-day on-time/late trend */}
-            <div className="lg:col-span-2" style={{ height: 180 }}>
-              {onTimeLoading ? (
-                <ChartSkeleton />
-              ) : onTimeByDay.length === 0 ? (
-                <ChartEmpty icon={Timer} label="No deliveries in this range" />
-              ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={onTimeByDay} margin={{ top: 8, right: 8, left: -16, bottom: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                    <XAxis dataKey="date" tickFormatter={dayTickFmt} tick={{ fontSize: 11 }} />
-                    <YAxis allowDecimals={false} tick={{ fontSize: 11 }} />
-                    <Tooltip labelFormatter={dayTickFmt} />
-                    <Legend wrapperStyle={{ fontSize: 12 }} />
-                    <Bar dataKey="onTime" name="On-time" stackId="d" fill={SUCCESS} radius={[0, 0, 0, 0]} />
-                    <Bar dataKey="late" name="Late" stackId="d" fill={WARNING} radius={[4, 4, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              )}
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+            </PopoverContent>
+          </Popover>
+        )}
+      </section>
 
-      {/* Period segmented control */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="inline-flex items-center rounded-lg border border-border bg-card p-1">
-          {PERIOD_PRESETS.map((p) => (
-            <button
-              key={p.key}
-              type="button"
-              onClick={() => applyPeriod(p.key)}
-              aria-pressed={period === p.key}
-              className={`rounded-md px-3.5 py-1.5 text-sm font-medium transition-colors ${
-                period === p.key
-                  ? "bg-accent text-white shadow-sm"
-                  : "text-muted-foreground hover:text-foreground hover:bg-muted"
-              }`}
-            >
-              {p.label}
-            </button>
-          ))}
+      {/* Milestones */}
+      <section className="rounded-[14px] border border-border bg-card p-[18px]">
+        <h3 className="mb-3.5 font-display text-[15px] font-bold tracking-[-0.012em]">
+          Your milestones
+        </h3>
+        <div className="grid gap-3.5 [grid-template-columns:repeat(auto-fit,minmax(240px,1fr))]">
+          {milestonesLoading
+            ? [0, 1, 2].map((i) => (
+                <div key={i} className="flex items-center gap-3">
+                  <Skeleton className="h-[34px] w-[34px] flex-none rounded-full" />
+                  <div className="flex-1 space-y-1.5">
+                    <Skeleton className="h-3.5 w-28" />
+                    <Skeleton className="h-3 w-20" />
+                  </div>
+                </div>
+              ))
+            : milestones.map((m) => (
+                <div key={m.name} className="flex items-center gap-3">
+                  <span
+                    className={`flex h-[34px] w-[34px] flex-none items-center justify-center rounded-full ${
+                      m.earned
+                        ? "bg-warning-soft text-[#B4741B]"
+                        : "bg-muted text-muted-foreground"
+                    }`}
+                  >
+                    {m.earned ? <Trophy className="h-4 w-4" /> : <Clock className="h-4 w-4" />}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="text-sm font-semibold">{m.name}</div>
+                    <div className="text-xs text-muted-foreground">{m.sub}</div>
+                    {!m.earned && (
+                      <div className="mt-1.5 h-[5px] overflow-hidden rounded-full bg-muted">
+                        <div
+                          className="h-full rounded-full bg-brand-gradient transition-[width] duration-500"
+                          style={{ width: `${Math.round(m.pct * 100)}%` }}
+                        />
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))}
         </div>
-        <p className="text-xs text-muted-foreground">
-          {format(new Date(from), "dd MMM yyyy")} – {format(new Date(to), "dd MMM yyyy")}
-        </p>
+      </section>
+
+      {/* View orders deep link (keeps the property scope in the query string) */}
+      <div className="flex items-center gap-3">
+        <button
+          type="button"
+          onClick={() =>
+            setLocation(
+              propertyId !== "ALL"
+                ? withQuery("/food/orders", { propertyId })
+                : "/food/orders",
+            )
+          }
+          className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-4 py-2 text-[13px] font-bold text-accent transition-colors hover:bg-muted"
+        >
+          View orders <ArrowRight className="h-3.5 w-3.5" />
+        </button>
+        {scopeName && (
+          <p className="text-xs text-muted-foreground">Scoped to {scopeName}.</p>
+        )}
       </div>
-
-      {/* Filters */}
-      <div className="flex flex-wrap items-end gap-3">
-        <div className="flex flex-col gap-1.5">
-          <Label className="text-xs text-muted-foreground flex items-center gap-1">
-            <CalendarRange className="w-3 h-3" /> From
-          </Label>
-          <DatePicker value={from} max={to} onChange={setFrom} className="w-40" />
-        </div>
-        <div className="flex flex-col gap-1.5">
-          <Label className="text-xs text-muted-foreground">To</Label>
-          <DatePicker value={to} min={from} max={today} onChange={setTo} className="w-40" />
-        </div>
-        <div className="flex flex-col gap-1.5">
-          <Label className="text-xs text-muted-foreground">Status</Label>
-          <Select value={status} onValueChange={setStatus}>
-            <SelectTrigger className="w-44"><SelectValue placeholder="Status" /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="ALL">All Statuses</SelectItem>
-              {ORDER_STATUSES.map((s) => (
-                <SelectItem key={s} value={s}>{s.replace(/_/g, " ")}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="flex flex-col gap-1.5">
-          <Label className="text-xs text-muted-foreground">Property</Label>
-          <Select value={propertyId} onValueChange={setPropertyId}>
-            <SelectTrigger className="w-52"><SelectValue placeholder="Property" /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="ALL">All Properties</SelectItem>
-              {properties.map((p) => (
-                <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="flex flex-col gap-1.5">
-          <Label className="text-xs text-muted-foreground">Brand</Label>
-          <Select value={brand} onValueChange={setBrand}>
-            <SelectTrigger className="w-40"><SelectValue placeholder="Brand" /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="ALL">All Brands</SelectItem>
-              {BRANDS.map((b) => (
-                <SelectItem key={b} value={b}>{b}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-      </div>
-
-      {/* Segmented analytics — only a couple of charts render per view */}
-      <Tabs defaultValue="volume" className="w-full">
-        <TabsList className="flex h-auto w-full flex-wrap justify-start gap-1 sm:w-auto">
-          <TabsTrigger value="volume" className="gap-1.5">
-            <BarChart3 className="h-3.5 w-3.5" /> Volume
-          </TabsTrigger>
-          <TabsTrigger value="status" className="gap-1.5">
-            <ClipboardList className="h-3.5 w-3.5" /> Status
-          </TabsTrigger>
-          <TabsTrigger value="waste" className="gap-1.5">
-            <TrendingDown className="h-3.5 w-3.5" /> Waste &amp; Delays
-          </TabsTrigger>
-        </TabsList>
-
-        {/* Volume — resident demand */}
-        <TabsContent value="volume" className="mt-4">
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base flex items-center gap-2">
-                <Users className="w-4 h-4 text-accent" /> Resident Trend
-              </CardTitle>
-            </CardHeader>
-            <CardContent style={{ height: 300 }}>
-              {isLoading ? (
-                <ChartSkeleton />
-              ) : residentTrend.length === 0 ? (
-                <ChartEmpty icon={Users} label="No resident data in this range" />
-              ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={residentTrend} margin={{ top: 8, right: 8, left: -16, bottom: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                    <XAxis dataKey="date" tickFormatter={dayTickFmt} tick={{ fontSize: 11 }} />
-                    <YAxis allowDecimals={false} tick={{ fontSize: 11 }} />
-                    <Tooltip labelFormatter={dayTickFmt} />
-                    <Line type="monotone" dataKey="residents" name="Residents" stroke={PRIMARY} strokeWidth={2} dot={{ r: 3 }} activeDot={{ r: 5 }} />
-                  </LineChart>
-                </ResponsiveContainer>
-              )}
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        {/* Status — fulfilment breakdown */}
-        <TabsContent value="status" className="mt-4">
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base flex items-center gap-2">
-                <BarChart3 className="w-4 h-4 text-accent" /> Status Breakdown
-              </CardTitle>
-            </CardHeader>
-            <CardContent style={{ height: 340 }}>
-              {isLoading ? (
-                <ChartSkeleton />
-              ) : statusChartData.length === 0 ? (
-                <ChartEmpty icon={ClipboardList} label="No status data in this range" />
-              ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={statusChartData} margin={{ top: 8, right: 8, left: -16, bottom: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                    <XAxis dataKey="name" tick={{ fontSize: 10 }} interval={0} />
-                    <YAxis allowDecimals={false} tick={{ fontSize: 11 }} />
-                    <Tooltip />
-                    <Bar dataKey="value" name="Orders" radius={[4, 4, 0, 0]}>
-                      {statusChartData.map((d, i) => (
-                        <Cell key={i} fill={STATUS_COLOR[d.status as OrderStatus] ?? PRIMARY} />
-                      ))}
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
-              )}
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        {/* Waste & Delays — analytics scope */}
-        <TabsContent value="waste" className="mt-4 space-y-4">
-          {/* Summary tiles */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <StatCard
-              title="Total Wasted"
-              value={analyticsLoading ? 0 : (summary?.totalWasted ?? 0)}
-              icon={Trash2}
-            />
-            <StatCard
-              title="Waste %"
-              value={analyticsLoading ? "0%" : `${summary?.wastePct ?? 0}%`}
-              icon={TrendingDown}
-            />
-            <StatCard
-              title="Delayed Deliveries"
-              value={
-                analyticsLoading
-                  ? "0 / 0 delivered"
-                  : `${summary?.delayedOrders ?? 0} / ${summary?.deliveredOrders ?? 0} delivered`
-              }
-              icon={Clock}
-            />
-          </div>
-
-          {/* Wastage trend + Top wastage items */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base flex items-center gap-2">
-                  <TrendingDown className="w-4 h-4 text-accent" /> Wastage Trend
-                </CardTitle>
-              </CardHeader>
-              <CardContent style={{ height: 300 }}>
-                {analyticsLoading ? (
-                  <ChartSkeleton />
-                ) : wastageTrend.length === 0 ? (
-                  <ChartEmpty icon={Trash2} label="No wastage recorded in this range" />
-                ) : (
-                  <ResponsiveContainer width="100%" height="100%">
-                    <AreaChart data={wastageTrend} margin={{ top: 8, right: 8, left: -16, bottom: 0 }}>
-                      <defs>
-                        <linearGradient id="wasteGradient" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor={WARNING} stopOpacity={0.35} />
-                          <stop offset="95%" stopColor={WARNING} stopOpacity={0} />
-                        </linearGradient>
-                      </defs>
-                      <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                      <XAxis dataKey="date" tickFormatter={dayTickFmt} tick={{ fontSize: 11 }} />
-                      <YAxis allowDecimals={false} tick={{ fontSize: 11 }} />
-                      <Tooltip labelFormatter={dayTickFmt} />
-                      <Area type="monotone" dataKey="wasted" name="Wasted" stroke={WARNING} strokeWidth={2} fill="url(#wasteGradient)" />
-                    </AreaChart>
-                  </ResponsiveContainer>
-                )}
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base flex items-center gap-2">
-                  <Trash2 className="w-4 h-4 text-accent" /> Top Wastage Items
-                </CardTitle>
-              </CardHeader>
-              <CardContent style={{ height: 300 }}>
-                {analyticsLoading ? (
-                  <ChartSkeleton />
-                ) : topWasteChartData.length === 0 ? (
-                  <ChartEmpty icon={UtensilsCrossed} label="No wasted items in this range" />
-                ) : (
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart
-                      data={topWasteChartData}
-                      layout="vertical"
-                      margin={{ top: 8, right: 16, left: 8, bottom: 0 }}
-                    >
-                      <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" horizontal={false} />
-                      <XAxis type="number" allowDecimals={false} tick={{ fontSize: 11 }} />
-                      <YAxis
-                        type="category"
-                        dataKey="name"
-                        width={110}
-                        tick={{ fontSize: 11 }}
-                        interval={0}
-                      />
-                      <Tooltip
-                        formatter={(val: any, _n: any, item: any) => [
-                          `${val} ${item?.payload?.unit ?? ""}`.trim(),
-                          `Wasted (${item?.payload?.wastePct ?? 0}%)`,
-                        ]}
-                      />
-                      <Bar dataKey="wasted" name="Wasted" fill={DESTRUCTIVE} radius={[0, 4, 4, 0]} />
-                    </BarChart>
-                  </ResponsiveContainer>
-                )}
-              </CardContent>
-            </Card>
-          </div>
-
-          {/* Delivery delays */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base flex items-center gap-2">
-                <Clock className="w-4 h-4 text-accent" /> Delivery Delays
-              </CardTitle>
-            </CardHeader>
-            <CardContent style={{ height: 320 }}>
-              {analyticsLoading ? (
-                <ChartSkeleton />
-              ) : delays.length === 0 ? (
-                <ChartEmpty icon={Clock} label="No delivery data in this range" />
-              ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={delays} margin={{ top: 8, right: 8, left: -16, bottom: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                    <XAxis dataKey="date" tickFormatter={dayTickFmt} tick={{ fontSize: 11 }} />
-                    <YAxis allowDecimals={false} tick={{ fontSize: 11 }} />
-                    <Tooltip labelFormatter={dayTickFmt} />
-                    <Legend wrapperStyle={{ fontSize: 12 }} />
-                    <Bar dataKey="total" name="Delivered" fill={INFO} radius={[4, 4, 0, 0]} />
-                    <Bar dataKey="delayed" name="Delayed" fill={WARNING} radius={[4, 4, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              )}
-            </CardContent>
-          </Card>
-        </TabsContent>
-      </Tabs>
-
-      {/* O17 — Ordered vs Received variance by day (bar chart + meal badges) */}
-      <Card>
-        <CardHeader className="space-y-3">
-          <CardTitle className="text-base flex items-center gap-2">
-            <Scale className="w-4 h-4 text-accent" /> Variance by Day
-          </CardTitle>
-          {/* Meal filter badges — selecting one refetches with that mealType. */}
-          <div className="flex flex-wrap gap-2">
-            {MEAL_FILTERS.map((m) => (
-              <button
-                key={m.key}
-                type="button"
-                onClick={() => setMealFilter(m.key)}
-                aria-pressed={mealFilter === m.key}
-                className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
-                  mealFilter === m.key
-                    ? "bg-accent text-white"
-                    : "bg-muted text-muted-foreground hover:text-foreground hover:bg-muted/70"
-                }`}
-              >
-                {m.label}
-              </button>
-            ))}
-          </div>
-        </CardHeader>
-        <CardContent style={{ height: 340 }}>
-          {varianceByDayLoading ? (
-            <ChartSkeleton />
-          ) : !varianceByDayRows.some((r) => r.ordered || r.received || r.wasted) ? (
-            <ChartEmpty icon={Scale} label="No order data in this range" />
-          ) : (
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={varianceByDayRows} margin={{ top: 8, right: 8, left: -16, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                <XAxis dataKey="date" tickFormatter={dayTickFmt} tick={{ fontSize: 11 }} />
-                <YAxis allowDecimals={false} tick={{ fontSize: 11 }} />
-                <Tooltip labelFormatter={dayTickFmt} />
-                <Legend wrapperStyle={{ fontSize: 12 }} />
-                <Bar dataKey="ordered" name="Ordered" fill={INFO} radius={[4, 4, 0, 0]} />
-                <Bar dataKey="received" name="Received" fill={SUCCESS} radius={[4, 4, 0, 0]} />
-                <Bar dataKey="wasted" name="Wasted" fill={DESTRUCTIVE} radius={[4, 4, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          )}
-        </CardContent>
-      </Card>
-
-      {/* O20 — Export: format radios + report dropdown */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base flex items-center gap-2">
-            <Download className="w-4 h-4 text-accent" /> Export
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="flex flex-wrap items-end gap-6">
-          {/* Format radio row */}
-          <div className="flex flex-col gap-1.5">
-            <Label className="text-xs text-muted-foreground">Format</Label>
-            <div className="flex items-center gap-4" role="radiogroup" aria-label="Export format">
-              {EXPORT_FORMATS.map((f) => (
-                <label key={f.key} className="flex items-center gap-1.5 text-sm cursor-pointer">
-                  <input
-                    type="radio"
-                    name="export-format"
-                    value={f.key}
-                    checked={exportFmt === f.key}
-                    onChange={() => setExportFmt(f.key)}
-                    className="accent-[var(--accent)]"
-                  />
-                  {f.label}
-                </label>
-              ))}
-            </div>
-          </div>
-          {/* Report dropdown */}
-          <div className="flex flex-col gap-1.5">
-            <Label className="text-xs text-muted-foreground">Report</Label>
-            <Select value={exportReport} onValueChange={(v) => setExportReport(v as ExportReport)}>
-              <SelectTrigger className="w-52"><SelectValue placeholder="Report" /></SelectTrigger>
-              <SelectContent>
-                {EXPORT_REPORTS.map((r) => (
-                  <SelectItem key={r.key} value={r.key}>{r.label}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <Button
-            className="bg-accent hover:bg-accent/90 text-white"
-            disabled={downloading}
-            onClick={runExport}
-          >
-            <FileText className="w-4 h-4 mr-2" />
-            {downloading ? "Preparing…" : "Download"}
-          </Button>
-        </CardContent>
-      </Card>
-
-      {/* Property filter context footnote */}
-      {propertyId !== "ALL" && (
-        <p className="text-xs text-muted-foreground">
-          Showing data scoped to{" "}
-          <button
-            type="button"
-            className="text-accent hover:underline font-medium"
-            onClick={() => setLocation(withQuery("/food/orders", { propertyId }))}
-          >
-            {propName(propertyId)}
-          </button>
-          .
-        </p>
-      )}
     </div>
   );
 }

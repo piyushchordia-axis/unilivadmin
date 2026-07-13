@@ -12,8 +12,14 @@ export function ThemeToggle() {
     localStorage.setItem("uniliv_theme", dark ? "dark" : "light");
   }, [dark]);
   return (
-    <Button variant="ghost" size="icon" onClick={() => setDark((d) => !d)} aria-label="Toggle theme">
-      {dark ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
+    <Button
+      variant="outline"
+      size="icon"
+      onClick={() => setDark((d) => !d)}
+      aria-label="Toggle theme"
+      className="h-[38px] w-[38px] rounded-[10px] border-border bg-card text-foreground"
+    >
+      {dark ? <Sun className="h-[17px] w-[17px]" /> : <Moon className="h-[17px] w-[17px]" />}
     </Button>
   );
 }

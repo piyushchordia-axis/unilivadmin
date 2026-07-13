@@ -8,6 +8,12 @@
       "autoPort": true
     },
     {
+      "name": "uniliv-web-8091",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": ["-c", "set -a; . ./.env; set +a; export BASE_PATH=/ API_PROXY_TARGET=http://localhost:8091; exec pnpm --filter @workspace/uniliv-admin run dev"],
+      "autoPort": true
+    },
+    {
       "name": "uniliv-web-audit",
       "runtimeExecutable": "sh",
       "runtimeArgs": ["-c", "set -a; . ./.env; set +a; export BASE_PATH=/ API_PROXY_TARGET=http://localhost:8095; exec pnpm --filter @workspace/uniliv-admin run dev"],

@@ -4,25 +4,19 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { addDays, format } from "date-fns";
 import jsPDF from "jspdf";
 import {
-  UtensilsCrossed, Loader2, Building2, CalendarDays, Users,
-  Check, Clock, Lock, Download, Share2, Link2, Copy,
-  Soup, Tag, AlertTriangle, Pencil, Zap, CheckCircle2, Truck, ArrowRight,
-  Image as ImageIcon, FileText, Mail, ChevronDown, Plus, RotateCcw, History,
+  Loader2, Building2, Users, Check, Clock, Lock, Download, Share2, Link2, Copy,
+  Soup, AlertTriangle, CheckCircle2, Truck, ArrowRight, Image as ImageIcon,
+  FileText, Mail, ChevronDown, ChevronLeft, Plus, RotateCcw, History, Pencil,
+  X, Undo2,
 } from "lucide-react";
-import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { NumberStepper } from "@/components/ui/number-stepper";
-import { Badge } from "@/components/ui/badge";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
 import { EmptyState } from "@/components/ui/empty-state";
 import { StatusBadge } from "@/components/status-badge";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { TooltipProvider } from "@/components/ui/tooltip";
-import { Accordion, AccordionItem, AccordionContent } from "@/components/ui/accordion";
-import * as AccordionPrimitive from "@radix-ui/react-accordion";
+import { useConfetti } from "@/components/ui/confetti";
 import {
   Drawer, DrawerClose, DrawerContent, DrawerDescription, DrawerFooter, DrawerHeader, DrawerTitle,
 } from "@/components/ui/drawer";
@@ -30,9 +24,9 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
-  foodApi, foodKeys, MEAL_LABEL, fmtQty,
+  foodApi, foodKeys, MEAL_LABEL, MEAL_EMOJI, dishEmoji, fmtQty,
   type FoodOrder, type OrderBatch, type OrderPreview, type PropertyOverview,
-  type NextOrderProperty, type NextOrderStatus,
+  type NextOrderProperty, type NextOrderStatus, type MealType,
 } from "@/lib/food-api";
 import { useToast } from "@/hooks/use-toast";
 import { useAppStore } from "@/lib/store";
@@ -54,6 +48,20 @@ const itemKey = (mealType: string, dishId: string) => `${mealType}__${dishId}`;
 const round3 = (n: number) => Math.round(n * 1000) / 1000;
 /** Sensible +/− increment per unit: whole numbers for countables, 0.1 for weights/volumes. */
 const qtyStep = (unit: string) => (["PCS", "PLATE", "SERVING", "UNIT"].includes(unit.toUpperCase()) ? 1 : 0.1);
+
+
+/** Soft status pill from the style kit. */
+function Pill({ tone, children }: { tone: "success" | "warning" | "muted"; children: React.ReactNode }) {
+  const cls =
+    tone === "success" ? "bg-success-soft text-success" :
+    tone === "warning" ? "bg-warning-soft text-warning" :
+    "bg-muted text-muted-foreground";
+  return (
+    <span className={cn("inline-flex shrink-0 items-center rounded-full px-[9px] py-[3px] text-[11px] font-bold", cls)}>
+      {children}
+    </span>
+  );
+}
 
 /** Live countdown to a deadline, formatted "Hh Mm Ss" (or "Mm Ss" under an hour). */
 function useCountdown(deadline: Date | null): { text: string; passed: boolean } {
@@ -81,6 +89,7 @@ export default function FoodPlaceOrder() {
   const canPlace = can("FOOD_PLACE_ORDER", "create");
   // Download menu stays for Unit Lead + FnB roles (only on the success state).
   const canDownload = role === "UNIT_LEAD" || isSuperAdminRole(role) || (role ?? "").startsWith("FNB_");
+  const { confetti, fire } = useConfetti();
 
   // The single lever: how many people we're serving. Drives every quantity.
   const [persons, setPersons] = React.useState<number>(1);
@@ -88,11 +97,9 @@ export default function FoodPlaceOrder() {
   // Per-dish overrides (exclude / custom persons / custom qty) + per-meal headcount.
   const [overrides, setOverrides] = React.useState<Record<string, Override>>({});
   const [mealPersons, setMealPersons] = React.useState<Record<string, number>>({});
-  // Which meal's accordion is open (single-open; first meal opens by default).
+  // Which meal card is open (single-open; first meal opens by default).
   const [openMeal, setOpenMeal] = React.useState<string>("");
   const openMealInit = React.useRef(false);
-  // Which dish row is in edit mode (steppers shown); one at a time keeps rows calm.
-  const [editingItem, setEditingItem] = React.useState<string | null>(null);
 
   // Success state (shown after a batch is placed).
   const [placed, setPlaced] = React.useState<{ batch: OrderBatch; orders: FoodOrder[] } | null>(null);
@@ -154,6 +161,7 @@ export default function FoodPlaceOrder() {
   const myNext = (nextOrdersData ?? []).find((n) => n.propertyId === propertyId) ?? null;
   const brand = selectedProperty?.brand ?? myNext?.brand ?? null;
   const configured = selectedProperty ? Boolean(selectedProperty.brand && selectedProperty.kitchenId) : (myNext?.configured ?? false);
+  const multiProperty = (nextOrdersData?.length ?? 0) > 1;
 
   // Service date is the NEXT orderable IST day for this property (tomorrow, or the
   // day after if tomorrow's cut-off has passed) — resolved server-side.
@@ -208,7 +216,6 @@ export default function FoodPlaceOrder() {
   // edited value never leaks into the next scope's draft.
   React.useEffect(() => {
     setShowBuilder(false); setOverrides({}); setMealPersons({}); setOpenMeal(""); openMealInit.current = false;
-    setEditingItem(null);
     setPersons(seedPersons.current);
     draftRestoreDone.current = false; draftJustRestored.current = false; draftOwnsPersons.current = false;
     setDraftSavedAt(null); setDraftRestoredAt(null);
@@ -329,7 +336,7 @@ export default function FoodPlaceOrder() {
     return { meals, itemCount, mealCount: meals.length, countByMeal };
   }, [previewMeals, effFor]);
 
-  // Open the first included meal once it's available (single-open accordion); the
+  // Open the first included meal once it's available (single-open cards); the
   // user controls it from there.
   React.useEffect(() => {
     if (openMealInit.current) return;
@@ -346,7 +353,7 @@ export default function FoodPlaceOrder() {
     onSuccess: (res) => {
       qc.invalidateQueries({ queryKey: ["food"] });
       const n = res?.orders?.length ?? selection.mealCount;
-      toast({ title: `${n} order${n === 1 ? "" : "s"} placed`, description: `${selectedProperty?.name ?? "Property"} • ${brand} • ${dateLabel}` });
+      toast({ title: `${n} order${n === 1 ? "" : "s"} placed`, description: `${selectedProperty?.name ?? "Property"} • ${brand} • ${dateLabel}`, variant: "success" });
       // The draft is consumed: drop it and every edit it captured — persons
       // included, so the autosave's dirty-check can't resurrect it on the next
       // render (e.g. when leaving the success screen).
@@ -356,6 +363,7 @@ export default function FoodPlaceOrder() {
       setDraftSavedAt(null); setDraftRestoredAt(null);
       setShowBuilder(false);
       setPlaced({ batch: res.batch, orders: res.orders });
+      fire();
     },
     onError: (e: any) => toast({ title: e?.message || "Failed to place order", variant: "destructive" }),
   });
@@ -379,13 +387,13 @@ export default function FoodPlaceOrder() {
     onSuccess: (res: any, mode) => {
       if (mode === "GUESTS") {
         const n = res?.recipientCount ?? res?.data?.recipientCount ?? 0;
-        toast({ title: `Menu shared with ${n} active guest${n === 1 ? "" : "s"}` });
+        toast({ title: `Menu shared with ${n} active guest${n === 1 ? "" : "s"}`, variant: "success" });
         setShareOpen(false);
         return;
       }
       const token = res?.shareToken ?? res?.data?.shareToken;
-      if (token) { setShareLink(`${window.location.origin}/m/${token}`); toast({ title: "Share link ready" }); }
-      else { toast({ title: "Menu shared" }); }
+      if (token) { setShareLink(`${window.location.origin}/m/${token}`); toast({ title: "Share link ready", variant: "success" }); }
+      else { toast({ title: "Menu shared", variant: "success" }); }
     },
     onError: (e: any) => toast({ title: e?.message || "Failed to share menu", variant: "destructive" }),
   });
@@ -418,7 +426,7 @@ export default function FoodPlaceOrder() {
         y += 14;
       });
       doc.save(`uniliv-menu-${dateStr}.pdf`);
-      toast({ title: "Menu downloaded" });
+      toast({ title: "Menu downloaded", variant: "success" });
     } catch (e: any) { toast({ title: e?.message || "Couldn't generate PDF", variant: "destructive" }); }
   };
 
@@ -527,18 +535,18 @@ export default function FoodPlaceOrder() {
         a.click();
         a.remove();
         URL.revokeObjectURL(url);
-        toast({ title: "Menu image downloaded" });
+        toast({ title: "Menu image downloaded", variant: "success" });
       }, "image/png");
     } catch (e: any) { toast({ title: e?.message || "Couldn't generate image", variant: "destructive" }); }
   };
 
   // Shared download control (PDF + image) — gated by canDownload; reused on the
-  // menu-preview area and the success screen.
+  // status view and the success screen.
   const hasMenu = (fullMenu?.meals?.length ?? 0) > 0;
   const MenuDownloadButton = () => (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button type="button" variant="outline" size="sm" disabled={menuLoading || !hasMenu} className="w-[164px] justify-start">
+        <Button type="button" variant="outline" size="sm" disabled={menuLoading || !hasMenu} className="w-[164px] justify-start rounded-[10px]">
           <Download className="mr-2 h-4 w-4" /> Download menu
           <ChevronDown className="ml-auto h-3.5 w-3.5 opacity-60" />
         </Button>
@@ -556,7 +564,7 @@ export default function FoodPlaceOrder() {
 
   const copyShareLink = async () => {
     if (!shareLink) return;
-    try { await navigator.clipboard.writeText(shareLink); toast({ title: "Link copied" }); }
+    try { await navigator.clipboard.writeText(shareLink); toast({ title: "Link copied", variant: "success" }); }
     catch { toast({ title: "Couldn't copy link", variant: "destructive" }); }
   };
 
@@ -567,73 +575,77 @@ export default function FoodPlaceOrder() {
   // ════════════════════════════════════════════════════════════════════════
   if (placed) {
     return (
-      <div className="space-y-6">
-        <PageHeader
-          title="Order placed"
-          subtitle="Your meal orders are in. Track each one below."
-          breadcrumbs={[{ label: "Food", href: "/food/orders" }, { label: "Place Order", onClick: () => { setPlaced(null); setPropertyId(null); } }, { label: selectedProperty?.name ?? "Property" }]}
-        />
-        <div className="mx-auto w-full max-w-2xl space-y-5">
-          <Card>
-            <CardContent className="flex flex-col items-center gap-3 py-8 text-center">
-              <div className="flex h-14 w-14 items-center justify-center rounded-full bg-success/12">
-                <CheckCircle2 className="h-8 w-8 text-success" />
-              </div>
-              <div>
-                <h2 className="font-display text-lg font-semibold">
-                  {placed.orders.length} order{placed.orders.length === 1 ? "" : "s"} placed
-                </h2>
-                <p className="text-sm text-muted-foreground">
-                  {selectedProperty?.name ?? "Property"} · {brand} · {dateLabel}
-                </p>
-              </div>
-              <Badge variant="secondary" className="gap-1.5 font-mono text-xs">
-                <Tag className="h-3 w-3" /> Batch {placed.batch.batchNumber}
-              </Badge>
-            </CardContent>
-          </Card>
+      <div className="mx-auto flex w-full max-w-[760px] animate-fade-up flex-col gap-5">
+        {confetti}
+        {multiProperty && (
+          <button
+            type="button"
+            onClick={() => { setPlaced(null); setShareLink(null); setPropertyId(null); }}
+            className="flex items-center gap-1.5 self-start text-sm text-muted-foreground transition-colors hover:text-foreground"
+          >
+            <ChevronLeft className="h-[15px] w-[15px]" /> All properties
+          </button>
+        )}
 
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base font-display">Your orders</CardTitle>
-              <CardDescription>Track any order to follow its kitchen-to-delivery status.</CardDescription>
-            </CardHeader>
-            <Separator />
-            <CardContent className="p-0">
-              <ul className="divide-y">
-                {placed.orders.map((o) => (
-                  <li key={o.id} className="flex items-center gap-3 px-4 py-3">
-                    <Soup className="h-4 w-4 shrink-0 text-accent" />
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium">{MEAL_LABEL[o.mealType] ?? o.mealType}</p>
-                      <p className="truncate font-mono text-xs text-muted-foreground">{o.orderNumber}</p>
-                    </div>
-                    <StatusBadge status={o.status} />
-                    <Button asChild variant="outline" size="sm">
-                      <Link href={`/food/track?order=${encodeURIComponent(o.orderNumber)}`}>
-                        <Truck className="mr-1.5 h-3.5 w-3.5" /> Track your order
-                      </Link>
-                    </Button>
-                  </li>
-                ))}
-              </ul>
-            </CardContent>
-          </Card>
+        {/* Celebration card */}
+        <div className="animate-pop-in rounded-[14px] border border-border bg-success-soft px-6 py-9 text-center">
+          <div className="mx-auto mb-4 flex h-[72px] w-[72px] items-center justify-center rounded-full bg-success">
+            <Check className="h-9 w-9 text-white" strokeWidth={3} />
+          </div>
+          <h2 className="mb-1.5 font-display text-[22px] font-bold tracking-[-0.012em]">
+            Order sent to the kitchen
+          </h2>
+          <p className="mb-1.5 text-sm text-muted-foreground">
+            For {dateLabel} · {selectedProperty?.name ?? "Property"}{brand ? ` · ${brand}` : ""} ·{" "}
+            {placed.orders.length} meal order{placed.orders.length === 1 ? "" : "s"}
+          </p>
+          <p className="text-xs text-muted-foreground">
+            Batch <span className="font-mono font-semibold text-foreground">{placed.batch.batchNumber}</span>
+          </p>
+        </div>
 
-          {/* Download + Share — only on the success state */}
-          <Card>
-            <CardContent className="flex flex-wrap items-center gap-2 py-4">
-              {canDownload && <MenuDownloadButton />}
-              <Button type="button" variant="outline" size="sm" onClick={() => { setShareLink(null); setShareOpen(true); }}>
-                <Share2 className="mr-2 h-4 w-4" /> Share menu
-              </Button>
-              <div className="ml-auto flex items-center gap-2">
-                <Button size="sm" onClick={() => { setPlaced(null); setShareLink(null); }}>
-                  View order status <ArrowRight className="ml-1.5 h-3.5 w-3.5" />
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
+        {/* Placed orders — each links to tracking */}
+        <div className="overflow-hidden rounded-[14px] border border-border bg-card">
+          <div className="border-b border-border px-[18px] py-3.5">
+            <h3 className="font-display text-[15px] font-bold tracking-[-0.012em]">Your orders</h3>
+            <p className="mt-0.5 text-xs text-muted-foreground">Track any order to follow its kitchen-to-delivery status.</p>
+          </div>
+          <ul className="divide-y divide-border">
+            {placed.orders.map((o) => (
+              <li key={o.id} className="flex items-center gap-3 px-[18px] py-3">
+                <span
+                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[10px] text-xl"
+                  style={{ background: "color-mix(in srgb, #FF9A3D 16%, var(--card))" }}
+                >
+                  {MEAL_EMOJI[o.mealType] ?? "🍽️"}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-semibold">{MEAL_LABEL[o.mealType] ?? o.mealType}</p>
+                  <p className="truncate font-mono text-xs text-muted-foreground">{o.orderNumber}</p>
+                </div>
+                <StatusBadge status={o.status} />
+                <Link
+                  href={`/food/track?order=${encodeURIComponent(o.orderNumber)}`}
+                  className="shrink-0 font-mono text-[13px] font-semibold text-accent-strong hover:underline"
+                >
+                  Track →
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </div>
+
+        {/* Download + Share — only on the success state */}
+        <div className="flex flex-wrap items-center gap-2 rounded-[14px] border border-border bg-card px-4 py-3.5">
+          {canDownload && <MenuDownloadButton />}
+          <Button type="button" variant="outline" size="sm" className="rounded-[10px]" onClick={() => { setShareLink(null); setShareOpen(true); }}>
+            <Share2 className="mr-2 h-4 w-4" /> Share menu
+          </Button>
+          <div className="ml-auto flex items-center gap-2">
+            <Button size="sm" className="rounded-[10px]" onClick={() => { setPlaced(null); setShareLink(null); }}>
+              View order status <ArrowRight className="ml-1.5 h-3.5 w-3.5" />
+            </Button>
+          </div>
         </div>
 
         {/* Share drawer — copy link OR dispatch to active guests */}
@@ -655,12 +667,14 @@ export default function FoodPlaceOrder() {
   // ════════════════════════════════════════════════════════════════════════
   if (!propertyId) {
     return (
-      <div className="space-y-6">
-        <PageHeader
-          title="Place Order"
-          subtitle="Every property tagged to you — see what still needs its next order, and place it."
-          breadcrumbs={[{ label: "Food", href: "/food/orders" }, { label: "Place Order" }]}
-        />
+      <div className="mx-auto flex w-full max-w-[760px] animate-fade-up flex-col gap-6">
+        {confetti}
+        <div>
+          <h1 className="mb-1 font-display text-2xl font-bold tracking-[-0.012em]">Place order</h1>
+          <p className="text-sm text-muted-foreground">
+            Every property tagged to you — see what still needs its next order, and place it.
+          </p>
+        </div>
         {/* soleProperty auto-selects in an effect — keep the skeleton up for that
             frame so the one-row board never flashes before the builder opens. */}
         <NextOrdersBoard
@@ -674,102 +688,126 @@ export default function FoodPlaceOrder() {
   }
 
   // ════════════════════════════════════════════════════════════════════════
-  // PRE-ORDER STATE
+  // PRE-ORDER STATE (status view / builder)
   // ════════════════════════════════════════════════════════════════════════
-  return (
-    <TooltipProvider delayDuration={150}>
-    <div className="space-y-6">
-      <PageHeader
-        title="Place Order"
-        subtitle="Set the headcount once — quantities are calculated for every dish."
-        breadcrumbs={[{ label: "Food", href: "/food/orders" }, { label: "Place Order", onClick: () => setPropertyId(null) }, { label: selectedProperty?.name ?? "Property" }]}
-      />
+  const allMealsSelected = previewMeals.length > 0 && selection.mealCount === previewMeals.length;
+  const sendMealsText = allMealsSelected
+    ? `all ${selection.mealCount} meal${selection.mealCount === 1 ? "" : "s"}`
+    : `${selection.mealCount} of ${previewMeals.length} meals`;
 
-      {/* ── Cut-off banner — status view only; the builder shows the same cut-off
-            inline in its compact context card below. ── */}
-      {showStatus && (orderingClosed ? (
-        <div className="flex items-center gap-2.5 rounded-lg border border-destructive/30 bg-destructive/8 px-4 py-3 text-sm text-destructive">
-          <Lock className="h-4 w-4 shrink-0" />
+  return (
+    <div className="mx-auto flex w-full max-w-[760px] animate-fade-up flex-col gap-5">
+      {confetti}
+      {multiProperty && (
+        <button
+          type="button"
+          onClick={() => setPropertyId(null)}
+          className="flex items-center gap-1.5 self-start text-sm text-muted-foreground transition-colors hover:text-foreground"
+        >
+          <ChevronLeft className="h-[15px] w-[15px]" /> All properties
+        </button>
+      )}
+
+      <div>
+        <h1 className="mb-1 font-display text-2xl font-bold tracking-[-0.012em]">
+          {isTomorrow ? "Tomorrow's food order" : `${dayRelLabel}'s food order`}
+        </h1>
+        <p className="text-sm text-muted-foreground">
+          {dateLabel} · {selectedProperty?.name ?? myNext?.name ?? "Property"}
+          {availableMeals.length > 0 ? ` · ${availableMeals.length} meal${availableMeals.length === 1 ? "" : "s"}` : ""}
+        </p>
+      </div>
+
+      {/* ── Cut-off banner ── */}
+      {orderingClosed ? (
+        <div className="flex items-center gap-2.5 rounded-[12px] border border-border bg-danger-soft px-4 py-3 text-sm">
+          <Lock className="h-[18px] w-[18px] shrink-0 text-destructive" />
           <span>
-            Ordering for {dayRelLabel.toLowerCase()} ({dateLabel}) is closed{cutoffTime ? ` — the ${cutoffTime} cut-off has passed` : ""}.
+            Ordering for {dayRelLabel.toLowerCase()} is closed
+            {cutoffTime ? <> — the <strong>{cutoffTime}</strong> cut-off has passed</> : ""}.
           </span>
         </div>
       ) : cutoffDeadline ? (
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-accent/30 bg-accent/5 px-4 py-3 text-sm">
-          <Clock className="h-4 w-4 shrink-0 text-accent" />
-          <span className="text-muted-foreground">
-            Ordering for {dayRelLabel.toLowerCase()} ({dateLabel}) closes at {cutoffTime}.
-          </span>
-          <span className="ml-auto inline-flex items-center gap-1.5 font-medium tabular-nums">
-            <Zap className="h-3.5 w-3.5 text-accent" /> {countdown.text} left
+        <div className="flex items-center gap-2.5 rounded-[12px] border border-border bg-warning-soft px-4 py-3 text-sm">
+          <Clock className="h-[18px] w-[18px] shrink-0 text-warning" />
+          <span>
+            Order closes at <strong>{cutoffTime ?? format(cutoffDeadline, "HH:mm")}</strong> —{" "}
+            <span className="font-mono font-semibold tabular-nums text-warning">{countdown.text}</span> left
           </span>
         </div>
-      ) : null)}
+      ) : null}
 
       {/* ── Status view — this property already has order(s) for the date. We lead
             with status (track / edit) instead of an empty builder; only the meals
             that are still un-ordered can be added. ── */}
       {showStatus && (
-        <div className="mx-auto w-full max-w-2xl space-y-4">
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base font-display flex items-center gap-2">
-                <CheckCircle2 className="h-5 w-5 text-success" />
-                {fullyOrdered ? `All set for ${dayRelLabel.toLowerCase()}` : `Order in progress for ${dayRelLabel.toLowerCase()}`}
-              </CardTitle>
-              <CardDescription>
-                {selectedProperty?.name ?? "This property"} · {dateLabel}.{" "}
-                {fullyOrdered
-                  ? "Every meal on the menu is ordered — track them below."
-                  : `${missingMeals.length} meal${missingMeals.length === 1 ? "" : "s"} still need ordering.`}
-              </CardDescription>
-            </CardHeader>
-            <Separator />
-            <CardContent className="p-0">
-              <ul className="divide-y">
-                {orderedMeals.map((o) => {
-                  const editable = o.status === "PLACED" || o.status === "PREPARING";
-                  return (
-                    <li key={o.orderId} className="flex items-center gap-3 px-4 py-3">
-                      <Soup className="h-4 w-4 shrink-0 text-accent" />
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-medium">{o.label ?? MEAL_LABEL[o.mealType] ?? o.mealType}</p>
-                        <p className="truncate font-mono text-xs text-muted-foreground">{o.orderNumber}</p>
-                      </div>
-                      <StatusBadge status={o.status} />
-                      {editable && (
-                        <Button asChild variant="ghost" size="sm">
-                          <Link href={`/food/orders/${o.orderId}`}>
-                            <Pencil className="mr-1.5 h-3.5 w-3.5" /> Edit
-                          </Link>
-                        </Button>
-                      )}
-                      <Button asChild variant="outline" size="sm">
-                        <Link href={`/food/track?order=${encodeURIComponent(o.orderNumber)}`}>
-                          <Truck className="mr-1.5 h-3.5 w-3.5" /> Track
+        <div className="flex flex-col gap-4">
+          <div className="overflow-hidden rounded-[14px] border border-border bg-card">
+            <div className="flex items-start gap-3 border-b border-border px-[18px] py-4">
+              <span className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-full bg-success">
+                <Check className="h-4 w-4 text-white" strokeWidth={3} />
+              </span>
+              <div className="min-w-0">
+                <h2 className="font-display text-base font-bold tracking-[-0.012em]">
+                  {fullyOrdered ? `All set for ${dayRelLabel.toLowerCase()}` : `Order in progress for ${dayRelLabel.toLowerCase()}`}
+                </h2>
+                <p className="mt-0.5 text-sm text-muted-foreground">
+                  {fullyOrdered
+                    ? "Every meal on the menu is ordered — track them below."
+                    : `${missingMeals.length} meal${missingMeals.length === 1 ? "" : "s"} still need ordering.`}
+                </p>
+              </div>
+            </div>
+            <ul className="divide-y divide-border">
+              {orderedMeals.map((o) => {
+                const editable = o.status === "PLACED" || o.status === "PREPARING";
+                return (
+                  <li key={o.orderId} className="flex flex-wrap items-center gap-x-3 gap-y-2 px-[18px] py-3">
+                    <span
+                      className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[10px] text-xl"
+                      style={{ background: "color-mix(in srgb, #FF9A3D 16%, var(--card))" }}
+                    >
+                      {MEAL_EMOJI[o.mealType] ?? "🍽️"}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-semibold">{o.label ?? MEAL_LABEL[o.mealType] ?? o.mealType}</p>
+                      <p className="truncate font-mono text-xs text-muted-foreground">{o.orderNumber}</p>
+                    </div>
+                    <StatusBadge status={o.status} />
+                    {editable && (
+                      <Button asChild variant="ghost" size="sm" className="rounded-[9px]">
+                        <Link href={`/food/orders/${o.orderId}`}>
+                          <Pencil className="mr-1.5 h-3.5 w-3.5" /> Edit
                         </Link>
                       </Button>
-                    </li>
-                  );
-                })}
-                {missingMeals.map((m) => (
-                  <li key={m.mealType} className="flex items-center gap-3 bg-muted/20 px-4 py-3">
-                    <Soup className="h-4 w-4 shrink-0 text-muted-foreground" />
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium text-muted-foreground">{m.label}</p>
-                      <p className="truncate text-xs text-muted-foreground">Not ordered yet</p>
-                    </div>
-                    <Badge variant="outline" className="text-[10px] uppercase">Pending</Badge>
+                    )}
+                    <Button asChild variant="outline" size="sm" className="rounded-[9px]">
+                      <Link href={`/food/track?order=${encodeURIComponent(o.orderNumber)}`}>
+                        <Truck className="mr-1.5 h-3.5 w-3.5" /> Track
+                      </Link>
+                    </Button>
                   </li>
-                ))}
-              </ul>
-            </CardContent>
-          </Card>
+                );
+              })}
+              {missingMeals.map((m) => (
+                <li key={m.mealType} className="flex items-center gap-3 bg-background/60 px-[18px] py-3">
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[10px] bg-muted text-xl opacity-70">
+                    {MEAL_EMOJI[m.mealType] ?? "🍽️"}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-semibold text-muted-foreground">{m.label}</p>
+                    <p className="truncate text-xs text-muted-foreground">Not ordered yet</p>
+                  </div>
+                  <Pill tone="warning">NOT ORDERED</Pill>
+                </li>
+              ))}
+            </ul>
+          </div>
 
           <div className="flex flex-wrap items-center justify-between gap-2">
             {canDownload ? <MenuDownloadButton /> : <span />}
             {missingMeals.length > 0 && (
-              <Button type="button" size="sm" onClick={() => setShowBuilder(true)} disabled={orderingClosed || !canPlace}>
+              <Button type="button" size="sm" className="rounded-[10px]" onClick={() => setShowBuilder(true)} disabled={orderingClosed || !canPlace}>
                 <Plus className="mr-1.5 h-3.5 w-3.5" /> Order {missingMeals.map((m) => m.label).join(", ")}
               </Button>
             )}
@@ -777,242 +815,304 @@ export default function FoodPlaceOrder() {
         </div>
       )}
 
-      <div className={cn("mx-auto w-full max-w-3xl space-y-5", selection.mealCount > 0 && "pb-16", showStatus && "hidden")}>
-          {/* Draft-restored notice — edits from a previous visit were applied. */}
-          {draftRestoredAt && draftSavedAt && (
-            <div className="flex flex-wrap items-center gap-2.5 rounded-lg border border-accent/30 bg-accent/5 px-4 py-2.5 text-sm">
-              <History className="h-4 w-4 shrink-0 text-accent" />
-              <span className="text-muted-foreground">
-                Resumed your saved draft from {format(draftRestoredAt, "HH:mm")}{format(draftRestoredAt, "yyyy-MM-dd") !== format(new Date(), "yyyy-MM-dd") ? ` (${format(draftRestoredAt, "dd MMM")})` : ""}.
-              </span>
-              <Button variant="ghost" size="sm" className="ml-auto h-7" onClick={discardDraft}>
-                <RotateCcw className="mr-1.5 h-3.5 w-3.5" /> Start fresh
-              </Button>
+      {/* ── Builder ── */}
+      <div className={cn("space-y-4", showStatus && "hidden")}>
+        {/* Draft-restored notice — edits from a previous visit were applied. */}
+        {draftRestoredAt && draftSavedAt && (
+          <div className="flex flex-wrap items-center gap-2.5 rounded-[12px] border border-border bg-info-soft px-4 py-2.5 text-sm">
+            <History className="h-4 w-4 shrink-0 text-info" />
+            <span className="text-muted-foreground">
+              Resumed your saved draft from {format(draftRestoredAt, "HH:mm")}{format(draftRestoredAt, "yyyy-MM-dd") !== format(new Date(), "yyyy-MM-dd") ? ` (${format(draftRestoredAt, "dd MMM")})` : ""}.
+            </span>
+            <Button variant="ghost" size="sm" className="ml-auto h-7" onClick={discardDraft}>
+              <RotateCcw className="mr-1.5 h-3.5 w-3.5" /> Start fresh
+            </Button>
+          </div>
+        )}
+
+        {/* Headcount — the single lever that drives every quantity. */}
+        <div className="rounded-[14px] border border-border bg-card px-5 py-5">
+          <div className="flex flex-wrap items-center gap-4">
+            <div className="min-w-[180px] flex-1">
+              <h2 className="font-display text-[17px] font-bold tracking-[-0.012em]">
+                Who's eating {dayRelLabel.toLowerCase()}?
+              </h2>
+              <p className="mt-0.5 text-[13px] text-muted-foreground">
+                Every dish below adjusts automatically as you change this.
+              </p>
+            </div>
+            <NumberStepper
+              aria-label="People eating"
+              value={persons}
+              onChange={(n) => setPersons(Math.max(0, Math.round(n)))}
+              min={0}
+              step={1}
+              disabled={orderingClosed}
+              unit="ppl"
+              className="h-[42px] overflow-hidden rounded-[10px] [&_button]:h-10 [&_button]:w-10 [&_input]:h-10 [&_input]:w-[72px] [&_input]:font-mono [&_input]:text-xl [&_input]:font-semibold"
+            />
+          </div>
+          {overview && overview.activeGuests > 0 && (
+            <div className="mt-3.5 flex flex-wrap gap-2 border-t border-border pt-3.5">
+              <button
+                type="button"
+                disabled={orderingClosed}
+                onClick={() => setPersons(overview.activeGuests)}
+                className={cn(
+                  "h-9 rounded-full px-3.5 text-[13px] font-semibold transition-colors disabled:opacity-50",
+                  persons === overview.activeGuests
+                    ? "bg-accent text-white"
+                    : "border border-border bg-background text-foreground hover:bg-muted",
+                )}
+              >
+                Use {overview.activeGuests} active guests
+              </button>
             </div>
           )}
-          {/* Order context — two labelled tiles: service day (+ cut-off countdown) and headcount. */}
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <div className="rounded-xl border bg-muted/30 px-4 py-3">
-              <p className="text-xs text-muted-foreground">Service day</p>
-              <div className="mt-1.5 flex items-center gap-2 text-sm font-medium">
-                <CalendarDays className="h-4 w-4 shrink-0 text-muted-foreground" />
-                {dayRelLabel} <span className="font-normal text-muted-foreground">· {dateLabel}</span>
-              </div>
-              <div className="mt-1.5 flex items-center gap-1.5 text-xs">
-                {orderingClosed ? (
-                  <><Lock className="h-3.5 w-3.5 shrink-0 text-destructive" /><span className="font-medium text-destructive">Closed{cutoffTime ? ` — ${cutoffTime} cut-off passed` : ""}</span></>
-                ) : cutoffDeadline ? (
-                  <><Clock className="h-3.5 w-3.5 shrink-0 text-muted-foreground" /><span className="text-muted-foreground">Closes {cutoffTime} · <span className="font-medium tabular-nums text-accent">{countdown.text} left</span></span></>
-                ) : (
-                  <span className="text-muted-foreground">No cut-off configured</span>
-                )}
-              </div>
-            </div>
-            <div className="rounded-xl border bg-muted/30 px-4 py-3">
-              <p className="text-xs text-muted-foreground">Headcount</p>
-              <div className="mt-1.5 flex items-center gap-2">
-                <Users className="h-4 w-4 shrink-0 text-accent" />
-                <NumberStepper value={persons} onChange={setPersons} min={0} aria-label="People being served" className="w-auto" />
-                <span className="text-sm text-muted-foreground">people</span>
-              </div>
-              {overview && overview.activeGuests > 0 && (
-                <button type="button" onClick={() => setPersons(overview.activeGuests)}
-                  className={cn("mt-2 inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs transition-colors",
-                    persons === overview.activeGuests ? "bg-success/12 text-success" : "bg-muted text-muted-foreground hover:bg-muted/70")}>
-                  <Users className="h-3 w-3" /> Use {overview.activeGuests} active guests
-                </button>
-              )}
-            </div>
+        </div>
+
+        {/* Per-meal builder */}
+        {!configured ? (
+          <div className="rounded-[14px] border border-border bg-card py-6">
+            <EmptyState icon={AlertTriangle} title="Property not configured" description="This property has no brand or kitchen assigned, so it can't take orders. Ask an admin to configure it in the Organization console." className="border-0 bg-transparent" />
           </div>
-
-          {/* Per-meal builder */}
-          {!configured ? (
-            <Card><CardContent className="py-10">
-              <EmptyState icon={AlertTriangle} title="Property not configured" description="This property has no brand or kitchen assigned, so it can't take orders. Ask an admin to configure it in the Organization console." />
-            </CardContent></Card>
-          ) : previewLoading ? (
-            <Card><CardContent className="space-y-3 py-6">
-              {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-24 w-full rounded-lg" />)}
-            </CardContent></Card>
-          ) : !preview || previewMeals.length === 0 ? (
-            <Card><CardContent className="py-10">
-              <EmptyState icon={Soup} title={`Nothing left to order for ${dayRelLabel.toLowerCase()}`} description={hasExistingOrders ? "Every meal on this property's menu for this date is already ordered." : `No menu is configured for this property's kitchen and brand on ${dateLabel}.`} />
-            </CardContent></Card>
-          ) : (
-            <div className="space-y-3">
-              {/* Meal selector — tap a meal to add/remove it from this batch. Un-picked
-                  meals are skipped; come back and order them anytime. Already-placed
-                  meals show as locked "ordered" chips. */}
-              <div className="flex flex-wrap items-center gap-2">
-                {previewMeals.map((meal) => {
-                  const dishIds = meal.items.map((i) => i.dishId);
-                  const included = (selection.countByMeal[meal.mealType] ?? 0) > 0;
-                  return (
-                    <button key={meal.mealType} type="button" disabled={orderingClosed}
-                      onClick={() => toggleAll(meal.mealType, dishIds, !included)}
-                      aria-pressed={included}
-                      className={cn("inline-flex items-center gap-1.5 rounded-full border px-3.5 py-2 text-sm font-medium transition-colors disabled:opacity-50",
-                        included
-                          ? "border-accent bg-accent text-white hover:bg-accent/90"
-                          : "border-border bg-transparent text-muted-foreground hover:bg-muted/50")}>
-                      {included ? <Check className="h-3.5 w-3.5" /> : <Plus className="h-3.5 w-3.5" />}
-                      {meal.label} · {meal.items.length}
-                    </button>
-                  );
-                })}
-                {orderedMeals
-                  .filter((o) => !previewMeals.some((m) => m.mealType === o.mealType))
-                  .map((o) => (
-                    <span key={o.orderId}
-                      className="inline-flex items-center gap-1.5 rounded-full border border-success/25 bg-success/12 px-3.5 py-2 text-sm font-medium text-success">
-                      <CheckCircle2 className="h-3.5 w-3.5" /> {o.label ?? MEAL_LABEL[o.mealType] ?? o.mealType} · ordered
-                    </span>
-                  ))}
-              </div>
-              <p className="px-0.5 text-xs text-muted-foreground">
-                {selection.mealCount} of {previewMeals.length} meal{previewMeals.length === 1 ? "" : "s"} in this order · tap to toggle — order the rest anytime.
-              </p>
-
-              {/* Per-dish include/exclude + quantity overrides are editable inline below.
-                  The order-batch endpoint accepts the resulting subset of dishes/quantities
-                  (each dishId is validated against the menu); composition rules are NOT
-                  hard-blocked on this path — that lives in Food Settings → Menu Rotation. */}
-              <Accordion type="single" collapsible value={openMeal} onValueChange={setOpenMeal} className="space-y-2.5">
-              {previewMeals.filter((meal) => (selection.countByMeal[meal.mealType] ?? 0) > 0).map((meal) => {
-                const mealHead = mealPersons[meal.mealType];
+        ) : previewLoading ? (
+          <div className="flex flex-col gap-2.5">
+            {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-[76px] w-full rounded-[14px]" />)}
+          </div>
+        ) : !preview || previewMeals.length === 0 ? (
+          <div className="rounded-[14px] border border-border bg-card py-6">
+            <EmptyState icon={Soup} title={`Nothing left to order for ${dayRelLabel.toLowerCase()}`} description={hasExistingOrders ? "Every meal on this property's menu for this date is already ordered." : `No menu is configured for this property's kitchen and brand on ${dateLabel}.`} className="border-0 bg-transparent" />
+          </div>
+        ) : (
+          <div className="flex flex-col gap-3">
+            {/* Meal selector — tap a meal to add/remove it from this batch. Un-picked
+                meals are skipped; come back and order them anytime. Already-placed
+                meals show as locked "ordered" chips. */}
+            <div className="flex flex-wrap items-center gap-2">
+              {previewMeals.map((meal) => {
+                const dishIds = meal.items.map((i) => i.dishId);
+                const included = (selection.countByMeal[meal.mealType] ?? 0) > 0;
                 return (
-                  <AccordionItem key={meal.mealType} value={meal.mealType} className="overflow-hidden rounded-xl border bg-card">
-                    <AccordionPrimitive.Header className="flex items-center gap-3 px-4 py-2.5">
-                      <AccordionPrimitive.Trigger className="group flex flex-1 items-center gap-2 text-left text-sm font-medium">
-                        <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200 group-data-[state=open]:rotate-180" />
-                        <span>{meal.label} <span className="font-normal text-muted-foreground">· {meal.items.length} dishes</span></span>
-                      </AccordionPrimitive.Trigger>
-                      {/* Per-meal headcount lives in the header. stopPropagation so tapping the
-                          stepper adjusts persons without toggling the accordion. */}
-                      <div className="flex items-center gap-2" onPointerDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}>
-                        <span className="hidden text-xs text-muted-foreground sm:inline">persons</span>
-                        <NumberStepper value={mealHead ?? persons} min={0}
-                          onChange={(n) => setMealPersons((p) => ({ ...p, [meal.mealType]: n }))}
-                          aria-label={`${meal.label} persons`} className="w-auto" />
-                        {mealHead != null && mealHead !== persons && (
-                          <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground" aria-label="Reset meal persons"
-                            onClick={(e) => { e.stopPropagation(); setMealPersons((p) => { const n = { ...p }; delete n[meal.mealType]; return n; }); }}>
-                            <RotateCcw className="h-3.5 w-3.5" />
-                          </Button>
-                        )}
-                      </div>
-                    </AccordionPrimitive.Header>
-                    <AccordionContent className="p-0">
-                      {/* Rows read as calm text by default — "1.62 kg · 9 ppl" plus the
-                          pencil. Tapping the pencil swaps that one row into edit mode with
-                          inline persons/quantity steppers (editing persons recomputes the
-                          quantity; editing quantity pins it), a reset, and a done tick. */}
-                      <ul className="divide-y border-t">
-                            {meal.items.map((it) => {
-                              const e = effFor(meal.mealType, it.dishId, it.qtyPerResident);
-                              const key = itemKey(meal.mealType, it.dishId);
-                              const editing = editingItem === key;
-                              return (
-                                <li key={it.dishId} className={cn("flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2.5", !e.included && "opacity-50")}>
-                                  <Checkbox checked={e.included} disabled={orderingClosed}
-                                    onCheckedChange={(v) => { setExcluded(meal.mealType, it.dishId, !v); if (!v && editing) setEditingItem(null); }}
-                                    aria-label={`Include ${it.dishName}`} />
-                                  <div className="min-w-0 flex-1">
-                                    <div className="flex items-center gap-1.5">
-                                      <p className="truncate text-sm font-medium">{it.dishName}</p>
-                                      {e.edited && <Badge variant="default" className="text-[9px] px-1.5 py-0">edited</Badge>}
-                                    </div>
-                                    <p className="truncate text-xs text-muted-foreground">
-                                      {it.slotLabel ? `${it.slotLabel} · ` : ""}
-                                      {fmtQty(it.qtyPerResident, it.unit)}/person
-                                    </p>
-                                  </div>
-                                  {!editing && (
-                                    <span className="shrink-0 text-right tabular-nums">
-                                      {e.included ? (
-                                        <>
-                                          <span className="text-sm font-semibold">{fmtQty(e.qty, it.unit)}</span>
-                                          <span className="text-xs text-muted-foreground"> · {e.persons} ppl</span>
-                                        </>
-                                      ) : (
-                                        <span className="text-sm font-semibold text-muted-foreground">—</span>
-                                      )}
-                                    </span>
-                                  )}
-                                  {editing && e.included && (
-                                    <div className="flex w-full items-center justify-end gap-x-2 gap-y-2 sm:w-auto">
-                                      <div className="flex items-center gap-1.5">
-                                        <span className="text-[11px] text-muted-foreground">
-                                          <span className="sm:hidden">ppl</span>
-                                          <span className="hidden sm:inline">persons</span>
-                                        </span>
-                                        <NumberStepper size="sm" spin value={e.persons} min={0}
-                                          disabled={orderingClosed}
-                                          onChange={(n) => patchOverride(key, { persons: n, qty: undefined })}
-                                          aria-label={`${it.dishName} persons`} />
-                                      </div>
-                                      <div className="flex items-center gap-1.5">
-                                        <NumberStepper size="sm" value={e.qty} min={0} step={qtyStep(it.unit)}
-                                          disabled={orderingClosed}
-                                          onChange={(n) => patchOverride(key, { qty: round3(n) })}
-                                          aria-label={`${it.dishName} quantity (${it.unit.toLowerCase()})`} />
-                                        <span className="text-[11px] text-muted-foreground">{it.unit.toLowerCase()}</span>
-                                      </div>
-                                      {e.edited && (
-                                        <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0 text-muted-foreground"
-                                          aria-label={`Reset ${it.dishName} to calculated`} title="Reset to calculated"
-                                          onClick={() => resetItem(meal.mealType, it.dishId)}>
-                                          <RotateCcw className="h-3 w-3" />
-                                        </Button>
-                                      )}
-                                      <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0 text-accent"
-                                        aria-label={`Done editing ${it.dishName}`} title="Done"
-                                        onClick={() => setEditingItem(null)}>
-                                        <Check className="h-4 w-4" />
-                                      </Button>
-                                    </div>
-                                  )}
-                                  {!editing && (
-                                    <Button variant="ghost" size="icon" disabled={orderingClosed || !e.included}
-                                      className={cn("h-8 w-8 shrink-0", e.edited ? "text-accent" : "text-muted-foreground")}
-                                      aria-label={`Edit ${it.dishName}`} title="Edit persons / quantity"
-                                      onClick={() => setEditingItem(key)}>
-                                      <Pencil className="h-3.5 w-3.5" />
-                                    </Button>
-                                  )}
-                                </li>
-                              );
-                            })}
-                      </ul>
-                    </AccordionContent>
-                  </AccordionItem>
+                  <button key={meal.mealType} type="button" disabled={orderingClosed}
+                    onClick={() => toggleAll(meal.mealType, dishIds, !included)}
+                    aria-pressed={included}
+                    className={cn("inline-flex items-center gap-1.5 rounded-full px-3.5 py-2 text-[13px] font-semibold transition-colors disabled:opacity-50",
+                      included
+                        ? "bg-accent text-white hover:bg-accent/90"
+                        : "border border-border bg-card text-muted-foreground hover:bg-muted/60")}>
+                    {included ? <Check className="h-3.5 w-3.5" /> : <Plus className="h-3.5 w-3.5" />}
+                    {MEAL_EMOJI[meal.mealType]} {meal.label}
+                  </button>
                 );
               })}
-              </Accordion>
+              {orderedMeals
+                .filter((o) => !previewMeals.some((m) => m.mealType === o.mealType))
+                .map((o) => (
+                  <span key={o.orderId}
+                    className="inline-flex items-center gap-1.5 rounded-full bg-success-soft px-3.5 py-2 text-[13px] font-semibold text-success">
+                    <CheckCircle2 className="h-3.5 w-3.5" /> {o.label ?? MEAL_LABEL[o.mealType] ?? o.mealType} · ordered
+                  </span>
+                ))}
             </div>
-          )}
-        {/* Place order action bar — a fixed dock attached to the bottom of the
-            window, spanning the full content area (offset past the sidebar on
-            desktop). The builder column carries matching bottom padding so the
-            last rows can always scroll clear of it. */}
+            <p className="px-0.5 text-xs text-muted-foreground">
+              {selection.mealCount} of {previewMeals.length} meal{previewMeals.length === 1 ? "" : "s"} in this order · tap to toggle — order the rest anytime.
+            </p>
+
+            {/* Meal cards — single-open; per-dish include/exclude + quantity overrides
+                are edited inline in the expanded card. The order-batch endpoint accepts
+                the resulting subset of dishes/quantities (each dishId is validated
+                against the menu); composition rules are NOT hard-blocked on this path —
+                that lives in Food Settings → Menu Rotation. */}
+            <div className="flex flex-col gap-2.5">
+              {previewMeals.filter((meal) => (selection.countByMeal[meal.mealType] ?? 0) > 0).map((meal) => {
+                const mealHead = mealPersons[meal.mealType];
+                const heads = mealHead ?? persons;
+                const open = openMeal === meal.mealType;
+                const toggleOpen = () => setOpenMeal((prev) => (prev === meal.mealType ? "" : meal.mealType));
+                return (
+                  <div
+                    key={meal.mealType}
+                    className="overflow-hidden rounded-[14px] border border-border bg-card transition-[border-color,box-shadow] duration-200"
+                    style={open ? {
+                      borderColor: "color-mix(in srgb, var(--accent) 45%, var(--border))",
+                      boxShadow: "0 6px 20px rgba(242,96,60,.10)",
+                    } : undefined}
+                  >
+                    {/* Header — tap to expand. The persons mini-stepper stops propagation. */}
+                    <div
+                      role="button" tabIndex={0}
+                      onClick={toggleOpen}
+                      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleOpen(); } }}
+                      className="flex w-full cursor-pointer select-none items-center gap-3 px-[18px] py-3.5"
+                      style={open ? {
+                        background: "linear-gradient(135deg, color-mix(in srgb, #FF9A3D 14%, var(--card)), color-mix(in srgb, #F2603C 6%, var(--card)))",
+                      } : undefined}
+                    >
+                      <span
+                        className="flex h-11 w-11 shrink-0 items-center justify-center rounded-[12px] text-[22px]"
+                        style={{ background: "linear-gradient(135deg, color-mix(in srgb, #FF9A3D 22%, var(--card)), color-mix(in srgb, #F2603C 12%, var(--card)))" }}
+                      >
+                        {MEAL_EMOJI[meal.mealType]}
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate font-display text-[15px] font-bold tracking-[-0.012em]">
+                          {meal.label}
+                        </span>
+                        <span className="mt-px block text-xs text-muted-foreground">
+                          {meal.items.length} dish{meal.items.length === 1 ? "" : "es"}
+                        </span>
+                      </span>
+                      <span
+                        className="flex shrink-0 items-center gap-1.5"
+                        onPointerDown={(e) => e.stopPropagation()}
+                        onClick={(e) => e.stopPropagation()}
+                        onKeyDown={(e) => e.stopPropagation()}
+                      >
+                        <NumberStepper
+                          size="sm"
+                          aria-label={`People for ${meal.label}`}
+                          value={heads}
+                          onChange={(n) => setMealPersons((p) => ({ ...p, [meal.mealType]: Math.max(0, Math.round(n)) }))}
+                          min={0}
+                          step={1}
+                          disabled={orderingClosed}
+                          unit="ppl"
+                          className="overflow-hidden rounded-[10px] bg-card [&_input]:font-mono [&_input]:font-semibold"
+                        />
+                        {mealHead != null && mealHead !== persons && (
+                          <button
+                            type="button"
+                            aria-label={`Reset ${meal.label} persons`} title="Reset to global headcount"
+                            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[8px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                            onClick={() => setMealPersons((p) => { const n = { ...p }; delete n[meal.mealType]; return n; })}
+                          >
+                            <RotateCcw className="h-3.5 w-3.5" />
+                          </button>
+                        )}
+                      </span>
+                      <ChevronDown
+                        className={cn(
+                          "h-4 w-4 shrink-0 transition-transform duration-200",
+                          open ? "rotate-180 text-accent-strong" : "text-muted-foreground",
+                        )}
+                      />
+                    </div>
+
+                    {/* Dish rows */}
+                    {open && (
+                      <div className="grid grid-cols-1 gap-2.5 border-t border-border bg-background p-3.5 sm:grid-cols-2">
+                        {meal.items.map((it) => {
+                          const e = effFor(meal.mealType, it.dishId, it.qtyPerResident);
+                          const key = itemKey(meal.mealType, it.dishId);
+                          const step = qtyStep(it.unit);
+                          return (
+                            <div
+                              key={it.dishId}
+                              className={cn(
+                                "flex items-center gap-2.5 rounded-[12px] border border-border bg-card px-3 py-2.5",
+                                !e.included && "opacity-55",
+                              )}
+                            >
+                              <span
+                                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[10px] text-xl"
+                                style={{ background: "color-mix(in srgb, #FF9A3D 16%, var(--card))" }}
+                              >
+                                {dishEmoji(it.dishName, meal.mealType)}
+                              </span>
+                              <span className="min-w-0 flex-1">
+                                <span className="block truncate text-[13.5px] font-semibold">{it.dishName}</span>
+                                <span className="block truncate text-[11px] text-muted-foreground">
+                                  {it.slotLabel ? `${it.slotLabel} · ` : ""}
+                                  {fmtQty(it.qtyPerResident, it.unit)}/person · {e.persons} ppl
+                                  {e.edited && <span className="font-semibold text-accent-strong"> · edited</span>}
+                                </span>
+                              </span>
+                              {e.included ? (
+                                <NumberStepper
+                                  size="sm"
+                                  aria-label={`Quantity of ${it.dishName}`}
+                                  value={e.qty}
+                                  onChange={(n) => patchOverride(key, { qty: round3(Math.max(0, n)) })}
+                                  min={0}
+                                  step={step}
+                                  disabled={orderingClosed}
+                                  unit={it.unit.toLowerCase()}
+                                  className="shrink-0 overflow-hidden rounded-[10px] [&_input]:font-mono [&_input]:font-semibold"
+                                />
+                              ) : (
+                                <Pill tone="muted">SKIPPED</Pill>
+                              )}
+                              {e.edited && e.included && (
+                                <button
+                                  type="button" disabled={orderingClosed}
+                                  aria-label={`Reset ${it.dishName} to calculated`} title="Reset to calculated"
+                                  className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40"
+                                  onClick={() => resetItem(meal.mealType, it.dishId)}
+                                >
+                                  <RotateCcw className="h-3 w-3" />
+                                </button>
+                              )}
+                              {e.included ? (
+                                <button
+                                  type="button" disabled={orderingClosed}
+                                  aria-label={`Skip ${it.dishName}`} title="Skip this dish"
+                                  className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40"
+                                  onClick={() => setExcluded(meal.mealType, it.dishId, true)}
+                                >
+                                  <X className="h-3.5 w-3.5" />
+                                </button>
+                              ) : (
+                                <button
+                                  type="button" disabled={orderingClosed}
+                                  aria-label={`Add ${it.dishName} back`} title="Add back"
+                                  className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40"
+                                  onClick={() => setExcluded(meal.mealType, it.dishId, false)}
+                                >
+                                  <Undo2 className="h-3.5 w-3.5" />
+                                </button>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Sticky send bar — sits at the end of the builder column and stays
+            pinned to the viewport bottom while the meal cards scroll. */}
         {selection.mealCount > 0 && (
-          <div className="fixed inset-x-0 bottom-0 z-20 border-t bg-card shadow-[0_-8px_20px_-12px_rgba(0,0,0,0.25)] md:left-64">
-            <div className="mx-auto flex w-full max-w-3xl items-center justify-between gap-3 px-4 py-3 sm:px-6">
-            <div className="text-sm">
-              <span className="text-muted-foreground">{selection.mealCount} meal{selection.mealCount === 1 ? "" : "s"} · </span>
-              <span className="font-semibold">{selection.itemCount} item{selection.itemCount === 1 ? "" : "s"}</span>
-              {draftSavedAt && (
-                <span className="mt-0.5 block text-xs text-muted-foreground">
-                  Draft saved · {format(draftSavedAt, "HH:mm")}
-                </span>
+          <div className="sticky bottom-3 z-20 flex flex-wrap items-center gap-x-4 gap-y-2 rounded-[14px] border border-border bg-card px-4 py-3 shadow-[0_8px_24px_rgba(36,26,21,.12),0_-4px_16px_rgba(36,26,21,.06)]">
+            <div className="min-w-0 flex-1">
+              <div className="truncate font-display text-[15px] font-bold tracking-[-0.012em]">
+                <span className="font-mono tabular-nums">{persons}</span> people ·{" "}
+                {selection.mealCount} meal{selection.mealCount === 1 ? "" : "s"} ·{" "}
+                {selection.itemCount} item{selection.itemCount === 1 ? "" : "s"}
+              </div>
+              <div className="mt-0.5 truncate text-xs text-muted-foreground">
+                {dateLabel}
+                {draftSavedAt && <> · Draft saved <span className="font-mono tabular-nums">{format(draftSavedAt, "HH:mm")}</span></>}
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={handlePlace}
+              disabled={saving || !canPlace || orderingClosed}
+              className={cn(
+                "flex h-[52px] shrink-0 items-center gap-2 rounded-[12px] px-6 font-display text-base font-bold tracking-[-0.012em] transition-[filter] disabled:cursor-not-allowed",
+                saving || !canPlace || orderingClosed
+                  ? "bg-muted text-muted-foreground"
+                  : "bg-success text-white hover:brightness-105",
               )}
-            </div>
-            <Button onClick={handlePlace} disabled={saving || !canPlace || orderingClosed}>
-              {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <UtensilsCrossed className="mr-2 h-4 w-4" />}
-              Place order
-              {selection.itemCount > 0 && <Badge variant="secondary" className="ml-2 bg-white/20 text-white border-0">{selection.itemCount}</Badge>}
-            </Button>
-            </div>
+            >
+              {saving && <Loader2 className="h-4 w-4 animate-spin" />}
+              Send {dayRelLabel.toLowerCase()}'s order — {sendMealsText} ✓
+            </button>
           </div>
         )}
       </div>
@@ -1028,13 +1128,12 @@ export default function FoodPlaceOrder() {
         onCopy={copyShareLink}
       />
     </div>
-    </TooltipProvider>
   );
 }
 
 /** Multi-property "Next Orders" board — one row per property tagged to the unit
  *  lead, showing its next orderable day, what's already ordered, and the single
- *  correct action (place / view status). Includes a one-click "order all pending". */
+ *  correct action (place / view status). */
 function NextOrdersBoard({
   properties, isLoading, canPlace, onOpen,
 }: {
@@ -1062,28 +1161,31 @@ function NextOrdersBoard({
 
   if (isLoading) {
     return (
-      <div className="space-y-3">
-        {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-20 w-full rounded-xl" />)}
+      <div className="flex flex-col gap-2.5">
+        {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-20 w-full rounded-[14px]" />)}
       </div>
     );
   }
   if (properties.length === 0) {
     return (
-      <Card><CardContent className="py-16">
-        <EmptyState icon={Building2} title="No properties tagged to you" description="Ask an administrator to assign you to one or more properties from the Organization console." />
-      </CardContent></Card>
+      <div className="rounded-[14px] border border-border bg-card py-10">
+        <EmptyState icon={Building2} title="No properties tagged to you" description="Ask an administrator to assign you to one or more properties from the Organization console." className="border-0 bg-transparent" />
+      </div>
     );
   }
 
   return (
-    <div className="space-y-4">
+    <div className="flex flex-col gap-4">
       {/* Summary strip */}
       {orderable.length > 0 && (
-        <div className="flex flex-wrap items-center gap-3 rounded-lg border bg-muted/30 px-4 py-3 text-sm">
+        <div className={cn(
+          "flex items-center gap-2.5 rounded-[12px] border border-border px-4 py-3 text-sm",
+          pendingCount > 0 ? "bg-warning-soft" : "bg-success-soft",
+        )}>
           {pendingCount > 0 ? (
             <>
               <AlertTriangle className="h-4 w-4 shrink-0 text-warning" />
-              <span><span className="font-medium">{pendingCount} of {orderable.length} propert{orderable.length === 1 ? "y" : "ies"}</span> still need their next order.</span>
+              <span><span className="font-semibold">{pendingCount} of {orderable.length} propert{orderable.length === 1 ? "y" : "ies"}</span> still need their next order.</span>
             </>
           ) : (
             <>
@@ -1095,7 +1197,7 @@ function NextOrdersBoard({
       )}
 
       {/* Rows */}
-      <div className="space-y-2.5">
+      <div className="flex flex-col gap-2.5">
         {sorted.map((p) => (
           <NextOrderRow key={p.propertyId} p={p} canPlace={canPlace} dayLabel={fmtDay(p.serviceDate)} onOpen={() => onOpen(p.propertyId)} />
         ))}
@@ -1111,29 +1213,27 @@ function NextOrderRow({
   const ordered = p.orderedMeals;
   const missing = p.availableMeals.filter((m) => !ordered.some((o) => o.mealType === m.mealType));
 
-  const statusMeta: Record<NextOrderStatus, { label: string; cls: string; icon: typeof CheckCircle2 }> = {
-    NOT_ORDERED: { label: "Not ordered", cls: "text-warning", icon: AlertTriangle },
-    PARTIAL: { label: `${missing.length} meal${missing.length === 1 ? "" : "s"} pending`, cls: "text-warning", icon: Clock },
-    ORDERED: { label: "Ordered", cls: "text-success", icon: CheckCircle2 },
-    NO_MENU: { label: "No menu", cls: "text-muted-foreground", icon: Soup },
-    NOT_CONFIGURED: { label: "Not configured", cls: "text-muted-foreground", icon: Lock },
+  const statusMeta: Record<NextOrderStatus, { label: string; cls: string }> = {
+    NOT_ORDERED: { label: "NOT ORDERED", cls: "bg-warning-soft text-warning" },
+    PARTIAL: { label: `${missing.length} MEAL${missing.length === 1 ? "" : "S"} PENDING`, cls: "bg-warning-soft text-warning" },
+    ORDERED: { label: "ORDERED", cls: "bg-success-soft text-success" },
+    NO_MENU: { label: "NO MENU", cls: "bg-muted text-muted-foreground" },
+    NOT_CONFIGURED: { label: "NOT CONFIGURED", cls: "bg-muted text-muted-foreground" },
   };
   const meta = statusMeta[p.status];
-  const StatusIcon = meta.icon;
-  const accent =
-    p.status === "ORDERED" ? "border-l-[var(--color-success)]" :
-    p.status === "NOT_ORDERED" || p.status === "PARTIAL" ? "border-l-[var(--color-warning)]" :
-    "border-l-transparent";
-  const muted = p.status === "NOT_CONFIGURED" || p.status === "NO_MENU";
+  const mutedRow = p.status === "NOT_CONFIGURED" || p.status === "NO_MENU";
 
   return (
-    <Card className={cn("border-l-2", accent, muted && "bg-muted/30")}>
-      <CardContent className="flex flex-wrap items-center gap-x-4 gap-y-3 p-3.5">
+    <div className={cn("rounded-[14px] border border-border bg-card px-4 py-3.5 sm:px-[18px]", mutedRow && "opacity-75")}>
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
         <div className="min-w-[180px] flex-1">
           <div className="flex items-center gap-2">
-            <Building2 className="h-4 w-4 shrink-0 text-muted-foreground" />
-            <span className="truncate text-sm font-medium">{p.name}</span>
-            {p.brand && <Badge variant="secondary" className="gap-1 text-[10px]"><Tag className="h-2.5 w-2.5" />{p.brand}</Badge>}
+            <span className="truncate font-display text-[15px] font-bold tracking-[-0.012em]">{p.name}</span>
+            {p.brand && (
+              <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
+                {p.brand}
+              </span>
+            )}
           </div>
           <p className="mt-0.5 truncate text-xs text-muted-foreground">
             {p.city ? `${p.city} · ` : ""}{p.activeGuests} active guest{p.activeGuests === 1 ? "" : "s"}
@@ -1151,33 +1251,33 @@ function NextOrderRow({
           )}
         </div>
 
-        <span className={cn("inline-flex items-center gap-1.5 text-xs", meta.cls)}>
-          <StatusIcon className="h-3.5 w-3.5" /> {meta.label}
+        <span className={cn("inline-flex shrink-0 items-center rounded-full px-[9px] py-[3px] text-[11px] font-bold", meta.cls)}>
+          {meta.label}
         </span>
 
         {/* The single correct action for this property's state */}
         {p.status === "NOT_CONFIGURED" ? (
-          <Button size="sm" variant="outline" disabled>Place order</Button>
+          <Button size="sm" variant="outline" className="rounded-[9px]" disabled>Place order</Button>
         ) : p.status === "NO_MENU" ? (
-          <Button size="sm" variant="outline" disabled>No menu</Button>
+          <Button size="sm" variant="outline" className="rounded-[9px]" disabled>No menu</Button>
         ) : p.status === "NOT_ORDERED" ? (
-          <Button size="sm" onClick={onOpen} disabled={!canPlace}>
+          <Button size="sm" className="rounded-[9px]" onClick={onOpen} disabled={!canPlace}>
             <Plus className="mr-1.5 h-3.5 w-3.5" /> Place order
           </Button>
         ) : p.status === "PARTIAL" ? (
           <div className="flex items-center gap-2">
-            <Button size="sm" variant="outline" onClick={onOpen}>View status</Button>
-            <Button size="sm" onClick={onOpen} disabled={!canPlace}>
+            <Button size="sm" variant="outline" className="rounded-[9px]" onClick={onOpen}>View status</Button>
+            <Button size="sm" className="rounded-[9px]" onClick={onOpen} disabled={!canPlace}>
               <Plus className="mr-1.5 h-3.5 w-3.5" /> Add {missing.length} meal{missing.length === 1 ? "" : "s"}
             </Button>
           </div>
         ) : (
-          <Button size="sm" variant="outline" onClick={onOpen}>
+          <Button size="sm" variant="outline" className="rounded-[9px]" onClick={onOpen}>
             <Truck className="mr-1.5 h-3.5 w-3.5" /> View status
           </Button>
         )}
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   );
 }
 
