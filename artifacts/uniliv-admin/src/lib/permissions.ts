@@ -134,6 +134,10 @@ export const ROLE_PERMISSIONS: Record<UserRole, Partial<Record<Module, Partial<R
     // cutoffs, quantity rules) — and with it the Masters reference data, which
     // shares the FOOD_SETTINGS gate.
     FOOD_SETTINGS: FULL,
+    // Kitchen & Menu lives inside the Food module (13-Jul): recipe and menu
+    // management belongs to F&B managers (and kitchen managers / ops
+    // excellence); unit leads deliberately have no grant here.
+    RECIPES: FULL, MENU_PLANNING: FULL,
   },
   FNB_ZONAL_HEAD: {
     FOOD_DELIVERY_TRACKING: VIEW, FOOD_DASHBOARD: VIEW, FOOD_PLACE_ORDER: VIEW,

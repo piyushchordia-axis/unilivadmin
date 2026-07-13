@@ -41,6 +41,9 @@ export const navGroups: NavGroup[] = [
     { title: "Properties", href: "/properties", icon: Building2, module: "PROPERTIES" },
   ]},
   */
+  /* Hidden for now (user decision 13-Jul-2026): only Food + Audits are live
+     modules in the launcher/sidebar. Routes and permission gates still exist;
+     re-add a group here to restore it.
   { title: "Operations", items: [
     { title: "Rooms", href: "/rooms", icon: DoorOpen, module: "PROPERTIES" },
     { title: "Residents", href: "/residents", icon: Users, module: "RESIDENTS" },
@@ -66,13 +69,13 @@ export const navGroups: NavGroup[] = [
     { title: "GRN", href: "/grn", icon: PackageCheck, module: "GRN" },
     { title: "Inventory", href: "/inventory", icon: Boxes, module: "INVENTORY" },
   ]},
-  { title: "Kitchen & Menu", items: [
-    { title: "Recipes", href: "/recipes", icon: ChefHat, module: "RECIPES" },
-    { title: "Menu Planning", href: "/menu-planning", icon: CalendarDays, module: "MENU_PLANNING" },
-  ]},
+  */
   // Unit leads get the prototype's three-item Food nav (Food Overview / All
   // Orders / Reports) — the journey dashboard absorbs place-order, confirm,
   // waste and guests, so those entries are hidden for that role only.
+  // Kitchen & Menu lives INSIDE Food (13-Jul): visible to roles holding
+  // RECIPES/MENU_PLANNING (kitchen managers, F&B managers, ops excellence) —
+  // unit leads have no grant on those modules, so they never see them.
   { title: "Food", items: [
     { title: "My Dashboard", href: "/home", icon: Home, module: "FOOD_DASHBOARD", hideFor: ["UNIT_LEAD"] },
     { title: "My Properties", href: "/food/my-properties", icon: Building2, module: "FOOD_DASHBOARD", hideFor: ["UNIT_LEAD"] },
@@ -83,6 +86,8 @@ export const navGroups: NavGroup[] = [
     { title: "Place Order", href: "/food/place-order", icon: FilePlus2, module: "FOOD_PLACE_ORDER", hideFor: ["UNIT_LEAD"] },
     { title: "Kitchen Summary", href: "/food/kitchen-summary", icon: Soup, module: "FOOD_KITCHEN_SUMMARY" },
     { title: "Dispatch", href: "/food/dispatch", icon: Send, module: "FOOD_DISPATCH" },
+    { title: "Recipes", href: "/recipes", icon: ChefHat, module: "RECIPES" },
+    { title: "Menu Planning", href: "/menu-planning", icon: CalendarDays, module: "MENU_PLANNING" },
     { title: "Confirm Delivery", href: "/food/confirm-delivery", icon: CheckCircle2, module: "FOOD_CONFIRM_DELIVERY", hideFor: ["UNIT_LEAD"] },
     { title: "Waste Tracking", href: "/food/waste", icon: Trash2, module: "FOOD_WASTE_TRACKING", hideFor: ["UNIT_LEAD"] },
     { title: "Reports", href: "/food/reports", icon: BarChart3, module: "FOOD_REPORTS" },
@@ -103,6 +108,7 @@ export const navGroups: NavGroup[] = [
     { title: "Audit Admin", href: "/audits/admin", icon: SlidersHorizontal, module: "AUDIT_ADMIN" },
     { title: "Trail Explorer", href: "/audits/trail", icon: ScrollText, module: "AUDIT_TRAIL" },
   ]},
+  /* Hidden for now (user decision 13-Jul-2026) — see the note above.
   { title: "Growth", items: [
     { title: "Sales Dashboard", href: "/sales/dashboard", icon: LineChart, module: "SALES_DASHBOARD" },
     { title: "Sales CRM", href: "/leads", icon: TrendingUp, module: "SALES_LEADS" },
@@ -123,4 +129,5 @@ export const navGroups: NavGroup[] = [
     { title: "Audit Log", href: "/audit-log", icon: ScrollText, module: "AUDIT_LOG" },
     { title: "Configuration", href: "/settings", icon: Settings, module: "SETTINGS" },
   ]},
+  */
 ];

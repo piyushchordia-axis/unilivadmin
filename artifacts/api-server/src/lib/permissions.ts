@@ -160,6 +160,11 @@ export const ROLE_PERMISSIONS: Record<UserRole, RoleMatrix> = {
     // F&B managers own the food operating configuration (dishes, rotation,
     // cutoffs, quantity rules) — includes Masters, which shares this gate.
     FOOD_SETTINGS: VE,
+    // Kitchen & Menu lives inside the Food module (13-Jul): recipe and menu
+    // management belongs to F&B managers (kitchen managers / ops excellence
+    // already hold it); unit leads deliberately have no grant here. Keep in
+    // sync with the frontend copy.
+    RECIPES: VE, MENU_PLANNING: VE,
   },
   FNB_ZONAL_HEAD: {
     FOOD_DELIVERY_TRACKING: VIEW, FOOD_DASHBOARD: VIEW, FOOD_PLACE_ORDER: VIEW,
