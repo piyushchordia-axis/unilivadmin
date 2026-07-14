@@ -1,11 +1,11 @@
 import {
-  LayoutDashboard, Building2, Users, AlertCircle, WashingMachine, MessageSquare,
+  LayoutDashboard, AlertCircle, WashingMachine, MessageSquare,
   UserCheck, Briefcase, GraduationCap, Truck, ClipboardList, ShoppingCart,
   PackageCheck, Boxes, ChefHat, CalendarDays, TrendingUp, MapPin,
   BookOpen, CreditCard, Shield, Settings, BarChart3,
   Repeat, BellRing, Landmark, Receipt, Wrench, Zap, ClipboardCheck, Radio, Wallet,
   UtensilsCrossed, ListOrdered, Soup, Send, SlidersHorizontal,
-  Network, Home, LayoutGrid,
+  Network, LayoutGrid,
   DoorOpen, CalendarCheck, CalendarX, LineChart, Recycle, Database, ScrollText,
   Gauge, AlertTriangle, ListChecks, Kanban, BadgeCheck, FileBarChart,
   CalendarClock, FileStack, Library,
@@ -77,15 +77,12 @@ export const navGroups: NavGroup[] = [
   // RECIPES/MENU_PLANNING (kitchen managers, F&B managers, ops excellence) —
   // unit leads have no grant on those modules, so they never see them.
   { title: "Food", items: [
-    // The property/tenancy surfaces (My Dashboard = UnitLeadHome, My Properties,
-    // Active Guests) are hidden from unit leads' *and* F&B managers' Food nav —
-    // F&B managers run kitchen prep + dispatch, not property/guest management.
-    { title: "My Dashboard", href: "/home", icon: Home, module: "FOOD_DASHBOARD", hideFor: ["UNIT_LEAD", "FNB_MANAGER"] },
-    { title: "My Properties", href: "/food/my-properties", icon: Building2, module: "FOOD_DASHBOARD", hideFor: ["UNIT_LEAD", "FNB_MANAGER"] },
-    { title: "Active Guests", href: "/food/guests", icon: Users, module: "FOOD_DASHBOARD", hideFor: ["UNIT_LEAD", "FNB_MANAGER"] },
-    // Food Overview is the unit lead's journey dashboard; for F&B managers it
-    // gates to an empty "no order-level tracking" state, so hide it for them
-    // (Kitchen Summary + Dispatch are their live queues).
+    // My Dashboard (UnitLeadHome), My Properties and Active Guests are
+    // property/tenancy surfaces, not food ops — they belong to the Property
+    // module, so they're kept OUT of the Food nav entirely. The routes still
+    // exist (deep links) and can be re-homed under a Property group if one is
+    // re-exposed. Food Overview is the unit lead's journey dashboard; F&B
+    // managers get a gated-empty state there so it's hidden for them.
     { title: "Food Overview", href: "/food/dashboard", icon: UtensilsCrossed, module: "FOOD_DASHBOARD", hideFor: ["FNB_MANAGER"] },
     { title: "Organization", href: "/food/organization", icon: Network, module: "FOOD_ORG" },
     { title: "All Orders", href: "/food/orders", icon: ListOrdered, module: "FOOD_ALL_ORDERS" },
