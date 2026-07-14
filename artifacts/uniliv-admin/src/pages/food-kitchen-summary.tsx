@@ -95,9 +95,9 @@ export default function FoodKitchenSummary() {
     );
   }, [summary]);
 
-  // ─── Contributing open (PLACED) orders ───────────────────────────────────────
+  // ─── Contributing open orders (PLACED awaiting accept, ACCEPTED awaiting prep) ─
   const ordersParams: Record<string, unknown> = {
-    status: "PLACED",
+    status: "PLACED,ACCEPTED",
     date,
     brand: brand === ALL ? undefined : brand,
     mealType: mealType === ALL ? undefined : mealType,
@@ -108,7 +108,7 @@ export default function FoodKitchenSummary() {
     queryKey: foodKeys.orders(ordersParams),
     queryFn: () => foodApi.listOrders(ordersParams),
   });
-  const placedOrders = ordersRes?.data ?? [];
+  const openOrders = ordersRes?.data ?? [];
 
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ["food", "kitchen-summary"] });
@@ -129,12 +129,15 @@ export default function FoodKitchenSummary() {
       return next;
     });
 
-  const prepareOne = useMutation({
-    mutationFn: (id: string) => foodApi.prepareOrder(id),
-    onSuccess: (_d, id) => {
-      const o = placedOrders.find((x) => x.id === id);
+  // One granular step per order, following the lifecycle: a PLACED order gets
+  // ACCEPTED, an ACCEPTED order gets marked PREPARING. (The server enforces the
+  // same order, so prepare can't skip accept.)
+  const stepOne = useMutation({
+    mutationFn: (o: FoodOrder) =>
+      o.status === "PLACED" ? foodApi.acceptOrder(o.id) : foodApi.prepareOrder(o.id),
+    onSuccess: (_d, o) => {
       toast({
-        title: `Order ${o?.orderNumber ?? ""} marked Preparing`,
+        title: `Order ${o.orderNumber} ${o.status === "PLACED" ? "accepted" : "marked Preparing"}`,
         variant: "success",
       });
       invalidate();
@@ -143,16 +146,23 @@ export default function FoodKitchenSummary() {
       toast({ title: e?.message || "Failed", variant: "destructive" }),
   });
 
+  /** Advance one order all the way to PREPARING — accept first if it's still
+   *  PLACED, then mark preparing (both transition events get recorded). */
+  const advanceToPreparing = async (o: FoodOrder) => {
+    if (o.status === "PLACED") await foodApi.acceptOrder(o.id);
+    await foodApi.prepareOrder(o.id);
+  };
+
   /** "Start prep" for one meal — kicks every PLACED order of that meal. */
   const startMealPrep = async (meal: MealType) => {
-    const pending = placedOrders.filter((o) => o.mealType === meal);
+    const pending = openOrders.filter((o) => o.mealType === meal);
     if (pending.length === 0 || startingMeal || bulkPreparing) return;
     setStartingMeal(meal);
     let ok = 0;
     let fail = 0;
     for (const o of pending) {
       try {
-        await foodApi.prepareOrder(o.id);
+        await advanceToPreparing(o);
         ok++;
       } catch {
         fail++;
@@ -177,14 +187,14 @@ export default function FoodKitchenSummary() {
   };
 
   const markAllPreparing = async () => {
-    if (placedOrders.length === 0) return;
-    const affectedMeals = [...new Set(placedOrders.map((o) => o.mealType))];
+    if (openOrders.length === 0) return;
+    const affectedMeals = [...new Set(openOrders.map((o) => o.mealType))];
     setBulkPreparing(true);
     let ok = 0;
     let fail = 0;
-    for (const o of placedOrders) {
+    for (const o of openOrders) {
       try {
-        await foodApi.prepareOrder(o.id);
+        await advanceToPreparing(o);
         ok++;
       } catch {
         fail++;
@@ -212,7 +222,7 @@ export default function FoodKitchenSummary() {
   const totalProps = new Set(
     meals.flatMap((m) => m.dishes.flatMap((d) => d.byProperty.map((bp) => bp.propertyId))),
   ).size;
-  const totalPeople = placedOrders.reduce((acc, o) => acc + (o.residentsCount || 0), 0);
+  const totalPeople = openOrders.reduce((acc, o) => acc + (o.residentsCount || 0), 0);
   const subtitleBits = [
     format(new Date(date), "EEE, dd MMM yyyy"),
     totalProps > 0 ? `${totalProps} propert${totalProps === 1 ? "y" : "ies"}` : null,
@@ -329,7 +339,7 @@ export default function FoodKitchenSummary() {
               key={meal.mealType}
               mealType={meal.mealType}
               dishes={meal.dishes}
-              pendingOrders={placedOrders.filter((o) => o.mealType === meal.mealType)}
+              pendingOrders={openOrders.filter((o) => o.mealType === meal.mealType)}
               started={startedMeals.has(meal.mealType)}
               starting={startingMeal === meal.mealType}
               busy={startingMeal !== null || bulkPreparing}
@@ -341,11 +351,11 @@ export default function FoodKitchenSummary() {
 
       {/* Mark Preparing — contributing open orders */}
       <OpenOrdersPanel
-        orders={placedOrders}
+        orders={openOrders}
         isLoading={ordersLoading}
         propName={propName}
-        onPrepare={(id) => prepareOne.mutate(id)}
-        preparingId={prepareOne.isPending ? (prepareOne.variables as string) : null}
+        onStep={(o) => stepOne.mutate(o)}
+        steppingId={stepOne.isPending ? (stepOne.variables as FoodOrder).id : null}
         onPrepareAll={markAllPreparing}
         bulkPreparing={bulkPreparing}
         mealBusy={startingMeal !== null}
@@ -496,8 +506,8 @@ function OpenOrdersPanel({
   orders,
   isLoading,
   propName,
-  onPrepare,
-  preparingId,
+  onStep,
+  steppingId,
   onPrepareAll,
   bulkPreparing,
   mealBusy,
@@ -506,8 +516,8 @@ function OpenOrdersPanel({
   orders: FoodOrder[];
   isLoading: boolean;
   propName: (id?: string | null) => string;
-  onPrepare: (id: string) => void;
-  preparingId: string | null;
+  onStep: (o: FoodOrder) => void;
+  steppingId: string | null;
   onPrepareAll: () => void;
   bulkPreparing: boolean;
   mealBusy: boolean;
@@ -521,8 +531,8 @@ function OpenOrdersPanel({
             <ListChecks className="h-4 w-4 text-primary" /> Open orders to start
           </h2>
           <p className="mt-0.5 text-[13px] text-muted-foreground">
-            PLACED orders contributing to this prep plan — start the kitchen by marking
-            them Preparing.
+            New orders contributing to this prep plan — accept each one, then mark it
+            Preparing to start the kitchen.
           </p>
         </div>
         <button
@@ -601,15 +611,17 @@ function OpenOrdersPanel({
                       <Button
                         size="sm"
                         variant="outline"
-                        onClick={() => onPrepare(o.id)}
-                        disabled={preparingId === o.id || bulkPreparing || mealBusy}
+                        onClick={() => onStep(o)}
+                        disabled={steppingId === o.id || bulkPreparing || mealBusy}
                       >
-                        {preparingId === o.id ? (
+                        {steppingId === o.id ? (
                           <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                        ) : o.status === "PLACED" ? (
+                          <Check className="mr-1.5 h-3.5 w-3.5" />
                         ) : (
                           <CookingPot className="mr-1.5 h-3.5 w-3.5" />
                         )}
-                        Mark Preparing
+                        {o.status === "PLACED" ? "Accept" : "Mark Preparing"}
                       </Button>
                     </td>
                   </tr>

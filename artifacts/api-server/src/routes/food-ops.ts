@@ -42,6 +42,7 @@ import {
 } from "@workspace/db";
 import { and, eq, or, ilike, sql, desc, asc, gte, lte, lt, inArray, notInArray, isNull, isNotNull } from "drizzle-orm";
 import { getObjectUrl, isStorageConfigured } from "@workspace/storage";
+import { canTransition } from "../lib/order-transitions.js";
 import { authenticate } from "../middlewares/auth.js";
 import { authorize } from "../middlewares/authorize.js";
 import { getPagination, buildMeta } from "../lib/paginate.js";
@@ -827,6 +828,14 @@ export async function createDispatchForOrders(
   },
 ): Promise<typeof foodDispatchesTable.$inferSelect> {
   const now = new Date();
+  // Defense-in-depth: callers already guard, but this helper is the single point
+  // that flips orders to DISPATCHED — refuse anything that isn't PREPARING so no
+  // future caller can bypass PLACED→ACCEPTED→PREPARING→DISPATCHED.
+  const statusRows = await tx.select({ id: foodOrdersTable.id, status: foodOrdersTable.status })
+    .from(foodOrdersTable).where(inArray(foodOrdersTable.id, opts.orderIds));
+  if (statusRows.some((r) => !canTransition(r.status, "DISPATCHED"))) {
+    throw new Error("Cannot dispatch — every order must be PREPARING");
+  }
   const etaMinutes = opts.etaMinutes != null ? Number(opts.etaMinutes) : null;
   const estimatedArrivalAt = etaMinutes ? new Date(now.getTime() + etaMinutes * 60000) : null;
   const dispatchNumber = await nextSeqTx(tx, `DISP-${now.getFullYear()}-`, foodDispatchesTable.dispatchNumber, foodDispatchesTable);
@@ -973,8 +982,11 @@ foodOpsRouter.post("/dispatches", authenticate, authorize("FOOD_DISPATCH", "edit
 
     const ids = await resolveAccessiblePropertyIds(req.user!);
     const orders = await db.select().from(foodOrdersTable).where(inArray(foodOrdersTable.id, orderIds));
-    const dispatchable = orders.filter((o) => isAccessible(o.propertyId, ids) && !["DISPATCHED", "DELIVERED", "CANCELLED", "REJECTED"].includes(o.status));
-    if (!dispatchable.length) { res.status(422).json({ success: false, error: "No dispatchable orders in selection" }); return; }
+    // Only PREPARING orders can be dispatched (PREPARING → DISPATCHED) — same
+    // guard as every other dispatch path, so a never-prepared order can't jump
+    // the queue via trip creation.
+    const dispatchable = orders.filter((o) => isAccessible(o.propertyId, ids) && canTransition(o.status, "DISPATCHED"));
+    if (!dispatchable.length) { res.status(422).json({ success: false, error: "No dispatchable orders in selection — orders must be PREPARING." }); return; }
 
     // C5: kitchen integrity. If a kitchen is named, the agency must serve it
     // (agency_kitchens) and every dispatchable order must share that kitchen.

@@ -43,6 +43,7 @@ import {
 } from "@workspace/db";
 import { and, eq, or, ilike, sql, desc, asc, gte, lte, lt, inArray, isNull, isNotNull } from "drizzle-orm";
 import type { AnyColumn } from "drizzle-orm";
+import { canTransition } from "../lib/order-transitions.js";
 import { z } from "zod";
 import { authenticate } from "../middlewares/auth.js";
 import { authorize } from "../middlewares/authorize.js";
@@ -652,8 +653,8 @@ foodRouter.post("/orders/dispatch/bulk", authenticate, authorize("FOOD_DISPATCH"
       const o = byId.get(oid);
       if (!o) { results.push({ orderId: oid, status: "NOT_FOUND" }); continue; }
       if (!isAccessible(o.propertyId, ids)) { results.push({ orderId: oid, status: "FORBIDDEN" }); continue; }
-      if (o.status === "DELIVERED" || o.status === "CANCELLED" || o.status === "DISPATCHED") {
-        results.push({ orderId: oid, status: "SKIPPED", reason: `Order is ${o.status}` });
+      if (!canTransition(o.status, "DISPATCHED")) {
+        results.push({ orderId: oid, status: "SKIPPED", reason: `Order is ${o.status} (must be PREPARING)` });
         continue;
       }
       // C8: route through the shared helper so every dispatched order gets a
@@ -954,7 +955,7 @@ foodRouter.post("/orders/:id/prepare", authenticate, authorize("FOOD_KITCHEN_SUM
     if (!order) { res.status(404).json({ success: false, error: "Not found" }); return; }
     const ids = await resolveAccessiblePropertyIds(req.user!);
     if (!isAccessible(order.propertyId, ids)) { res.status(403).json({ success: false, error: "Order not accessible" }); return; }
-    if (order.status !== "PLACED") { res.status(422).json({ success: false, error: "Only PLACED orders can be marked PREPARING" }); return; }
+    if (!canTransition(order.status, "PREPARING")) { res.status(422).json({ success: false, error: `Cannot mark preparing — order is ${order.status}. It must be ACCEPTED first.` }); return; }
 
     const now = new Date();
     const [updated] = await db.update(foodOrdersTable).set({ status: "PREPARING", preparingAt: now, updatedAt: now }).where(eq(foodOrdersTable.id, id)).returning();
@@ -986,8 +987,8 @@ foodRouter.post("/orders/:id/dispatch", authenticate, authorize("FOOD_DISPATCH",
 
     const now = new Date();
     if (action === "start") {
-      if (order.status === "DISPATCHED" || order.status === "DELIVERED" || order.status === "CANCELLED") {
-        res.status(422).json({ success: false, error: `Cannot start dispatch for an order that is ${order.status}` });
+      if (order.status !== "PREPARING") {
+        res.status(422).json({ success: false, error: `Cannot start dispatch — order is ${order.status}. It must be PREPARING.` });
         return;
       }
       const [updated] = await db.update(foodOrdersTable).set({
@@ -1003,8 +1004,8 @@ foodRouter.post("/orders/:id/dispatch", authenticate, authorize("FOOD_DISPATCH",
     }
 
     if (!b.deliveryPartnerId) { res.status(400).json({ success: false, error: "deliveryPartnerId required" }); return; }
-    if (order.status === "DELIVERED" || order.status === "CANCELLED" || order.status === "DISPATCHED") {
-      res.status(422).json({ success: false, error: `Cannot dispatch an order that is ${order.status}` });
+    if (!canTransition(order.status, "DISPATCHED")) {
+      res.status(422).json({ success: false, error: `Cannot dispatch — order is ${order.status}. It must be PREPARING.` });
       return;
     }
     // C8: route through the shared helper so the order reliably carries a

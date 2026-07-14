@@ -322,19 +322,15 @@ function TrackTimeline({ status, events }: { status: OrderStatus; events: FoodOr
   }, [events]);
 
   const isTerminal = status === "CANCELLED" || status === "REJECTED";
-  const happyIdx = HAPPY_PATH.findIndex((s) => s.key === status);
-  const reachedIdx = isTerminal
-    ? HAPPY_PATH.reduce((max, s, i) => (eventByStatus.has(s.key) ? i : max), 0)
-    : Math.max(0, happyIdx);
 
   const steps: Step[] = [];
   if (isTerminal) {
-    for (let i = 0; i <= reachedIdx; i++) {
-      const st = HAPPY_PATH[i]!;
-      steps.push({
-        key: st.key, label: st.label, state: "done",
-        time: fmtDateTime(eventByStatus.get(st.key)?.createdAt),
-      });
+    // Only the happy-path stages that ACTUALLY happened (have an event), then
+    // the terminal node — no fabricated steps.
+    for (const st of HAPPY_PATH) {
+      const ev = eventByStatus.get(st.key);
+      if (!ev) continue;
+      steps.push({ key: st.key, label: st.label, state: "done", time: fmtDateTime(ev.createdAt) });
     }
     const te = eventByStatus.get(status);
     steps.push({
@@ -345,11 +341,26 @@ function TrackTimeline({ status, events }: { status: OrderStatus; events: FoodOr
       note: te?.note,
     });
   } else {
+    // "Reached" = the furthest stage the order has provably passed: its current
+    // status position, OR any stage that carries a real event (older / seed
+    // orders can lack an interior event even though the lifecycle is forward-
+    // only). Everything up to there is done — with its real timestamp when the
+    // event exists, else "—" — so a completed order never shows a pending node
+    // wedged between done ones, while genuine future stages stay pending. New
+    // orders (server now enforces the full chain) carry every event, so their
+    // timeline is exact.
+    const happyIdx = HAPPY_PATH.findIndex((s) => s.key === status);
+    const reachedIdx = Math.max(
+      happyIdx,
+      HAPPY_PATH.reduce((max, s, i) => (eventByStatus.has(s.key) ? i : max), -1),
+    );
     HAPPY_PATH.forEach((st, i) => {
+      const ev = eventByStatus.get(st.key);
       const done = i <= reachedIdx;
       steps.push({
-        key: st.key, label: st.label, state: done ? "done" : "pending",
-        time: done ? fmtDateTime(eventByStatus.get(st.key)?.createdAt) : null,
+        key: st.key, label: st.label,
+        state: done ? "done" : "pending",
+        time: done ? (ev ? fmtDateTime(ev.createdAt) : "—") : null,
       });
     });
   }

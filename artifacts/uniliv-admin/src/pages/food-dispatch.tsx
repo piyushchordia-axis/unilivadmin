@@ -185,27 +185,21 @@ export default function FoodDispatch() {
   };
 
   const preparingParams = { ...filterParams, status: "PREPARING", limit: 100 };
-  const acceptedParams = { ...filterParams, status: "ACCEPTED", limit: 100 };
   const dispatchedParams = { ...filterParams, status: "DISPATCHED", limit: 100 };
 
   const { data: preparingRes, isLoading: loadingPreparing } = useQuery({
     queryKey: foodKeys.orders(preparingParams),
     queryFn: () => foodApi.listOrders(preparingParams),
   });
-  const { data: acceptedRes, isLoading: loadingAccepted } = useQuery({
-    queryKey: foodKeys.orders(acceptedParams),
-    queryFn: () => foodApi.listOrders(acceptedParams),
-  });
 
-  // Dispatchable board = PREPARING (primary) + ACCEPTED (ready to load). Rows may
-  // carry the enriched delivery/unit-lead contact fields when the API provides them.
-  const dispatchable = React.useMemo<QueueOrder[]>(() => {
-    const prep = preparingRes?.data ?? [];
-    const acc = acceptedRes?.data ?? [];
-    const seen = new Set(prep.map((o) => o.id));
-    return [...prep, ...acc.filter((o) => !seen.has(o.id))];
-  }, [preparingRes, acceptedRes]);
-  const loadingQueue = loadingPreparing || loadingAccepted;
+  // Dispatchable board = PREPARING only. An order must be prepared before it can
+  // be dispatched — the server enforces PREPARING → DISPATCHED, so ACCEPTED
+  // orders (not yet cooked) don't belong on the queue.
+  const dispatchable = React.useMemo<QueueOrder[]>(
+    () => preparingRes?.data ?? [],
+    [preparingRes],
+  );
+  const loadingQueue = loadingPreparing;
 
   const { data: dispatchedRes, isLoading: loadingDispatched } = useQuery({
     queryKey: foodKeys.orders(dispatchedParams),
@@ -461,7 +455,7 @@ export default function FoodDispatch() {
         ))}
       </div>
 
-      {/* ── QUEUE: dispatchable orders (PREPARING + ACCEPTED) ─────────────── */}
+      {/* ── QUEUE: dispatchable orders (PREPARING) ────────────────────────── */}
       {tab === "queue" && (
         loadingQueue ? (
           <RowsSkeleton />
@@ -469,7 +463,7 @@ export default function FoodDispatch() {
           <LocalEmpty
             icon={CheckCircle2}
             title="Nothing waiting to dispatch"
-            hint="Prepared and accepted orders ready for a trip will appear here. Adjust the filters above to widen the view."
+            hint="Orders being prepared appear here once they're ready for a trip. Accepted orders must be marked Preparing on the Kitchen board first. Adjust the filters above to widen the view."
           />
         ) : (
           <>
