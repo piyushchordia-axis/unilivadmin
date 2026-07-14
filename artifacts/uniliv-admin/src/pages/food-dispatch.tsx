@@ -5,7 +5,7 @@ import { format } from "date-fns";
 import {
   Truck, Package, Clock, MapPin, CheckCircle2, Send, Inbox, X,
   ChefHat, User, Phone, Hash, Timer, Route, ChevronRight, PackageCheck,
-  Check, ChevronsUpDown, History, Ban, AlertCircle, Boxes,
+  Check, ChevronsUpDown, History, Ban, AlertCircle, Boxes, Plus,
 } from "lucide-react";
 import { GlobalPropertyScopeBanner } from "@/components/property-scope-banner";
 import { StatusBadge } from "@/components/status-badge";
@@ -44,7 +44,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useConfetti } from "@/components/ui/confetti";
 import { useAppStore } from "@/lib/store";
 import {
-  foodApi, foodKeys, MEAL_TYPES, BRANDS, MEAL_LABEL, ORDER_STATUS_PILL,
+  foodApi, foodKeys, MEAL_TYPES, BRANDS, MEAL_LABEL, ORDER_STATUS_PILL, shortMeal,
   type FoodOrder, type FoodBrand, type MealType,
   type Dispatch, type DispatchStatus, type DispatchDetailOrder,
 } from "@/lib/food-api";
@@ -120,8 +120,7 @@ export default function FoodDispatch() {
   const [meal, setMeal] = React.useState<MealType | typeof ALL>(ALL);
   const [date, setDate] = React.useState("");
 
-  // Per-card chosen partner (single dispatch) and bulk selection
-  const [cardPartner, setCardPartner] = React.useState<Record<string, string>>({});
+  // The van's cargo (selected orders) + its chosen driver (overrides the auto-pick).
   const [selected, setSelected] = React.useState<Set<string>>(new Set());
   const [bulkPartner, setBulkPartner] = React.useState("");
 
@@ -222,15 +221,17 @@ export default function FoodDispatch() {
     return ids;
   }, [dispatchable, selected]);
 
-  // Agencies that serve at least one of the selected orders' kitchens. When the
-  // selection has no resolved kitchen (or none match), fall back to all agencies
-  // so the picker is never empty.
+  // Agencies that serve the van's kitchen. STRICT: only agencies actually linked
+  // to the loaded kitchen — no "fall back to all agencies" (that would auto-pick a
+  // driver the server rejects with "Agency does not serve this kitchen"). When the
+  // van has committed to no kitchen (empty, or only kitchen-agnostic orders with a
+  // null kitchenId) there's nothing to constrain by, so the whole roster is fine —
+  // any agency can carry orders that belong to no kitchen.
   const servingAgencies = React.useMemo(() => {
     if (selectedKitchenIds.size === 0) return agencies;
-    const matched = agencies.filter((a) =>
+    return agencies.filter((a) =>
       (a.kitchenIds ?? []).some((kid) => selectedKitchenIds.has(kid)),
     );
-    return matched.length > 0 ? matched : agencies;
   }, [agencies, selectedKitchenIds]);
 
   // Prune stale selection when the queue changes
@@ -247,29 +248,8 @@ export default function FoodDispatch() {
   };
 
   // ── Mutations ─────────────────────────────────────────────────────────────
-  const dispatchOne = useMutation({
-    mutationFn: ({ id, deliveryPartnerId }: { id: string; deliveryPartnerId: string }) =>
-      foodApi.dispatchOrder(id, { deliveryPartnerId, action: "dispatch" }),
-    onSuccess: (_d, vars) => {
-      toast({ title: "Order dispatched", variant: "success" });
-      setSelected((prev) => { const n = new Set(prev); n.delete(vars.id); return n; });
-      invalidate();
-    },
-    onError: (e: any) => toast({ title: e?.message || "Failed to dispatch", variant: "destructive" }),
-  });
-
-  const dispatchBulk = useMutation({
-    mutationFn: ({ ids, deliveryPartnerId }: { ids: string[]; deliveryPartnerId: string }) =>
-      foodApi.bulkDispatch(ids, deliveryPartnerId),
-    onSuccess: (_d, vars) => {
-      toast({ title: `Dispatched ${vars.ids.length} order${vars.ids.length === 1 ? "" : "s"}`, variant: "success" });
-      setSelected(new Set());
-      setBulkPartner("");
-      invalidate();
-    },
-    onError: (e: any) => toast({ title: e?.message || "Bulk dispatch failed", variant: "destructive" }),
-  });
-
+  // "Send it off" builds one dispatch trip from the whole van (createTrip); the
+  // old per-order and bulk quick-dispatch paths were retired with that redesign.
   const createTrip = useMutation({
     mutationFn: (body: Record<string, unknown>) => foodApi.createDispatch(body),
     onSuccess: (trip) => {
@@ -280,6 +260,7 @@ export default function FoodDispatch() {
       });
       fire();
       setSelected(new Set());
+      setBulkPartner("");
       setTripForm({ kitchenId: "", deliveryPartnerId: "", vehicleId: "", vehicleNumber: "", vehicleLocked: false, driverName: "", driverPhone: "", etaMinutes: "" });
       setTripOpen(false);
       setTab("trips");
@@ -299,18 +280,6 @@ export default function FoodDispatch() {
     },
     onError: (e: any) => toast({ title: e?.message || "Could not depart trip", variant: "destructive" }),
   });
-
-  const onDispatchOne = (o: FoodOrder) => {
-    const dp = cardPartner[o.id];
-    if (!dp) { toast({ title: "Select a delivery partner first", variant: "destructive" }); return; }
-    dispatchOne.mutate({ id: o.id, deliveryPartnerId: dp });
-  };
-
-  const onBulkDispatch = () => {
-    if (selected.size === 0) return;
-    if (!bulkPartner) { toast({ title: "Select a delivery partner", variant: "destructive" }); return; }
-    dispatchBulk.mutate({ ids: [...selected], deliveryPartnerId: bulkPartner });
-  };
 
   const onCreateTrip = () => {
     if (selected.size === 0) {
@@ -353,6 +322,44 @@ export default function FoodDispatch() {
     }));
 
   const partnerListReady = partners.length > 0;
+
+  // ── "Load the van": the selected orders are the van's cargo ───────────────
+  const loaded = React.useMemo(
+    () => dispatchable.filter((o) => selected.has(o.id)),
+    [dispatchable, selected],
+  );
+  const vanMeals = loaded.reduce((n, o) => n + (o.residentsCount || 0), 0);
+  // Progress of loading the ready queue (share of ready orders in the van) —
+  // an honest "how much of the queue have I loaded" bar, NOT a physical-capacity
+  // gauge (there's no van-capacity model), so it's labelled by count, not "% full".
+  const fillPct = dispatchable.length ? Math.round((loaded.length / dispatchable.length) * 100) : 0;
+  // A van is ONE kitchen → ONE driver (a physical van loads at a single kitchen).
+  // The van commits to the first loaded order that HAS a kitchen; cards from
+  // another kitchen are locked out below until this trip is sent. Kitchen-agnostic
+  // orders (no kitchenId) can ride any van, and a van that has only agnostic
+  // orders so far (vanKitchenId still null) hasn't committed — anything can join.
+  const vanKitchenId = loaded.find((o) => o.kitchenId)?.kitchenId ?? null;
+  const vanKitchenName = vanKitchenId ? kitchens.find((k) => k.id === vanKitchenId)?.name ?? null : null;
+  const canLoad = (o: QueueOrder) =>
+    selected.has(o.id) || loaded.length === 0 || vanKitchenId == null || o.kitchenId == null || o.kitchenId === vanKitchenId;
+  // The driver auto-picks the first agency that serves the van's kitchen. A
+  // user override (bulkPartner) wins ONLY while it still serves the current
+  // kitchen — otherwise it's stale (selection changed under it) so we fall back
+  // to the auto-pick instead of silently submitting an agency that can't serve.
+  const vanDriverId =
+    (bulkPartner && servingAgencies.some((a) => a.id === bulkPartner) ? bulkPartner : servingAgencies[0]?.id) || "";
+  const sendVan = () => {
+    if (loaded.length === 0) { toast({ title: "Load at least one order first", variant: "destructive" }); return; }
+    if (!vanDriverId) { toast({ title: "No delivery partner serves this kitchen", variant: "destructive" }); return; }
+    createTrip.mutate({ orderIds: loaded.map((o) => o.id), agencyId: vanDriverId, kitchenId: vanKitchenId ?? undefined });
+  };
+
+  // "Load all" respects the one-kitchen-per-van rule: it fills the van with every
+  // ready order sharing the van's kitchen (or the first ready order's kitchen when
+  // the van is empty), plus kitchen-agnostic orders — never mixing kitchens.
+  const loadAllKitchenId = vanKitchenId ?? dispatchable.find((o) => o.kitchenId)?.kitchenId ?? null;
+  const loadAllTargets = dispatchable.filter((o) => o.kitchenId == null || o.kitchenId === loadAllKitchenId);
+  const allTargetsLoaded = loadAllTargets.length > 0 && loadAllTargets.every((o) => selected.has(o.id));
 
   // ── Stats ─────────────────────────────────────────────────────────────────
   const awaiting = dispatchable.length;
@@ -467,170 +474,176 @@ export default function FoodDispatch() {
           />
         ) : (
           <>
-            <div className="-mt-2 flex items-center justify-between gap-3">
+            {/* THE VAN — the trip you're loading. Tap orders below to load it. */}
+            <section
+              className={cn(
+                "sticky top-2 z-20 rounded-[16px] border-2 p-4 transition-colors",
+                loaded.length > 0 ? "border-accent bg-accent/5" : "border-dashed border-border bg-card",
+              )}
+            >
+              {loaded.length === 0 ? (
+                <div className="flex items-center gap-3 py-1 text-sm text-muted-foreground">
+                  <Truck className="h-6 w-6 shrink-0 text-accent" />
+                  <span>Your van is empty — tap the ready orders below to load them, then send the whole trip in one go.</span>
+                </div>
+              ) : (
+                <>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-accent text-white">
+                      <Truck className="h-[22px] w-[22px]" />
+                    </span>
+                    <div className="min-w-0">
+                      <div className="font-display text-[15px] font-bold tracking-[-0.012em]">Loading a van</div>
+                      <div className="truncate text-xs text-muted-foreground">
+                        {vanKitchenName ? `${vanKitchenName} · one driver` : "one kitchen · one driver"}
+                      </div>
+                    </div>
+                    <div className="ml-auto text-right">
+                      <div className="font-mono text-sm font-semibold tabular-nums">
+                        {loaded.length} order{loaded.length === 1 ? "" : "s"} · {vanMeals} meals
+                      </div>
+                      <div className="text-[11px] text-muted-foreground">{loaded.length} of {dispatchable.length} ready loaded</div>
+                    </div>
+                  </div>
+
+                  <div className="mt-2.5 h-2.5 overflow-hidden rounded-full border border-border bg-background">
+                    <div className="h-full rounded-full bg-accent transition-[width] duration-300" style={{ width: `${fillPct}%` }} />
+                  </div>
+
+                  <div className="mt-3 flex flex-wrap gap-1.5">
+                    {loaded.map((o) => (
+                      <button
+                        key={o.id}
+                        type="button"
+                        onClick={() => toggleSelect(o.id, false)}
+                        className="inline-flex items-center gap-1.5 rounded-full bg-accent/15 px-2.5 py-1 text-xs font-semibold text-accent-strong transition-colors hover:bg-accent/25"
+                        aria-label={`Unload ${o.orderNumber}`}
+                      >
+                        {shortMeal(o.mealType)} · {o.propertyName || propName(o.propertyId)}
+                        <X className="h-3 w-3" />
+                      </button>
+                    ))}
+                  </div>
+
+                  {servingAgencies.length === 0 ? (
+                    <div className="mt-3.5 flex items-start gap-2 rounded-[12px] border border-warning/40 bg-warning-soft px-3 py-2.5 text-xs text-warning">
+                      <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                      <span>
+                        No delivery partner serves {vanKitchenName ?? "this kitchen"} yet — link one to the kitchen
+                        in Masters before this van can go out.
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="mt-3.5 flex flex-wrap items-center gap-2">
+                      <div className="flex min-w-[190px] flex-1 items-center gap-2">
+                        <User className="h-4 w-4 shrink-0 text-muted-foreground" />
+                        <Select value={vanDriverId} onValueChange={setBulkPartner} disabled={!partnerListReady}>
+                          <SelectTrigger className="h-10 flex-1"><SelectValue placeholder="Pick a driver" /></SelectTrigger>
+                          <SelectContent>
+                            {servingAgencies.map((p) => (<SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <Button
+                        className="h-12 flex-1 basis-full rounded-[12px] bg-accent font-display text-[16px] font-bold tracking-[-0.012em] text-white hover:brightness-105 sm:basis-auto sm:px-8"
+                        onClick={sendVan}
+                        disabled={createTrip.isPending}
+                      >
+                        <Send className="mr-2 h-5 w-5" /> {createTrip.isPending ? "Sending…" : "Send it off"}
+                      </Button>
+                    </div>
+                  )}
+                  <div className="mt-2.5 flex items-center justify-between">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        // Carry the van's chosen driver + kitchen into the advanced
+                        // drawer so the trip builder starts where the van left off
+                        // (otherwise the drawer opens blank and re-demands an agency).
+                        setTripForm((f) => ({ ...f, deliveryPartnerId: vanDriverId, kitchenId: vanKitchenId ?? "" }));
+                        setTripOpen(true);
+                      }}
+                      className="text-xs font-semibold text-muted-foreground transition-colors hover:text-accent"
+                    >
+                      Add trip details (vehicle, ETA)
+                    </button>
+                    <button type="button" onClick={() => setSelected(new Set())} className="text-xs font-semibold text-muted-foreground transition-colors hover:text-destructive">
+                      Empty the van
+                    </button>
+                  </div>
+                </>
+              )}
+            </section>
+
+            {/* READY TO LOAD — tap a card to add it to the van */}
+            <div className="flex items-center justify-between gap-3">
               <p className="text-sm text-muted-foreground">
-                Select orders to bundle into a single dispatch trip, or dispatch one at a time.
+                {dispatchable.length} ready · tap to load into the van.
               </p>
               <Button
                 variant="ghost"
                 size="sm"
                 className="shrink-0 text-muted-foreground"
                 onClick={() =>
-                  setSelected((prev) =>
-                    prev.size === dispatchable.length ? new Set() : new Set(dispatchable.map((o) => o.id)),
-                  )
+                  setSelected(allTargetsLoaded ? new Set() : new Set(loadAllTargets.map((o) => o.id)))
                 }
               >
-                {selected.size === dispatchable.length ? "Clear all" : "Select all"}
+                {allTargetsLoaded ? "Empty the van" : "Load all"}
               </Button>
             </div>
-            <BoundedScroll size="page" className="-mt-2">
+            <BoundedScroll size="page" className="-mt-1">
               <div className="flex flex-col gap-2.5 px-0.5 py-0.5">
                 {dispatchable.map((o) => {
-                  const isSel = selected.has(o.id);
-                  const pill = ORDER_STATUS_PILL[o.status];
+                  const isLoaded = selected.has(o.id);
+                  const loadable = canLoad(o);
                   const ready = readyLine(o);
                   return (
-                    <div
+                    <button
                       key={o.id}
+                      type="button"
+                      disabled={!loadable}
+                      onClick={() => toggleSelect(o.id, !isLoaded)}
+                      aria-pressed={isLoaded}
+                      aria-label={`${isLoaded ? "Unload" : "Load"} ${o.orderNumber}`}
+                      title={loadable ? undefined : `This van is loading from ${vanKitchenName ?? "another kitchen"} — send it off first`}
                       className={cn(
-                        "rounded-[14px] border p-4 transition-colors",
-                        isSel ? "border-accent bg-accent/5" : "border-border bg-card hover:border-accent/40",
+                        "flex w-full items-center gap-3 rounded-[14px] border p-3.5 text-left transition-colors",
+                        isLoaded
+                          ? "border-accent bg-accent/5"
+                          : loadable
+                            ? "border-border bg-card hover:border-accent/40"
+                            : "cursor-not-allowed border-dashed border-border bg-card opacity-45",
                       )}
                     >
-                      {/* Selectable main row */}
-                      <button
-                        type="button"
-                        onClick={() => toggleSelect(o.id, !isSel)}
-                        aria-pressed={isSel}
-                        aria-label={`Select ${o.orderNumber} for dispatch trip`}
-                        className="flex w-full items-center gap-3 text-left"
+                      <span
+                        className={cn(
+                          "flex h-8 w-8 flex-none items-center justify-center rounded-full transition-colors",
+                          isLoaded ? "bg-accent text-white" : "border-2 border-dashed border-border text-muted-foreground",
+                        )}
                       >
-                        <span
-                          className={cn(
-                            "flex h-6 w-6 flex-none items-center justify-center rounded-[7px] transition-colors",
-                            isSel ? "bg-accent" : "border-2 border-border bg-background",
-                          )}
-                        >
-                          {isSel && <Check className="h-3.5 w-3.5 text-white" strokeWidth={3.5} />}
+                        {isLoaded ? <Check className="h-4 w-4" strokeWidth={3} /> : <Plus className="h-4 w-4" />}
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-[15px] font-semibold">
+                          {o.propertyName || propName(o.propertyId)}
                         </span>
-                        <span className="min-w-0 flex-1">
-                          <span className="block truncate text-[15px] font-semibold">
-                            {o.propertyName || propName(o.propertyId)}
-                          </span>
-                          <span className="mt-0.5 block truncate text-[13px] text-muted-foreground">
-                            <span className="font-mono tabular-nums">{o.orderNumber}</span>
-                            {" · "}{MEAL_LABEL[o.mealType]}
-                            {" · "}{o.residentsCount} people
-                            {ready && (
-                              <>
-                                {" · "}{ready.prefix}{" "}
-                                <span className="font-mono tabular-nums">{ready.time}</span>
-                              </>
-                            )}
-                          </span>
-                        </span>
-                        <span className="flex flex-none flex-col items-end gap-1">
-                          <span className="text-[10px] font-bold uppercase tracking-[.08em] text-muted-foreground">
-                            {o.brand}
-                          </span>
-                          {pill && (
-                            <span className={cn("rounded-full px-[9px] py-[3px] text-[11px] font-bold", pill.cls)}>
-                              {pill.label}
-                            </span>
+                        <span className="mt-0.5 block truncate text-[13px] text-muted-foreground">
+                          <span className="font-mono tabular-nums">{o.orderNumber}</span>
+                          {" · "}{MEAL_LABEL[o.mealType]}{" · "}{o.residentsCount} people
+                          {ready && (
+                            <>{" · "}{ready.prefix}{" "}<span className="font-mono tabular-nums">{ready.time}</span></>
                           )}
                         </span>
-                      </button>
-
-                      {/* Destination + quick single-order dispatch */}
-                      <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-border/60 pt-3">
-                        <p className="flex min-w-0 flex-1 basis-full items-center gap-1.5 text-xs text-muted-foreground sm:basis-0">
-                          <MapPin className="h-3.5 w-3.5 shrink-0" />
-                          <span className="truncate">
-                            {o.deliveryAddress
-                              ? `${o.deliveryAddress}${o.deliveryPincode ? ` · ${o.deliveryPincode}` : ""}`
-                              : o.propertyName || propName(o.propertyId)}
-                          </span>
-                          <span className="hidden shrink-0 sm:inline">·</span>
-                          <User className="hidden h-3.5 w-3.5 shrink-0 sm:inline" />
-                          <span className="hidden truncate sm:inline">{o.unitLeadName || "Unit-lead unassigned"}</span>
-                          {o.unitLeadPhone && (
-                            <a
-                              href={`tel:${o.unitLeadPhone}`}
-                              className="hidden shrink-0 items-center gap-1 font-mono text-foreground hover:text-accent sm:inline-flex"
-                            >
-                              <Phone className="h-3 w-3" />{o.unitLeadPhone}
-                            </a>
-                          )}
-                        </p>
-                        <div className="flex items-center gap-2">
-                          <Select
-                            value={cardPartner[o.id] ?? ""}
-                            onValueChange={(v) => setCardPartner((prev) => ({ ...prev, [o.id]: v }))}
-                            disabled={!partnerListReady}
-                          >
-                            <SelectTrigger className="h-8 w-44 text-xs">
-                              <SelectValue placeholder="Quick dispatch partner" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {partners.map((p) => (<SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>))}
-                            </SelectContent>
-                          </Select>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="h-8"
-                            onClick={() => onDispatchOne(o)}
-                            disabled={dispatchOne.isPending}
-                          >
-                            <Send className="w-3.5 h-3.5 mr-1.5" /> Send
-                          </Button>
-                        </div>
-                      </div>
-                    </div>
+                      </span>
+                      <span className="flex flex-none flex-col items-end gap-1">
+                        <span className="text-[10px] font-bold uppercase tracking-[.08em] text-muted-foreground">{o.brand}</span>
+                        <span className="rounded-full bg-warning-soft px-[9px] py-[3px] text-[11px] font-bold text-warning">In kitchen</span>
+                      </span>
+                    </button>
                   );
                 })}
               </div>
             </BoundedScroll>
-
-            {/* Sticky action area: build trip + bulk quick dispatch */}
-            {selected.size > 0 && (
-              <div className="sticky bottom-4 z-20 flex flex-col gap-2">
-                <button
-                  type="button"
-                  onClick={() => setTripOpen(true)}
-                  className="h-14 w-full rounded-[12px] bg-accent font-display text-[17px] font-bold tracking-[-0.012em] text-white shadow-lg transition-[filter] hover:brightness-105"
-                >
-                  Create trip with {selected.size} order{selected.size === 1 ? "" : "s"} →
-                </button>
-                <div className="flex flex-wrap items-center gap-2 rounded-[12px] border border-border bg-card px-3 py-2 shadow-lg">
-                  <span className="flex shrink-0 items-center gap-2 text-sm font-semibold">
-                    <Boxes className="h-4 w-4 text-accent" /> {selected.size} selected
-                  </span>
-                  <div className="flex min-w-[220px] flex-1 items-center gap-2">
-                    <Select value={bulkPartner} onValueChange={setBulkPartner} disabled={!partnerListReady}>
-                      <SelectTrigger className="h-9 flex-1">
-                        <SelectValue placeholder="Quick dispatch partner" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {partners.map((p) => (<SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>))}
-                      </SelectContent>
-                    </Select>
-                    <Button
-                      variant="outline"
-                      className="shrink-0"
-                      onClick={onBulkDispatch}
-                      disabled={dispatchBulk.isPending}
-                    >
-                      <Send className="w-4 h-4 mr-2" /> Quick send
-                    </Button>
-                  </div>
-                  <Button variant="ghost" size="icon" className="shrink-0" onClick={() => setSelected(new Set())} aria-label="Clear selection">
-                    <X className="w-4 h-4" />
-                  </Button>
-                </div>
-              </div>
-            )}
           </>
         )
       )}
