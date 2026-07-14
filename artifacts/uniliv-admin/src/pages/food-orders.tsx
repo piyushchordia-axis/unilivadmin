@@ -144,7 +144,13 @@ function renderOrdersPdf(opts: {
 
 type ExportCol = { accessorKey: string; header: string; text: (o: FoodOrder) => string };
 
-type DayGroup = { serviceDate: string; label: string; dateStr: string; orders: FoodOrder[] };
+type DayGroup = {
+  serviceDate: string; label: string; dateStr: string; orders: FoodOrder[];
+  /** The single group id shared by EVERY order in the day, else null (a day can
+   *  span multiple batches — several properties, or a split placement). When set
+   *  it's shown once in the header instead of repeated on every row. */
+  batchNumber: string | null;
+};
 
 export default function FoodOrders() {
   const [, setLocation] = useLocation();
@@ -299,10 +305,16 @@ export default function FoodOrders() {
       .map(([serviceDate, dayOrders]) => {
         const d = parseISO(serviceDate);
         const near = isToday(d) || isYesterday(d);
+        // Header batch only when EVERY order shares the same non-null batch (one
+        // property, one placement). A mix of batches or any batch-less order →
+        // null, so those days keep the per-row labels and nothing is hidden.
+        const first = dayOrders[0]?.batchNumber ?? null;
+        const sharedBatch = first && dayOrders.every((o) => o.batchNumber === first) ? first : null;
         return {
           serviceDate,
           label: isToday(d) ? "Today" : isYesterday(d) ? "Yesterday" : format(d, "EEE, d MMM"),
           dateStr: near ? format(d, "EEE, d MMM") : "",
+          batchNumber: sharedBatch,
           orders: [...dayOrders].sort(
             (a, b) =>
               MEAL_TYPES.indexOf(a.mealType) - MEAL_TYPES.indexOf(b.mealType) ||
@@ -312,9 +324,10 @@ export default function FoodOrders() {
       });
   }, [orders]);
 
-  const isOpen = (key: string, idx: number) => openDays[key] ?? idx === 0;
-  const toggleDay = (key: string, idx: number) =>
-    setOpenDays((prev) => ({ ...prev, [key]: !(prev[key] ?? idx === 0) }));
+  // All day groups start collapsed; the user expands the days they care about.
+  const isOpen = (key: string) => openDays[key] ?? false;
+  const toggleDay = (key: string) =>
+    setOpenDays((prev) => ({ ...prev, [key]: !(prev[key] ?? false) }));
 
   const gridCols = "sm:grid-cols-[92px_96px_48px_minmax(0,1fr)_auto]";
 
@@ -432,13 +445,13 @@ export default function FoodOrders() {
         </div>
       ) : (
         <div className="overflow-hidden rounded-[14px] border border-border bg-card">
-          {dayGroups.map((day, di) => {
-            const open = isOpen(day.serviceDate, di);
+          {dayGroups.map((day) => {
+            const open = isOpen(day.serviceDate);
             return (
               <div key={day.serviceDate} className="border-b border-border last:border-b-0">
                 <button
                   type="button"
-                  onClick={() => toggleDay(day.serviceDate, di)}
+                  onClick={() => toggleDay(day.serviceDate)}
                   aria-expanded={open}
                   className="flex w-full items-center gap-3 px-[18px] py-3.5 text-left transition-colors hover:bg-muted/60"
                 >
@@ -448,10 +461,18 @@ export default function FoodOrders() {
                       open && "rotate-90",
                     )}
                   />
-                  <span className="flex flex-1 items-baseline gap-2">
+                  <span className="flex flex-1 flex-wrap items-baseline gap-x-2 gap-y-0.5">
                     <span className="font-display text-[15px] font-bold tracking-[-0.012em]">{day.label}</span>
                     {day.dateStr && (
                       <span className="font-mono text-xs text-muted-foreground">{day.dateStr}</span>
+                    )}
+                    {day.batchNumber && (
+                      <span
+                        className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground"
+                        title="Group order ID — every meal placed together shares it"
+                      >
+                        {day.batchNumber}
+                      </span>
                     )}
                   </span>
                   <span className="flex-none rounded-full bg-muted px-2.5 py-1 text-xs font-semibold text-muted-foreground tabular-nums">
@@ -500,7 +521,9 @@ export default function FoodOrders() {
                           </span>
                           <span className="flex flex-col leading-tight">
                             <span className="font-mono text-xs text-accent-strong">{o.orderNumber}</span>
-                            {o.batchNumber && (
+                            {/* Only per-row when the day spans MULTIPLE batches;
+                                a single-batch day shows it once in the header. */}
+                            {!day.batchNumber && o.batchNumber && (
                               <span className="font-mono text-[10px] text-muted-foreground" title="Group order ID">
                                 {o.batchNumber}
                               </span>
