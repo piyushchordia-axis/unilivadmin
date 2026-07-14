@@ -77,10 +77,16 @@ export const navGroups: NavGroup[] = [
   // RECIPES/MENU_PLANNING (kitchen managers, F&B managers, ops excellence) —
   // unit leads have no grant on those modules, so they never see them.
   { title: "Food", items: [
-    { title: "My Dashboard", href: "/home", icon: Home, module: "FOOD_DASHBOARD", hideFor: ["UNIT_LEAD"] },
-    { title: "My Properties", href: "/food/my-properties", icon: Building2, module: "FOOD_DASHBOARD", hideFor: ["UNIT_LEAD"] },
-    { title: "Active Guests", href: "/food/guests", icon: Users, module: "FOOD_DASHBOARD", hideFor: ["UNIT_LEAD"] },
-    { title: "Food Overview", href: "/food/dashboard", icon: UtensilsCrossed, module: "FOOD_DASHBOARD" },
+    // The property/tenancy surfaces (My Dashboard = UnitLeadHome, My Properties,
+    // Active Guests) are hidden from unit leads' *and* F&B managers' Food nav —
+    // F&B managers run kitchen prep + dispatch, not property/guest management.
+    { title: "My Dashboard", href: "/home", icon: Home, module: "FOOD_DASHBOARD", hideFor: ["UNIT_LEAD", "FNB_MANAGER"] },
+    { title: "My Properties", href: "/food/my-properties", icon: Building2, module: "FOOD_DASHBOARD", hideFor: ["UNIT_LEAD", "FNB_MANAGER"] },
+    { title: "Active Guests", href: "/food/guests", icon: Users, module: "FOOD_DASHBOARD", hideFor: ["UNIT_LEAD", "FNB_MANAGER"] },
+    // Food Overview is the unit lead's journey dashboard; for F&B managers it
+    // gates to an empty "no order-level tracking" state, so hide it for them
+    // (Kitchen Summary + Dispatch are their live queues).
+    { title: "Food Overview", href: "/food/dashboard", icon: UtensilsCrossed, module: "FOOD_DASHBOARD", hideFor: ["FNB_MANAGER"] },
     { title: "Organization", href: "/food/organization", icon: Network, module: "FOOD_ORG" },
     { title: "All Orders", href: "/food/orders", icon: ListOrdered, module: "FOOD_ALL_ORDERS" },
     { title: "Kitchen Summary", href: "/food/kitchen-summary", icon: Soup, module: "FOOD_KITCHEN_SUMMARY" },
