@@ -163,11 +163,13 @@ export const isSuperAdminRole = (role: UserRole | undefined): boolean =>
   role === "SUPER_ADMIN" || role === "OPS_EXCELLENCE";
 
 /**
- * Where a freshly signed-in user lands: the app launcher (/apps). Every role
- * sees a permission-filtered grid of its modules there and picks where to
- * work, so nobody is dropped onto a dashboard they can't use.
+ * Where a freshly signed-in user lands. Most roles get the app launcher
+ * (/apps) — a permission-filtered grid of their modules. F&B managers work out
+ * of Kitchen Summary all day, so we drop them straight onto it as their default
+ * dashboard (the launcher is still reachable from the logo / Home).
  */
-export function homeForRole(_role: UserRole | undefined): string {
+export function homeForRole(role: UserRole | undefined): string {
+  if (role === "FNB_MANAGER") return "/food/kitchen-summary";
   return "/apps";
 }
 
