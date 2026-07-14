@@ -23,6 +23,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { PropertyOptions } from "@/components/property-options";
 import {
   foodApi,
   foodKeys,
@@ -287,9 +288,7 @@ export default function FoodKitchenSummary() {
           </SelectTrigger>
           <SelectContent>
             <SelectItem value={ALL}>All Properties</SelectItem>
-            {properties.map((p) => (
-              <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
-            ))}
+            <PropertyOptions properties={properties} />
           </SelectContent>
         </Select>
       </div>

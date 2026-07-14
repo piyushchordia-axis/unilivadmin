@@ -7,8 +7,9 @@ import {
 } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+  Select, SelectContent, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
+import { PropertyOptions } from "@/components/property-options";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -733,9 +734,7 @@ export default function FoodDashboard() {
                 <SelectValue placeholder="Choose a property…" />
               </SelectTrigger>
               <SelectContent>
-                {properties.map((p) => (
-                  <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
-                ))}
+                <PropertyOptions properties={properties} />
               </SelectContent>
             </Select>
           )}

@@ -22,6 +22,7 @@ import { BoundedScroll } from "@/components/ui/bounded-scroll";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
+import { PropertyOptions } from "@/components/property-options";
 import {
   Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList,
 } from "@/components/ui/command";
@@ -414,7 +415,7 @@ export default function FoodDispatch() {
           <SelectTrigger className="w-52"><SelectValue placeholder="Property" /></SelectTrigger>
           <SelectContent>
             <SelectItem value={ALL}>All Properties</SelectItem>
-            {properties.map((p) => (<SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>))}
+            <PropertyOptions properties={properties} />
           </SelectContent>
         </Select>
         <Select value={brand} onValueChange={(v) => setBrand(v as FoodBrand | typeof ALL)}>

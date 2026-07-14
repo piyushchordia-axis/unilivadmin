@@ -212,7 +212,7 @@ export interface GeocodeForward { lat: number; lon: number; displayName: string 
 /** Reverse geocode (coordinates → formatted address + pincode). */
 export interface GeocodeReverse { displayName: string; address: string; pincode: string }
 export interface FoodLookups {
-  properties: { id: string; name: string; brand: string | null; kitchenId: string | null; clusterId: string | null }[];
+  properties: { id: string; name: string; city: string | null; brand: string | null; kitchenId: string | null; clusterId: string | null }[];
   deliveryPartners: { id: string; name: string }[];
   agencies: {
     id: string; name: string;

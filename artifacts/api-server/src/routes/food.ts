@@ -1437,9 +1437,9 @@ foodRouter.get("/reports/export.pdf", authenticate, authorize("FOOD_REPORTS", "v
 foodRouter.get("/lookups", authenticate, async (req, res) => {
   try {
     const properties = await db.select({
-      id: propertiesTable.id, name: propertiesTable.name,
+      id: propertiesTable.id, name: propertiesTable.name, city: propertiesTable.city,
       brand: propertiesTable.brand, kitchenId: propertiesTable.kitchenId, clusterId: propertiesTable.clusterId,
-    }).from(propertiesTable).orderBy(propertiesTable.name);
+    }).from(propertiesTable).orderBy(propertiesTable.city, propertiesTable.name);
     // Agencies (with their active vehicles) for the dispatch dropdowns.
     const agencyRows = await db.select({ id: agenciesTable.id, name: agenciesTable.name })
       .from(agenciesTable).where(eq(agenciesTable.isActive, true)).orderBy(agenciesTable.name);
