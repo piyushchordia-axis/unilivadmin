@@ -185,10 +185,10 @@ export default function FoodKitchenHome() {
     slots.find((s) => s.live.length > 0 || s.dishes.length > 0) ||
     slots[0];
 
-  // Pin the auto-pick once data lands so a background refetch (60s poll or a
-  // colleague's action) can't swap the panel under the user's cursor. Actions
-  // release the pin on success (setPickedMeal(null)) to advance the focus to
-  // the next meal that needs a hand — the kanban feel, but only on OUR action.
+  // Pin the auto-pick once data lands so nothing swaps the panel under the
+  // user — not a background refetch, and not their own action either (after
+  // accepting a meal they stay on it to cook and send it; user decision
+  // 17-Jul). Only an explicit tab tap or a day flip moves the focus.
   const loadingAny = ordersLoading || summaryLoading;
   React.useEffect(() => {
     if (!pickedMeal && !loadingAny && selected) setPickedMeal(selected.mealType);
@@ -211,10 +211,9 @@ export default function FoodKitchenHome() {
       try { await foodApi.acceptOrder(o.id); ok++; } catch { fail++; }
     }
     // Await the refetch so the buttons re-enable against FRESH counts (no
-    // re-click window on stale data), then release the focus pin so the panel
-    // advances to the next meal that needs a hand.
+    // re-click window on stale data). The focus stays on the acted-on meal —
+    // the user carries it through cook and send before moving on.
     await invalidate();
-    setPickedMeal(null);
     setBusy(null);
     if (fail === 0) {
       fire();
@@ -236,7 +235,6 @@ export default function FoodKitchenHome() {
       try { await foodApi.prepareOrder(o.id); ok++; } catch { fail++; }
     }
     await invalidate();
-    setPickedMeal(null);
     setBusy(null);
     if (fail === 0) {
       fire();
@@ -290,7 +288,6 @@ export default function FoodKitchenHome() {
         description: trip?.dispatchNumber ? `Trip ${trip.dispatchNumber} is on its way with ${agency.name}` : undefined,
         variant: "success",
       });
-      setPickedMeal(null);
       setAgnosticAgency("");
     } catch (e: any) {
       toast({ title: e?.message || "Could not create the trip", variant: "destructive" });
