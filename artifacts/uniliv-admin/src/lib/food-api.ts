@@ -218,6 +218,8 @@ export interface GeocodeForward { lat: number; lon: number; displayName: string 
 export interface GeocodeReverse { displayName: string; address: string; pincode: string }
 export interface FoodLookups {
   properties: { id: string; name: string; city: string | null; brand: string | null; kitchenId: string | null; clusterId: string | null }[];
+  /** Kitchens the caller's scope resolves to; null = all (admins/heads). */
+  myKitchenIds?: string[] | null;
   deliveryPartners: { id: string; name: string }[];
   agencies: {
     id: string; name: string;

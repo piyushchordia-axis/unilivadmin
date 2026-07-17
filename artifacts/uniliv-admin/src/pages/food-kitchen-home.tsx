@@ -163,6 +163,15 @@ export default function FoodKitchenHome() {
   const kitchenName = (id: string | null) =>
     id ? kitchens.find((k) => k.id === id)?.name ?? "this kitchen" : "the kitchen";
 
+  // "Your kitchen" identity chip — F&B manager logins are one-per-kitchen, so
+  // the header names the kitchen this login runs. Heads/admins see all.
+  const myKitchenIds = lookups?.myKitchenIds;
+  const kitchenScopeLabel =
+    myKitchenIds === null ? "All kitchens"
+    : myKitchenIds && myKitchenIds.length === 1 ? kitchens.find((k) => k.id === myKitchenIds[0])?.name ?? "Your kitchen"
+    : myKitchenIds && myKitchenIds.length > 1 ? `${myKitchenIds.length} kitchens`
+    : null;
+
   // ── Per-meal slots ────────────────────────────────────────────────────────
   const slots: Slot[] = MEAL_TYPES.map((mealType) => {
     const live = orders.filter((o) => o.mealType === mealType);
@@ -360,9 +369,16 @@ export default function FoodKitchenHome() {
 
       {/* Header */}
       <div>
-        <span className="mb-2 inline-block self-start rounded-full bg-info-soft px-[9px] py-[3px] text-[10px] font-bold uppercase tracking-[.08em] text-info">
-          {roleLabel}
-        </span>
+        <div className="mb-2 flex flex-wrap items-center gap-1.5">
+          <span className="rounded-full bg-info-soft px-[9px] py-[3px] text-[10px] font-bold uppercase tracking-[.08em] text-info">
+            {roleLabel}
+          </span>
+          {kitchenScopeLabel && (
+            <span className="rounded-full bg-success-soft px-[9px] py-[3px] text-[10px] font-bold uppercase tracking-[.08em] text-success">
+              {kitchenScopeLabel}
+            </span>
+          )}
+        </div>
         <h1 className="mb-1 font-display text-2xl font-bold tracking-[-0.012em]">Kitchen Home</h1>
         <p className="text-sm text-muted-foreground">
           Your kitchen day — accept orders, cook, and send the vans from one place.

@@ -1569,10 +1569,18 @@ foodRouter.get("/lookups", authenticate, async (req, res) => {
     const agencies = agencyRows.map((a) => ({ ...a, vehicles: vByA.get(a.id) ?? [], locations: lByA.get(a.id) ?? [], kitchenIds: kByA.get(a.id) ?? [] }));
     const brands = await db.select({ code: foodBrandsTable.code, name: foodBrandsTable.name })
       .from(foodBrandsTable).where(eq(foodBrandsTable.isActive, true)).orderBy(foodBrandsTable.name);
+    // Which kitchens the caller actually runs (null = all — admins/heads).
+    // F&B manager logins are kitchen-scoped (one login per kitchen), so
+    // Kitchen Home can show "your kitchen" identity in the header.
+    const accessible = await resolveAccessiblePropertyIds(req.user!);
+    const accessibleSet = accessible === null ? null : new Set(accessible);
+    const myKitchenIds = accessibleSet === null
+      ? null
+      : [...new Set(properties.filter((p) => accessibleSet.has(p.id) && p.kitchenId).map((p) => p.kitchenId!))];
     res.json({
       success: true,
       // deliveryPartners kept as an alias of agencies {id,name} for back-compat.
-      data: { properties, agencies, deliveryPartners: agencyRows, brands, mealTypes: MEAL_TYPES },
+      data: { properties, agencies, deliveryPartners: agencyRows, brands, mealTypes: MEAL_TYPES, myKitchenIds },
     });
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
