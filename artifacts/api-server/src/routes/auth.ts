@@ -10,7 +10,7 @@ import { usersTable, refreshTokensTable } from "@workspace/db";
 import { eq, or } from "drizzle-orm";
 import { authenticate, signAccessToken, signRefreshToken } from "../middlewares/auth.js";
 import { authRateLimiter } from "../middlewares/security.js";
-import { COOKIE_SECURE } from "../config/env.js";
+import { COOKIE_SECURE, DISABLE_SINGLE_SESSION } from "../config/env.js";
 import { newId } from "../lib/id.js";
 import {
   createChallenge,
@@ -65,7 +65,11 @@ export async function issueSession(res: Response, user: DbUser) {
   // logins can't interleave into an orphaned refresh token / sid mismatch (lockout).
   await db.transaction(async (tx) => {
     await tx.select({ id: usersTable.id }).from(usersTable).where(eq(usersTable.id, user.id)).for("update");
-    await tx.delete(refreshTokensTable).where(eq(refreshTokensTable.userId, user.id));
+    // Single-session: revoke every other device's refresh token on login. The
+    // testing flag keeps them so several concurrent logins can coexist.
+    if (!DISABLE_SINGLE_SESSION) {
+      await tx.delete(refreshTokensTable).where(eq(refreshTokensTable.userId, user.id));
+    }
     await tx.insert(refreshTokensTable).values({ id: newId(), userId: user.id, token: refreshToken, expiresAt });
     await tx.update(usersTable)
       .set({ currentSessionId: sessionId, lastLogin: new Date(), failedLoginAttempts: 0, lockedUntil: null, updatedAt: new Date() })

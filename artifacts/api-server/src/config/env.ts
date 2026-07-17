@@ -32,6 +32,23 @@ export const ENFORCE_PROD_SECURITY = !IS_DEVELOPMENT;
 export const ALLOW_DEV_OTP =
   !ENFORCE_PROD_SECURITY && IS_DEVELOPMENT && process.env["ALLOW_DEV_OTP"] === "true";
 
+/**
+ * TEMPORARY testing aid: disable the single-active-session enforcement so the
+ * same account can be signed in from several browsers/devices at once without
+ * one login knocking out the others. Opt-in via `DISABLE_SINGLE_SESSION=true`.
+ * Leave UNSET in real production — it's a convenience for shared test builds.
+ * When true: login keeps other devices' refresh tokens instead of revoking
+ * them, and the per-request session-id match is skipped (see middlewares/auth).
+ */
+export const DISABLE_SINGLE_SESSION = process.env["DISABLE_SINGLE_SESSION"] === "true";
+if (DISABLE_SINGLE_SESSION) {
+  // eslint-disable-next-line no-console
+  console.warn(
+    "[config] DISABLE_SINGLE_SESSION=true — single-active-session enforcement is OFF. " +
+      "This is a testing convenience; unset it for production.",
+  );
+}
+
 // Boot-time guard: a static DEV_OTP master code must never exist in a hardened
 // (non-development) environment, regardless of ALLOW_DEV_OTP. Fail loudly at
 // startup rather than silently shipping an OTP backdoor.

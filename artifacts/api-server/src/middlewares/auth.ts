@@ -2,7 +2,7 @@ import { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
 import { db, usersTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
-import { SESSION_SECRET, JWT_ISSUER, JWT_AUDIENCE } from "../config/env.js";
+import { SESSION_SECRET, JWT_ISSUER, JWT_AUDIENCE, DISABLE_SINGLE_SESSION } from "../config/env.js";
 
 // Single source of truth for the signing secret. Validated/fail-closed in
 // config/env.ts — there is intentionally no insecure inline fallback here.
@@ -67,16 +67,21 @@ export async function authenticate(req: Request, res: Response, next: NextFuncti
       res.status(401).json({ success: false, error: "Account is inactive" });
       return;
     }
-    if (u.sid) {
-      if (payload.sid !== u.sid) {
-        res.status(401).json({ success: false, error: "Signed in on another device", code: "SESSION_REPLACED" });
+    // DISABLE_SINGLE_SESSION (testing aid) skips the session-id match entirely,
+    // so tokens from several concurrent logins of the same account all stay
+    // valid. The account-active check above still applies.
+    if (!DISABLE_SINGLE_SESSION) {
+      if (u.sid) {
+        if (payload.sid !== u.sid) {
+          res.status(401).json({ success: false, error: "Signed in on another device", code: "SESSION_REPLACED" });
+          return;
+        }
+      } else if (payload.sid) {
+        // User has no active session but the token claims one → logged out / reset /
+        // replaced. Reject. (Only genuinely pre-feature, sid-less tokens get grace.)
+        res.status(401).json({ success: false, error: "Session ended. Please sign in again.", code: "SESSION_REPLACED" });
         return;
       }
-    } else if (payload.sid) {
-      // User has no active session but the token claims one → logged out / reset /
-      // replaced. Reject. (Only genuinely pre-feature, sid-less tokens get grace.)
-      res.status(401).json({ success: false, error: "Session ended. Please sign in again.", code: "SESSION_REPLACED" });
-      return;
     }
   } catch {
     res.status(500).json({ success: false, error: "Internal server error" });
