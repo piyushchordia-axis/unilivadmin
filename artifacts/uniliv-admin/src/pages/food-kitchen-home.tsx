@@ -13,6 +13,9 @@ import {
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from "@/components/ui/dialog";
+import {
+  Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription,
+} from "@/components/ui/sheet";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
@@ -21,7 +24,7 @@ import { MealIcon, DishIcon } from "@/components/meal-icon";
 import { usePermissions } from "@/lib/use-permissions";
 import { cn } from "@/lib/utils";
 import {
-  foodApi, foodKeys, MEAL_TYPES, MEAL_LABEL, shortMeal, fmtQty, isFractionalUnit,
+  foodApi, foodKeys, MEAL_TYPES, MEAL_LABEL, ORDER_STATUS_PILL, shortMeal, fmtQty, isFractionalUnit,
   type FoodOrder, type MealType, type KitchenSummaryDish, type KitchenItem,
 } from "@/lib/food-api";
 
@@ -78,61 +81,23 @@ function ColumnHead({ icon, label, tone, right }: {
   );
 }
 
-/** One property · headcount row inside a pipeline column. Tapping it unfolds
- *  the order's dish breakdown (what this property asked for, per dish) so the
- *  kitchen can see exactly what it's accepting / cooking / sending. */
-function OrderRow({ o }: { o: FoodOrder }) {
-  const [open, setOpen] = React.useState(false);
-  const { data: items, isLoading } = useQuery({
-    queryKey: ["food", "kitchen-items", o.id],
-    queryFn: () => foodApi.kitchenItems(o.id),
-    enabled: open,
-    staleTime: 60_000,
-  });
+/** One property · headcount row inside a pipeline column. Clicking it opens
+ *  the order-details sheet (what this property ordered, per dish). */
+function OrderRow({ o, onOpen }: { o: FoodOrder; onOpen: (o: FoodOrder) => void }) {
   return (
-    <div className="border-b border-dashed border-border last:border-0">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        aria-expanded={open}
-        className="flex w-full items-center justify-between gap-2 py-1.5 text-left"
-      >
-        <span className="flex min-w-0 items-center gap-1.5">
-          <ChevronRight
-            className={cn("h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform", open && "rotate-90")}
-          />
-          <span className="min-w-0 truncate text-[13px]">{o.propertyName ?? "Property"}</span>
-        </span>
-        <span className="shrink-0 font-mono text-[12.5px] font-semibold tabular-nums text-muted-foreground">
-          {o.residentsCount ?? 0} ppl
-        </span>
-      </button>
-      {open && (
-        <div className="mb-2 ml-5 rounded-[9px] border border-border/70 px-2.5 py-1">
-          {isLoading ? (
-            <Skeleton className="my-1 h-10 w-full" />
-          ) : !items?.length ? (
-            <div className="py-1.5 text-[12px] text-muted-foreground">No dish breakdown on this order.</div>
-          ) : (
-            items.map((it) => (
-              <div
-                key={it.id}
-                className="flex items-center justify-between gap-2 border-b border-dashed border-border py-1 last:border-0"
-              >
-                <span className="flex min-w-0 items-center gap-1.5">
-                  <DishIcon name={it.dishName ?? ""} meal={o.mealType} size={22} />
-                  <span className="min-w-0 truncate text-[12.5px]">{it.dishName ?? "Item"}</span>
-                </span>
-                <span className="shrink-0 font-mono text-[12px] font-semibold tabular-nums">
-                  {fmtQty(it.preparedQty ?? it.orderedQty ?? 0)}{" "}
-                  <span className="text-[10px] font-bold uppercase text-muted-foreground">{it.unit}</span>
-                </span>
-              </div>
-            ))
-          )}
-        </div>
-      )}
-    </div>
+    <button
+      type="button"
+      onClick={() => onOpen(o)}
+      className="group flex w-full items-center justify-between gap-2 border-b border-dashed border-border py-1.5 text-left last:border-0"
+    >
+      <span className="min-w-0 truncate text-[13px] transition-colors group-hover:text-accent-strong">
+        {o.propertyName ?? "Property"}
+      </span>
+      <span className="flex shrink-0 items-center gap-1 font-mono text-[12.5px] font-semibold tabular-nums text-muted-foreground">
+        {o.residentsCount ?? 0} ppl
+        <ChevronRight className="h-3.5 w-3.5 opacity-50 transition-opacity group-hover:opacity-100" />
+      </span>
+    </button>
   );
 }
 
@@ -314,6 +279,17 @@ export default function FoodKitchenHome() {
   // an agency_kitchens link; kitchen-agnostic groups can use any partner).
   const hasPartnerFor = (kid: string | null) =>
     kid ? agencies.some((a) => (a.kitchenIds ?? []).includes(kid)) : agencies.length > 0;
+
+  // ── Order-details sheet ───────────────────────────────────────────────────
+  // Clicking any property row opens a right-side sheet with that order's dish
+  // breakdown, so the kitchen sees exactly what was asked before acting.
+  const [sheetOrder, setSheetOrder] = React.useState<FoodOrder | null>(null);
+  const { data: sheetItems, isLoading: sheetLoading } = useQuery({
+    queryKey: ["food", "kitchen-items", sheetOrder?.id],
+    queryFn: () => foodApi.kitchenItems(sheetOrder!.id),
+    enabled: !!sheetOrder,
+    staleTime: 60_000,
+  });
 
   // ── Review & dispatch dialog ──────────────────────────────────────────────
   // Clicking "Dispatch (N)" opens a review of what the van will carry — the
@@ -630,7 +606,7 @@ export default function FoodKitchenHome() {
                 ) : (
                   <>
                     <div className="flex-1">
-                      {selected.placed.map((o) => <OrderRow key={o.id} o={o} />)}
+                      {selected.placed.map((o) => <OrderRow key={o.id} o={o} onOpen={setSheetOrder} />)}
                     </div>
                     {canKitchen && (
                       <button
@@ -665,7 +641,7 @@ export default function FoodKitchenHome() {
                 ) : (
                   <>
                     <div className="flex-1">
-                      {selected.accepted.map((o) => <OrderRow key={o.id} o={o} />)}
+                      {selected.accepted.map((o) => <OrderRow key={o.id} o={o} onOpen={setSheetOrder} />)}
                     </div>
                     {canKitchen && (
                       <button
@@ -727,7 +703,7 @@ export default function FoodKitchenHome() {
                           </div>
                         </div>
                         <div className="flex-1">
-                          {group.map((o) => <OrderRow key={o.id} o={o} />)}
+                          {group.map((o) => <OrderRow key={o.id} o={o} onOpen={setSheetOrder} />)}
                         </div>
                         {!canDispatch ? null : hasPartnerFor(kid) ? (
                           <button
@@ -945,6 +921,94 @@ export default function FoodKitchenHome() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Order-details sheet — what this property ordered */}
+      <Sheet open={!!sheetOrder} onOpenChange={(o) => { if (!o) setSheetOrder(null); }}>
+        <SheetContent className="w-full overflow-y-auto sm:max-w-md">
+          {sheetOrder && (
+            <>
+              <SheetHeader>
+                <SheetTitle className="flex items-center gap-2.5 font-display text-lg font-bold tracking-[-0.012em]">
+                  <MealIcon meal={sheetOrder.mealType} size={26} />
+                  {sheetOrder.propertyName ?? "Property"}
+                </SheetTitle>
+                <SheetDescription className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <span className="font-mono text-xs tabular-nums">{sheetOrder.orderNumber}</span>
+                  <span>· {MEAL_LABEL[sheetOrder.mealType]}</span>
+                  <span>· {sheetOrder.residentsCount ?? 0} people</span>
+                </SheetDescription>
+              </SheetHeader>
+
+              <div className="mt-4 flex flex-col gap-3">
+                {ORDER_STATUS_PILL[sheetOrder.status] && (
+                  <span
+                    className={cn(
+                      "self-start rounded-full px-[11px] py-1 text-xs font-bold",
+                      ORDER_STATUS_PILL[sheetOrder.status].cls,
+                    )}
+                  >
+                    {ORDER_STATUS_PILL[sheetOrder.status].label}
+                  </span>
+                )}
+
+                <div className="rounded-[12px] border border-border bg-background px-4 py-3.5">
+                  <ColumnHead
+                    icon={<Soup className="h-[13px] w-[13px]" strokeWidth={2.5} />}
+                    label="What they ordered"
+                    tone="var(--accent-strong)"
+                    right={sheetItems?.length ? (
+                      <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
+                        {sheetItems.length} dish{sheetItems.length === 1 ? "" : "es"}
+                      </span>
+                    ) : undefined}
+                  />
+                  {sheetLoading ? (
+                    <Skeleton className="h-24 w-full" />
+                  ) : !sheetItems?.length ? (
+                    <div className="py-3 text-center text-[13px] text-muted-foreground">
+                      No dish breakdown on this order.
+                    </div>
+                  ) : (
+                    sheetItems.map((it) => {
+                      const sent = it.preparedQty ?? it.orderedQty ?? 0;
+                      const adjusted = it.preparedQty != null && it.orderedQty != null && it.preparedQty !== it.orderedQty;
+                      return (
+                        <div
+                          key={it.id}
+                          className="flex items-center justify-between gap-2 border-b border-dashed border-border py-1.5 last:border-0"
+                        >
+                          <span className="flex min-w-0 items-center gap-2">
+                            <DishIcon name={it.dishName ?? ""} meal={sheetOrder.mealType} size={28} />
+                            <span className="min-w-0 truncate text-[13px]">{it.dishName ?? "Item"}</span>
+                          </span>
+                          <span className="flex shrink-0 items-center gap-1.5 font-mono text-[12.5px] font-semibold tabular-nums">
+                            {adjusted && (
+                              <span className="text-[11px] text-muted-foreground line-through">
+                                {fmtQty(it.orderedQty!)}
+                              </span>
+                            )}
+                            {fmtQty(sent)}{" "}
+                            <span className="text-[10px] font-bold uppercase text-muted-foreground">{it.unit}</span>
+                          </span>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+
+                {sheetOrder.notes && (
+                  <div className="rounded-[12px] border border-border bg-background px-4 py-3">
+                    <div className="mb-1 text-[11px] font-bold uppercase tracking-[0.1em] text-muted-foreground">
+                      Note from the property
+                    </div>
+                    <p className="text-[13px]">{sheetOrder.notes}</p>
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+        </SheetContent>
+      </Sheet>
     </div>
   );
 }
