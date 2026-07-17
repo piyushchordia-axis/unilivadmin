@@ -10,14 +10,19 @@ import { Skeleton } from "@/components/ui/skeleton";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 import { useConfetti } from "@/components/ui/confetti";
 import { MealIcon } from "@/components/meal-icon";
 import { usePermissions } from "@/lib/use-permissions";
 import { cn } from "@/lib/utils";
 import {
-  foodApi, foodKeys, MEAL_TYPES, MEAL_LABEL, shortMeal, fmtQty,
-  type FoodOrder, type MealType, type KitchenSummaryDish,
+  foodApi, foodKeys, MEAL_TYPES, MEAL_LABEL, shortMeal, fmtQty, isFractionalUnit,
+  type FoodOrder, type MealType, type KitchenSummaryDish, type KitchenItem,
 } from "@/lib/food-api";
 
 /** Kitchen serve-by targets per meal (prototype schedule — not in the API).
@@ -255,40 +260,89 @@ export default function FoodKitchenHome() {
     return [...m.entries()];
   };
 
-  // Kitchen-bound groups auto-pick a partner that actually serves the kitchen
-  // (the server validates the link). Kitchen-agnostic groups (no kitchenId)
-  // have no "serves" relation to validate against, so we never auto-book an
-  // arbitrary partner — the user must pick one explicitly.
-  const [agnosticAgency, setAgnosticAgency] = React.useState("");
-  const servingAgency = (kid: string | null) =>
-    kid
-      ? agencies.find((a) => (a.kitchenIds ?? []).includes(kid))
-      : agencies.find((a) => a.id === agnosticAgency);
+  // Whether any partner can serve this group at all (kitchen-bound groups need
+  // an agency_kitchens link; kitchen-agnostic groups can use any partner).
+  const hasPartnerFor = (kid: string | null) =>
+    kid ? agencies.some((a) => (a.kitchenIds ?? []).includes(kid)) : agencies.length > 0;
 
-  const sendVan = async (kid: string | null, group: FoodOrder[]) => {
-    if (busy) return;
-    const agency = servingAgency(kid);
-    if (!agency) {
-      toast({
-        title: kid ? "No delivery partner serves this kitchen" : "Pick a delivery partner first",
-        variant: "destructive",
-      });
+  // ── Review & dispatch dialog ──────────────────────────────────────────────
+  // Clicking "Dispatch (N)" opens a review of what the van will carry — the
+  // per-dish send amounts for each property (editable while PREPARING; saved
+  // as preparedQty, the figure the unit lead's receive step checks against) —
+  // plus the trip details (partner, vehicle, ETA), then creates the trip.
+  const [review, setReview] = React.useState<{ kid: string | null; orders: FoodOrder[] } | null>(null);
+  const [reviewItems, setReviewItems] = React.useState<Record<string, KitchenItem[]>>({});
+  const [qtyDraft, setQtyDraft] = React.useState<Record<string, string>>({});
+  const [reviewLoading, setReviewLoading] = React.useState(false);
+  const [trip, setTrip] = React.useState({
+    agencyId: "", vehicleId: "", vehicleNumber: "", driverName: "", driverPhone: "", etaMinutes: "",
+  });
+
+  const dialogAgencies = review?.kid
+    ? agencies.filter((a) => (a.kitchenIds ?? []).includes(review.kid!))
+    : agencies;
+  const dialogVehicles = agencies.find((a) => a.id === trip.agencyId)?.vehicles ?? [];
+
+  const openReview = async (kid: string | null, group: FoodOrder[]) => {
+    // Kitchen-bound: default to the first partner serving the kitchen (server
+    // validates the link). Kitchen-agnostic: no default — pick explicitly.
+    const defaultAgency = kid ? (agencies.find((a) => (a.kitchenIds ?? []).includes(kid))?.id ?? "") : "";
+    setReview({ kid, orders: group });
+    setTrip({ agencyId: defaultAgency, vehicleId: "", vehicleNumber: "", driverName: "", driverPhone: "", etaMinutes: "" });
+    setReviewItems({});
+    setQtyDraft({});
+    setReviewLoading(true);
+    try {
+      const results = await Promise.all(group.map(async (o) => [o.id, await foodApi.kitchenItems(o.id)] as const));
+      const map: Record<string, KitchenItem[]> = {};
+      const drafts: Record<string, string> = {};
+      for (const [oid, items] of results) {
+        map[oid] = items;
+        for (const it of items) drafts[it.id] = String(it.preparedQty ?? it.orderedQty ?? 0);
+      }
+      setReviewItems(map);
+      setQtyDraft(drafts);
+    } catch (e: any) {
+      toast({ title: e?.message || "Could not load dish quantities", variant: "destructive" });
+    }
+    setReviewLoading(false);
+  };
+
+  const dispatchNow = async () => {
+    if (!review || busy) return;
+    const agency = agencies.find((a) => a.id === trip.agencyId);
+    if (!agency) { toast({ title: "Pick a delivery partner first", variant: "destructive" }); return; }
+    if (Object.values(qtyDraft).some((v) => !Number.isFinite(Number(v)) || Number(v) < 0)) {
+      toast({ title: "Send quantities must be zero or more", variant: "destructive" });
       return;
     }
-    setBusy(`send:${kid ?? "none"}`);
+    setBusy("send:review");
     try {
-      const trip = await foodApi.createDispatch({
-        orderIds: group.map((o) => o.id),
+      // Persist adjusted send amounts first (only what actually changed).
+      for (const o of review.orders) {
+        const changed = (reviewItems[o.id] ?? [])
+          .filter((it) => qtyDraft[it.id] != null && Number(qtyDraft[it.id]) !== (it.preparedQty ?? it.orderedQty ?? 0))
+          .map((it) => ({ id: it.id, preparedQty: Number(qtyDraft[it.id]) }));
+        if (changed.length) await foodApi.updateKitchenItems(o.id, changed);
+      }
+      const eta = trip.etaMinutes.trim();
+      const created = await foodApi.createDispatch({
+        orderIds: review.orders.map((o) => o.id),
         agencyId: agency.id,
-        kitchenId: kid ?? undefined,
+        kitchenId: review.kid ?? undefined,
+        vehicleId: trip.vehicleId || undefined,
+        vehicleNumber: trip.vehicleNumber.trim() || undefined,
+        driverName: trip.driverName.trim() || undefined,
+        driverPhone: trip.driverPhone.trim() || undefined,
+        etaMinutes: eta ? Number(eta) : undefined,
       });
       fire();
       toast({
-        title: "Van sent off",
-        description: trip?.dispatchNumber ? `Trip ${trip.dispatchNumber} is on its way with ${agency.name}` : undefined,
+        title: "Dispatched",
+        description: created?.dispatchNumber ? `Trip ${created.dispatchNumber} is on its way with ${agency.name}` : undefined,
         variant: "success",
       });
-      setAgnosticAgency("");
+      setReview(null);
     } catch (e: any) {
       toast({ title: e?.message || "Could not create the trip", variant: "destructive" });
     }
@@ -568,7 +622,7 @@ export default function FoodKitchenHome() {
               <div className="flex flex-col rounded-[12px] border border-border bg-background px-4 py-3.5">
                 <ColumnHead
                   icon={<Truck className="h-[13px] w-[13px]" strokeWidth={2.5} />}
-                  label="Send the van"
+                  label="Dispatch"
                   tone="var(--success)"
                   right={selected.preparing.length > 0 ? (
                     <span className="font-mono text-[11px] tabular-nums text-muted-foreground">{selected.preparing.length}</span>
@@ -584,7 +638,6 @@ export default function FoodKitchenHome() {
                   <div className="flex flex-1 flex-col">
                     <div className="flex-1">
                       {vanGroups(selected).map(([kid, group]) => {
-                        const agency = servingAgency(kid);
                         const many = vanGroups(selected).length > 1;
                         return (
                           <div key={kid ?? "none"} className="mb-1.5 last:mb-0">
@@ -594,35 +647,14 @@ export default function FoodKitchenHome() {
                               </div>
                             )}
                             {group.map((o) => <OrderRow key={o.id} o={o} />)}
-                            {!canDispatch ? null : kid === null ? (
-                              <>
-                                {/* No kitchen on these orders → nothing to auto-
-                                    match a partner against; ask for an explicit pick. */}
-                                <Select value={agnosticAgency} onValueChange={setAgnosticAgency}>
-                                  <SelectTrigger className="mt-2 h-9 w-full text-xs">
-                                    <SelectValue placeholder="Pick a delivery partner" />
-                                  </SelectTrigger>
-                                  <SelectContent>
-                                    {agencies.map((a) => (<SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>))}
-                                  </SelectContent>
-                                </Select>
-                                <button
-                                  type="button"
-                                  onClick={() => sendVan(kid, group)}
-                                  disabled={!!busy || !agnosticAgency}
-                                  className="mt-2 h-10 w-full rounded-[9px] bg-success text-[13px] font-bold text-white transition-[filter] hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-60"
-                                >
-                                  {busy === "send:none" ? "Sending…" : `Send the van (${group.length})`}
-                                </button>
-                              </>
-                            ) : agency ? (
+                            {!canDispatch ? null : hasPartnerFor(kid) ? (
                               <button
                                 type="button"
-                                onClick={() => sendVan(kid, group)}
+                                onClick={() => openReview(kid, group)}
                                 disabled={!!busy}
                                 className="mt-2 h-10 w-full rounded-[9px] bg-success text-[13px] font-bold text-white transition-[filter] hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-60"
                               >
-                                {busy === `send:${kid}` ? "Sending…" : `Send the van (${group.length})`}
+                                Dispatch ({group.length})
                               </button>
                             ) : (
                               <div className="mt-2 flex items-start gap-1.5 rounded-[9px] bg-warning-soft px-2.5 py-2 text-[11px] text-warning">
@@ -665,6 +697,171 @@ export default function FoodKitchenHome() {
           </span>
         </Link>
       </div>
+
+      {/* Review & dispatch dialog */}
+      <Dialog open={!!review} onOpenChange={(o) => { if (!o && busy !== "send:review") setReview(null); }}>
+        <DialogContent className="max-h-[85vh] gap-4 overflow-y-auto sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="font-display text-lg font-bold tracking-[-0.012em]">
+              Review &amp; dispatch · {review ? kitchenName(review.kid) : ""}
+            </DialogTitle>
+            <DialogDescription>
+              Check what the van carries — adjust any dish amount per property, then send it.
+            </DialogDescription>
+          </DialogHeader>
+
+          {/* Per-property dish amounts (saved as the kitchen's send figures) */}
+          <div className="flex flex-col gap-2.5">
+            {review?.orders.map((o) => (
+              <div key={o.id} className="rounded-[12px] border border-border bg-background px-4 py-3">
+                <div className="mb-1.5 flex items-center justify-between gap-2">
+                  <span className="min-w-0 truncate text-[13px] font-semibold">{o.propertyName ?? "Property"}</span>
+                  <span className="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground">
+                    {o.residentsCount ?? 0} ppl
+                  </span>
+                </div>
+                {reviewLoading ? (
+                  <Skeleton className="h-16 w-full" />
+                ) : (reviewItems[o.id] ?? []).length === 0 ? (
+                  <div className="py-2 text-center text-[12px] text-muted-foreground">
+                    No dish breakdown on this order.
+                  </div>
+                ) : (
+                  (reviewItems[o.id] ?? []).map((it) => {
+                    const changed =
+                      qtyDraft[it.id] != null &&
+                      Number(qtyDraft[it.id]) !== (it.orderedQty ?? 0);
+                    return (
+                      <div
+                        key={it.id}
+                        className="flex items-center justify-between gap-2 border-b border-dashed border-border py-1.5 last:border-0"
+                      >
+                        <span className="min-w-0 flex-1 truncate text-[13px]">{it.dishName ?? "Item"}</span>
+                        <span className="flex shrink-0 items-center gap-1.5">
+                          {changed && it.orderedQty != null && (
+                            <span className="font-mono text-[11px] tabular-nums text-muted-foreground line-through">
+                              {fmtQty(it.orderedQty)}
+                            </span>
+                          )}
+                          <Input
+                            type="number"
+                            min={0}
+                            step={isFractionalUnit(it.unit) ? 0.5 : 1}
+                            value={qtyDraft[it.id] ?? ""}
+                            onChange={(e) => setQtyDraft((d) => ({ ...d, [it.id]: e.target.value }))}
+                            className="h-8 w-24 text-right font-mono text-[12.5px] tabular-nums"
+                          />
+                          <span className="w-10 text-[10px] font-bold uppercase tracking-[.06em] text-muted-foreground">
+                            {it.unit}
+                          </span>
+                        </span>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            ))}
+          </div>
+
+          {/* Trip details — same options as the Dispatch board's trip builder */}
+          <div className="rounded-[12px] border border-border bg-background px-4 py-3">
+            <div className="mb-2.5 text-[11px] font-bold uppercase tracking-[0.1em] text-muted-foreground">
+              Trip details
+            </div>
+            <div className="grid gap-2.5 sm:grid-cols-2">
+              <div className="sm:col-span-2">
+                <Label className="mb-1 block text-xs">Delivery partner</Label>
+                <Select
+                  value={trip.agencyId}
+                  onValueChange={(v) => setTrip((t) => ({ ...t, agencyId: v, vehicleId: "", vehicleNumber: "" }))}
+                >
+                  <SelectTrigger className="h-9"><SelectValue placeholder="Pick a delivery partner" /></SelectTrigger>
+                  <SelectContent>
+                    {dialogAgencies.map((a) => (<SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label className="mb-1 block text-xs">Vehicle</Label>
+                <Select
+                  value={trip.vehicleId}
+                  onValueChange={(v) => {
+                    const veh = dialogVehicles.find((x) => x.id === v);
+                    setTrip((t) => ({ ...t, vehicleId: v, vehicleNumber: veh?.vehicleNumber ?? t.vehicleNumber }));
+                  }}
+                  disabled={dialogVehicles.length === 0}
+                >
+                  <SelectTrigger className="h-9">
+                    <SelectValue placeholder={dialogVehicles.length ? "Pick a vehicle" : "No vehicles on file"} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {dialogVehicles.map((v) => (
+                      <SelectItem key={v.id} value={v.id}>{v.vehicleNumber} · {v.vehicleType}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label className="mb-1 block text-xs">Vehicle number</Label>
+                <Input
+                  value={trip.vehicleNumber}
+                  onChange={(e) => setTrip((t) => ({ ...t, vehicleNumber: e.target.value }))}
+                  placeholder="KA05AB1234"
+                  className="h-9"
+                />
+              </div>
+              <div>
+                <Label className="mb-1 block text-xs">Driver name</Label>
+                <Input
+                  value={trip.driverName}
+                  onChange={(e) => setTrip((t) => ({ ...t, driverName: e.target.value }))}
+                  placeholder="Optional"
+                  className="h-9"
+                />
+              </div>
+              <div>
+                <Label className="mb-1 block text-xs">Driver phone</Label>
+                <Input
+                  value={trip.driverPhone}
+                  onChange={(e) => setTrip((t) => ({ ...t, driverPhone: e.target.value }))}
+                  placeholder="Optional"
+                  className="h-9"
+                />
+              </div>
+              <div>
+                <Label className="mb-1 block text-xs">ETA (minutes)</Label>
+                <Input
+                  type="number"
+                  min={0}
+                  value={trip.etaMinutes}
+                  onChange={(e) => setTrip((t) => ({ ...t, etaMinutes: e.target.value }))}
+                  placeholder="e.g. 45"
+                  className="h-9"
+                />
+              </div>
+            </div>
+          </div>
+
+          <DialogFooter className="gap-2 sm:gap-2">
+            <button
+              type="button"
+              onClick={() => setReview(null)}
+              disabled={busy === "send:review"}
+              className="h-11 rounded-[10px] border border-border bg-card px-5 text-sm font-semibold text-muted-foreground transition-colors hover:border-accent hover:text-foreground"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={dispatchNow}
+              disabled={!!busy || !trip.agencyId || reviewLoading}
+              className="h-11 rounded-[10px] bg-success px-6 text-sm font-bold text-white transition-[filter] hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {busy === "send:review" ? "Dispatching…" : `Dispatch (${review?.orders.length ?? 0})`}
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

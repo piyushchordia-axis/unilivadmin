@@ -122,6 +122,11 @@ export interface WastePendingRow {
   wasteEditableUntil: string | null;
 }
 
+/** One order item as the kitchen sees it: what was ordered vs what it sends. */
+export interface KitchenItem {
+  id: string; dishId: string | null; dishName: string | null; unit: string;
+  orderedQty: number | null; preparedQty: number | null;
+}
 export interface KitchenSummaryDish {
   dishId: string;
   dishName: string;
@@ -506,6 +511,14 @@ export const foodApi = {
     apiFetch<Envelope<FoodOrder>>(`/food/orders/${id}/cancel`, { method: "POST", body: JSON.stringify({ reason }) }).then((r) => r.data),
   prepareOrder: (id: string) =>
     apiFetch<Envelope<FoodOrder>>(`/food/orders/${id}/prepare`, { method: "POST", body: "{}" }).then((r) => r.data),
+  // Kitchen items: ordered vs prepared per dish — the pre-dispatch review on
+  // Kitchen Home. PATCH adjusts what the kitchen actually sends (PREPARING only).
+  kitchenItems: (orderId: string) =>
+    apiFetch<Envelope<KitchenItem[]>>(`/food/orders/${orderId}/kitchen-items`).then((r) => r.data),
+  updateKitchenItems: (orderId: string, items: { id: string; preparedQty: number }[]) =>
+    apiFetch<Envelope<{ updated: number }>>(`/food/orders/${orderId}/kitchen-items`, {
+      method: "PATCH", body: JSON.stringify({ items }),
+    }).then((r) => r.data),
   dispatchOrder: (id: string, body: { deliveryPartnerId?: string; action?: "start" | "dispatch" }) =>
     apiFetch<Envelope<FoodOrder>>(`/food/orders/${id}/dispatch`, { method: "POST", body: JSON.stringify(body) }).then((r) => r.data),
   bulkDispatch: (orderIds: string[], deliveryPartnerId: string) =>

@@ -996,6 +996,80 @@ foodRouter.post("/orders/:id/prepare", authenticate, authorize("FOOD_KITCHEN_SUM
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
+/* ────────────────────────────────────────────────────────────────────────────
+ * Kitchen items — the per-dish quantities the kitchen actually sends.
+ *
+ * GET returns each item's ordered vs prepared figures for the pre-dispatch
+ * review (Kitchen Home); PATCH lets the kitchen adjust prepared amounts while
+ * the order is PREPARING (i.e. after "start cooking", before the van leaves).
+ * preparedQty is the figure the unit lead's receive step compares against.
+ * Deliberately gated on FOOD_KITCHEN_SUMMARY (not FOOD_ALL_ORDERS): it exposes
+ * only kitchen-relevant fields, no order history or tracking.
+ * ──────────────────────────────────────────────────────────────────────────── */
+foodRouter.get("/orders/:id/kitchen-items", authenticate, authorize("FOOD_KITCHEN_SUMMARY", "view"), async (req, res) => {
+  try {
+    const id = req.params["id"]!;
+    const [order] = await db.select().from(foodOrdersTable).where(eq(foodOrdersTable.id, id));
+    if (!order) { res.status(404).json({ success: false, error: "Not found" }); return; }
+    const ids = await resolveAccessiblePropertyIds(req.user!);
+    if (!isAccessible(order.propertyId, ids)) { res.status(403).json({ success: false, error: "Order not accessible" }); return; }
+    const rows = await db.select({ it: foodOrderItemsTable, dishName: dishesTable.name })
+      .from(foodOrderItemsTable)
+      .leftJoin(dishesTable, eq(foodOrderItemsTable.dishId, dishesTable.id))
+      .where(eq(foodOrderItemsTable.orderId, id));
+    res.json({
+      success: true,
+      data: rows.map((r) => ({
+        id: r.it.id,
+        dishId: r.it.dishId,
+        dishName: r.dishName,
+        unit: r.it.unit,
+        orderedQty: r.it.orderedQty != null ? Number(r.it.orderedQty) : null,
+        preparedQty: r.it.preparedQty != null ? Number(r.it.preparedQty) : null,
+      })),
+    });
+  } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
+});
+
+const kitchenItemsSchema = z.object({
+  items: z.array(z.object({
+    id: zId,
+    preparedQty: z.coerce.number().min(0).finite(),
+  })).min(1),
+}).passthrough();
+
+foodRouter.patch("/orders/:id/kitchen-items", authenticate, authorize("FOOD_KITCHEN_SUMMARY", "edit"), async (req, res) => {
+  try {
+    if (!validateBody(kitchenItemsSchema, req, res)) return;
+    const id = req.params["id"]!;
+    const [order] = await db.select().from(foodOrdersTable).where(eq(foodOrdersTable.id, id));
+    if (!order) { res.status(404).json({ success: false, error: "Not found" }); return; }
+    const ids = await resolveAccessiblePropertyIds(req.user!);
+    if (!isAccessible(order.propertyId, ids)) { res.status(403).json({ success: false, error: "Order not accessible" }); return; }
+    // Send amounts are only adjustable while the food is still in the kitchen.
+    if (order.status !== "PREPARING") {
+      res.status(422).json({ success: false, error: `Send quantities can only be adjusted while the order is Preparing (it is ${order.status}).` });
+      return;
+    }
+    const items = (req.body as { items: { id: string; preparedQty: number }[] }).items;
+    const own = await db.select({ id: foodOrderItemsTable.id })
+      .from(foodOrderItemsTable).where(eq(foodOrderItemsTable.orderId, id));
+    const ownIds = new Set(own.map((r) => r.id));
+    if (items.some((it) => !ownIds.has(it.id))) {
+      res.status(422).json({ success: false, error: "Item does not belong to this order" });
+      return;
+    }
+    const now = new Date();
+    for (const it of items) {
+      await db.update(foodOrderItemsTable)
+        .set({ preparedQty: String(it.preparedQty), updatedAt: now })
+        .where(eq(foodOrderItemsTable.id, it.id));
+    }
+    await db.update(foodOrdersTable).set({ updatedAt: now }).where(eq(foodOrdersTable.id, id));
+    res.json({ success: true, data: { updated: items.length } });
+  } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
+});
+
 const dispatchOrderSchema = z.object({
   action: z.enum(["start", "dispatch"]).optional(),
   deliveryPartnerId: zId.nullish(),
