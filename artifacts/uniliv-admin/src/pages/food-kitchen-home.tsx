@@ -78,14 +78,60 @@ function ColumnHead({ icon, label, tone, right }: {
   );
 }
 
-/** One property · headcount row inside a pipeline column. */
+/** One property · headcount row inside a pipeline column. Tapping it unfolds
+ *  the order's dish breakdown (what this property asked for, per dish) so the
+ *  kitchen can see exactly what it's accepting / cooking / sending. */
 function OrderRow({ o }: { o: FoodOrder }) {
+  const [open, setOpen] = React.useState(false);
+  const { data: items, isLoading } = useQuery({
+    queryKey: ["food", "kitchen-items", o.id],
+    queryFn: () => foodApi.kitchenItems(o.id),
+    enabled: open,
+    staleTime: 60_000,
+  });
   return (
-    <div className="flex items-center justify-between gap-2 border-b border-dashed border-border py-1.5 last:border-0">
-      <span className="min-w-0 truncate text-[13px]">{o.propertyName ?? "Property"}</span>
-      <span className="shrink-0 font-mono text-[12.5px] font-semibold tabular-nums text-muted-foreground">
-        {o.residentsCount ?? 0} ppl
-      </span>
+    <div className="border-b border-dashed border-border last:border-0">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="flex w-full items-center justify-between gap-2 py-1.5 text-left"
+      >
+        <span className="flex min-w-0 items-center gap-1.5">
+          <ChevronRight
+            className={cn("h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform", open && "rotate-90")}
+          />
+          <span className="min-w-0 truncate text-[13px]">{o.propertyName ?? "Property"}</span>
+        </span>
+        <span className="shrink-0 font-mono text-[12.5px] font-semibold tabular-nums text-muted-foreground">
+          {o.residentsCount ?? 0} ppl
+        </span>
+      </button>
+      {open && (
+        <div className="mb-2 ml-5 rounded-[9px] border border-border/70 px-2.5 py-1">
+          {isLoading ? (
+            <Skeleton className="my-1 h-10 w-full" />
+          ) : !items?.length ? (
+            <div className="py-1.5 text-[12px] text-muted-foreground">No dish breakdown on this order.</div>
+          ) : (
+            items.map((it) => (
+              <div
+                key={it.id}
+                className="flex items-center justify-between gap-2 border-b border-dashed border-border py-1 last:border-0"
+              >
+                <span className="flex min-w-0 items-center gap-1.5">
+                  <DishIcon name={it.dishName ?? ""} meal={o.mealType} size={22} />
+                  <span className="min-w-0 truncate text-[12.5px]">{it.dishName ?? "Item"}</span>
+                </span>
+                <span className="shrink-0 font-mono text-[12px] font-semibold tabular-nums">
+                  {fmtQty(it.preparedQty ?? it.orderedQty ?? 0)}{" "}
+                  <span className="text-[10px] font-bold uppercase text-muted-foreground">{it.unit}</span>
+                </span>
+              </div>
+            ))
+          )}
+        </div>
+      )}
     </div>
   );
 }
