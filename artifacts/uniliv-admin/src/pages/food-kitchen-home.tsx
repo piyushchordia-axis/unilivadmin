@@ -17,7 +17,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 import { useConfetti } from "@/components/ui/confetti";
-import { MealIcon } from "@/components/meal-icon";
+import { MealIcon, DishIcon } from "@/components/meal-icon";
 import { usePermissions } from "@/lib/use-permissions";
 import { cn } from "@/lib/utils";
 import {
@@ -550,18 +550,31 @@ export default function FoodKitchenHome() {
                   No cook plan for {shortMeal(selected.mealType).toLowerCase()} {dayLabel.toLowerCase()} — it fills in as orders land.
                 </div>
               ) : (
-                <div className="-mr-1 max-h-[240px] overflow-y-auto pr-1">
-                  {selected.dishes.map((d) => (
-                    <div
-                      key={`${d.dishId}|${d.unit}`}
-                      className="flex items-center justify-between gap-2 border-b border-dashed border-border py-1.5 last:border-0"
-                    >
-                      <span className="min-w-0 truncate text-[13px]">{d.dishName}</span>
-                      <span className="shrink-0 font-mono text-[12.5px] font-semibold tabular-nums">
-                        {fmtQty(d.displayQty)} <span className="text-muted-foreground">{d.displayUnit}</span>
-                      </span>
-                    </div>
-                  ))}
+                <div className="-mr-1 max-h-[320px] overflow-y-auto pr-1">
+                  {/* Same dish-card language as the unit lead's Food Overview:
+                      glass DishIcon + name + per-property meta + mono quantity. */}
+                  <div className="grid gap-2.5 py-0.5 sm:grid-cols-2">
+                    {selected.dishes.map((d) => (
+                      <div
+                        key={`${d.dishId}|${d.unit}`}
+                        className="flex items-center gap-2.5 rounded-[12px] border border-border bg-card px-3 py-2.5"
+                      >
+                        <DishIcon name={d.dishName} meal={selected.mealType} size={40} />
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate text-[13px] font-semibold">{d.dishName}</div>
+                          <div className="text-[11px] text-muted-foreground">
+                            {d.byProperty.length > 1
+                              ? `across ${d.byProperty.length} properties`
+                              : d.byProperty[0]?.propertyName ?? "—"}
+                          </div>
+                        </div>
+                        <span className="shrink-0 text-right font-mono text-[13px] font-semibold tabular-nums">
+                          {fmtQty(d.displayQty)}{" "}
+                          <span className="text-[10.5px] font-bold uppercase text-muted-foreground">{d.displayUnit}</span>
+                        </span>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               )}
             </div>
@@ -769,7 +782,10 @@ export default function FoodKitchenHome() {
                         key={it.id}
                         className="flex items-center justify-between gap-2 border-b border-dashed border-border py-1.5 last:border-0"
                       >
-                        <span className="min-w-0 flex-1 truncate text-[13px]">{it.dishName ?? "Item"}</span>
+                        <span className="flex min-w-0 flex-1 items-center gap-2">
+                          <DishIcon name={it.dishName ?? ""} meal={o.mealType} size={28} />
+                          <span className="min-w-0 truncate text-[13px]">{it.dishName ?? "Item"}</span>
+                        </span>
                         <span className="flex shrink-0 items-center gap-1.5">
                           {changed && it.orderedQty != null && (
                             <span className="font-mono text-[11px] tabular-nums text-muted-foreground line-through">
