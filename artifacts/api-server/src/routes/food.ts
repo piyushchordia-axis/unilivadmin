@@ -142,6 +142,18 @@ function validateBody<T>(schema: z.ZodType<T>, req: { body: unknown }, res: {
 // Reusable primitives.
 const zId = z.string().min(1).max(128);
 const zText = z.string().max(1000);
+// Optional contact fields — treat "" as absent, otherwise enforce shape.
+const zEmail = z.preprocess(
+  (v) => (typeof v === "string" && v.trim() === "" ? null : v),
+  z.string().trim().email("Enter a valid email address").max(256).nullish(),
+);
+const zPhone = z.preprocess(
+  (v) => (typeof v === "string" && v.trim() === "" ? null : v),
+  z.string().trim().max(32)
+    .refine((s) => /^\+?[0-9\s\-()]+$/.test(s), "Phone may only contain digits, spaces and + - ( )")
+    .refine((s) => { const d = s.replace(/\D/g, ""); return d.length >= 10 && d.length <= 15; }, "Enter a valid phone number (10–15 digits)")
+    .nullish(),
+);
 const zMealType = z.enum(MEAL_TYPES);
 // Free-form brand string (the brand master is admin-managed; handlers accept any
 // configured code, so we only bound length rather than enum-restrict).
@@ -2417,9 +2429,9 @@ foodRouter.get("/agencies", authenticate, authorize("FOOD_ORG", "view"), async (
 
 const createAgencySchema = z.object({
   name: zText,
-  phone: z.string().max(32).nullish(),
+  phone: zPhone,
   contactName: z.string().max(256).nullish(),
-  email: z.string().max(256).nullish(),
+  email: zEmail,
   isActive: z.boolean().optional(),
 }).passthrough();
 
@@ -2438,9 +2450,9 @@ foodRouter.post("/agencies", authenticate, authorize("FOOD_ORG", "create"), asyn
 
 const updateAgencySchema = z.object({
   name: zText.optional(),
-  phone: z.string().max(32).nullish(),
+  phone: zPhone,
   contactName: z.string().max(256).nullish(),
-  email: z.string().max(256).nullish(),
+  email: zEmail,
   isActive: z.boolean().optional(),
 }).passthrough();
 
