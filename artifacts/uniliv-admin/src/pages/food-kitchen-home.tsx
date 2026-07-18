@@ -80,23 +80,41 @@ function ColumnHead({ icon, label, tone, right }: {
   );
 }
 
-/** One property · headcount row inside a pipeline column. Clicking it opens
- *  the order-details sheet (what this property ordered, per dish). */
-function OrderRow({ o, onOpen }: { o: FoodOrder; onOpen: (o: FoodOrder) => void }) {
+type RowAction = { label: string; onClick: () => void; disabled?: boolean; className: string };
+
+/** One property · headcount row inside a pipeline column. Clicking the property
+ *  name opens the order-details sheet; an optional per-row action (Accept /
+ *  Start) lets the kitchen act on this one property without touching the rest. */
+function OrderRow({ o, onOpen, action }: { o: FoodOrder; onOpen: (o: FoodOrder) => void; action?: RowAction }) {
   return (
-    <button
-      type="button"
-      onClick={() => onOpen(o)}
-      className="group flex w-full items-center justify-between gap-2 border-b border-dashed border-border py-1.5 text-left last:border-0"
-    >
-      <span className="min-w-0 truncate text-[13px] transition-colors group-hover:text-accent-strong">
-        {o.propertyName ?? "Property"}
-      </span>
-      <span className="flex shrink-0 items-center gap-1 font-mono text-[12.5px] font-semibold tabular-nums text-muted-foreground">
+    <div className="flex w-full items-center gap-2 border-b border-dashed border-border py-1.5 last:border-0">
+      <button
+        type="button"
+        onClick={() => onOpen(o)}
+        className="group flex min-w-0 flex-1 items-center gap-1 text-left"
+      >
+        <span className="min-w-0 truncate text-[13px] transition-colors group-hover:text-accent-strong">
+          {o.propertyName ?? "Property"}
+        </span>
+        <ChevronRight className="h-3 w-3 shrink-0 opacity-0 transition-opacity group-hover:opacity-60" />
+      </button>
+      <span className="shrink-0 font-mono text-[12px] tabular-nums text-muted-foreground">
         {o.residentsCount ?? 0} ppl
-        <ChevronRight className="h-3.5 w-3.5 opacity-50 transition-opacity group-hover:opacity-100" />
       </span>
-    </button>
+      {action && (
+        <button
+          type="button"
+          onClick={action.onClick}
+          disabled={action.disabled}
+          className={cn(
+            "h-7 shrink-0 rounded-full px-2.5 text-[12px] font-bold text-white transition-[filter] hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-60",
+            action.className,
+          )}
+        >
+          {action.label}
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -247,6 +265,32 @@ export default function FoodKitchenHome() {
   const acceptMeal = (s: Slot) => runAccept(s.placed, shortMeal(s.mealType), `accept:${s.mealType}`);
   const acceptEverything = () =>
     runAccept(slots.flatMap((s) => s.placed), `${dayLabel}'s orders`, "accept:ALL");
+
+  // Per-property accept / start — act on a single order without touching the rest.
+  const acceptOne = async (o: FoodOrder) => {
+    if (busy) return;
+    setBusy(`accept:one:${o.id}`);
+    try {
+      await foodApi.acceptOrder(o.id);
+      await invalidate();
+      toast({ title: `${o.propertyName ?? "Order"} accepted`, variant: "success" });
+    } catch (e: any) {
+      toast({ title: e?.message || "Could not accept the order", variant: "destructive" });
+    }
+    setBusy(null);
+  };
+  const cookOne = async (o: FoodOrder) => {
+    if (busy) return;
+    setBusy(`cook:one:${o.id}`);
+    try {
+      await foodApi.prepareOrder(o.id);
+      await invalidate();
+      toast({ title: `${o.propertyName ?? "Order"} is on the stove`, variant: "success" });
+    } catch (e: any) {
+      toast({ title: e?.message || "Could not start cooking", variant: "destructive" });
+    }
+    setBusy(null);
+  };
 
   const startCooking = async (s: Slot) => {
     if (busy || s.accepted.length === 0) return;
@@ -620,7 +664,19 @@ export default function FoodKitchenHome() {
                 ) : (
                   <>
                     <div className="flex-1">
-                      {selected.placed.map((o) => <OrderRow key={o.id} o={o} onOpen={setSheetOrder} />)}
+                      {selected.placed.map((o) => (
+                        <OrderRow
+                          key={o.id}
+                          o={o}
+                          onOpen={setSheetOrder}
+                          action={canKitchen ? {
+                            label: busy === `accept:one:${o.id}` ? "…" : "Accept",
+                            onClick: () => acceptOne(o),
+                            disabled: !!busy,
+                            className: "bg-warning",
+                          } : undefined}
+                        />
+                      ))}
                     </div>
                     {canKitchen && (
                       <button
@@ -655,7 +711,19 @@ export default function FoodKitchenHome() {
                 ) : (
                   <>
                     <div className="flex-1">
-                      {selected.accepted.map((o) => <OrderRow key={o.id} o={o} onOpen={setSheetOrder} />)}
+                      {selected.accepted.map((o) => (
+                        <OrderRow
+                          key={o.id}
+                          o={o}
+                          onOpen={setSheetOrder}
+                          action={canKitchen ? {
+                            label: busy === `cook:one:${o.id}` ? "…" : "Cook",
+                            onClick: () => cookOne(o),
+                            disabled: !!busy,
+                            className: "bg-pop",
+                          } : undefined}
+                        />
+                      ))}
                     </div>
                     {canKitchen && (
                       <button
