@@ -998,15 +998,17 @@ export default function FoodDashboard() {
           {selected ? (
             <>
               {/* Meal head — shown in every mode (prototype: "Lunch by 2:00 PM · Not ordered yet") */}
-              {/* On mobile the kebab sits inline at the far right of the title
-                  row and the status pill drops to its own line below; on desktop
-                  (sm+) the pill is inline and the kebab follows it. */}
+              {/* Mobile + tablet: the kebab sits inline at the far right of the
+                  title row and the (often long) status pill drops to its own line
+                  below. Only on wide desktop (lg+) is the pill inline with the
+                  kebab following it — below lg the pill can't share the row without
+                  orphaning the kebab onto a third line. */}
               <div className="mb-4 flex flex-wrap items-center gap-2.5">
                 <span className="order-1 font-display text-[17px] font-bold tracking-[-0.012em]">
                   {MEAL_LABEL[selected.mealType]}
                 </span>
                 <span className="order-2 font-mono text-xs text-muted-foreground">{selected.time}</span>
-                <span className="order-4 basis-full sm:order-3 sm:ml-auto sm:basis-auto">
+                <span className="order-4 basis-full lg:order-3 lg:ml-auto lg:basis-auto">
                   <span
                     className="inline-flex rounded-full px-[11px] py-1 text-xs font-bold"
                     style={{
@@ -1023,16 +1025,16 @@ export default function FoodDashboard() {
                           : selected.statusLine}
                   </span>
                 </span>
-                {/* Order actions collapse into a kebab menu. Mobile: inline at the
-                    far right of the title row (order-3 + ml-auto). Desktop: after
-                    the status pill (order-4). */}
+                {/* Order actions collapse into a kebab menu. Mobile + tablet:
+                    inline at the far right of the title row (order-3 + ml-auto).
+                    Wide desktop (lg+): after the status pill (order-4). */}
                 {((!orderMode && selected.order != null && canReadOrders) || canCancelThis) && (
                   <Popover open={actionsOpen} onOpenChange={setActionsOpen}>
                     <PopoverTrigger asChild>
                       <button
                         type="button"
                         aria-label="Order actions"
-                        className="order-3 ml-auto inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border bg-card text-muted-foreground transition-colors hover:border-accent hover:text-foreground data-[state=open]:border-accent data-[state=open]:text-foreground sm:order-4 sm:ml-0"
+                        className="order-3 ml-auto inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border bg-card text-muted-foreground transition-colors hover:border-accent hover:text-foreground data-[state=open]:border-accent data-[state=open]:text-foreground lg:order-4 lg:ml-0"
                       >
                         <MoreVertical className="h-4 w-4" />
                       </button>
