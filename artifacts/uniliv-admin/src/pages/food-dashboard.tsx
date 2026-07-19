@@ -468,16 +468,27 @@ export default function FoodDashboard() {
   // only for clean analytics); defaults to 0 so a blank/legacy meal's total
   // equals residents.
   const [staffCounts, setStaffCounts] = React.useState<Partial<Record<MealType, number>>>({});
-  const baseHead = myNext?.activeGuests ?? overview?.activeGuests ?? 1;
-  // Residents only — drives the residentsCount column (min 1).
+  // Occupied residents (current occupancy) — the default residents count and the
+  // basis for the 20% ordering cap.
+  const occupied = myNext?.activeGuests ?? overview?.activeGuests ?? 1;
+  // Residents default to current occupancy (0 for a property with no ACTIVE
+  // residents — such a property orders staff-only; the Send button stays disabled
+  // until at least one meal has people).
+  const baseHead = occupied;
+  // 20% cap: residents ordered for a meal can't exceed 120% of occupancy; a
+  // property with 0 occupancy caps residents at 0 (staff stay uncapped). Mirrors
+  // residentsCapForProperty on the server exactly.
+  const residentsCap = occupied > 0 ? Math.ceil(occupied * 1.2) : 0;
+  // Residents only — drives the residentsCount column. Can be 0 (skip the meal).
   const residentsFor = (mealType: MealType): number => headcounts[mealType] ?? baseHead;
   // Staff only — drives the new staffCount column (0 when unset).
   const staffFor = (mealType: MealType): number => staffCounts[mealType] ?? 0;
   // TOTAL people eating this meal = residents + staff. Every quantity (dish qty,
   // per-dish persons default) is computed from this.
   const effHeadFor = (mealType: MealType): number => residentsFor(mealType) + staffFor(mealType);
+  // Residents clamp to [0, cap]: 0 skips the meal, cap enforces the 20% limit.
   const setResidentsFor = (mealType: MealType, n: number) =>
-    setHeadcounts((h) => ({ ...h, [mealType]: Math.max(1, n) }));
+    setHeadcounts((h) => ({ ...h, [mealType]: Math.min(residentsCap, Math.max(0, n)) }));
   const setStaffFor = (mealType: MealType, n: number) =>
     setStaffCounts((s) => ({ ...s, [mealType]: Math.max(0, n) }));
   const { data: preview } = useQuery({
@@ -540,13 +551,21 @@ export default function FoodDashboard() {
       | null
       | undefined;
     if (p) {
+      // Restored residents must respect the CURRENT cap — a draft saved when
+      // occupancy was higher (or a legacy draft with no client cap) could hold a
+      // count above today's residentsCap, which the server would 422 on send.
+      const clampRes = (n: number) => Math.min(residentsCap, Math.max(0, n));
       if (p.headcounts && typeof p.headcounts === "object") {
         // v2+: per-meal residents.
-        setHeadcounts(p.headcounts);
+        const clamped: Partial<Record<MealType, number>> = {};
+        for (const [m, n] of Object.entries(p.headcounts)) {
+          if (typeof n === "number") clamped[m as MealType] = clampRes(n);
+        }
+        setHeadcounts(clamped);
       } else if (typeof p.headcount === "number") {
         // Legacy v1 draft (single scalar) — apply it to every meal so a
         // resumed pre-deploy draft keeps the count the lead had set.
-        const h = p.headcount;
+        const h = clampRes(p.headcount);
         setHeadcounts(Object.fromEntries(MEAL_TYPES.map((m) => [m, h])) as Partial<Record<MealType, number>>);
       }
       // v3+: per-meal staff. v1/v2 drafts have no staffCounts → stays {} → 0.
@@ -1025,6 +1044,8 @@ export default function FoodDashboard() {
                   setResidents={(n) => setResidentsFor(selected.mealType, n)}
                   staff={staffFor(selected.mealType)}
                   setStaff={(n) => setStaffFor(selected.mealType, n)}
+                  occupied={occupied}
+                  residentsMax={residentsCap}
                   previewMeals={(preview?.meals ?? []).filter((m) =>
                     missingMeals.some((x) => x.mealType === m.mealType),
                   )}
@@ -1036,7 +1057,7 @@ export default function FoodDashboard() {
                   setDishPersons={setDishPersonsOverride}
                   onSend={() => placeMutation.mutate()}
                   sending={placeMutation.isPending}
-                  mealsCount={missingMeals.length}
+                  mealsCount={missingMeals.filter((m) => effHeadFor(m.mealType) > 0).length}
                   draftSavedAt={draftSavedAt}
                   savingDraft={savingDraft}
                 />
@@ -1456,7 +1477,7 @@ function WasteColumn({
 /* ───────────────────────── order mode (tomorrow) ───────────────────────── */
 
 function OrderModePanel({
-  myNextCutoffAt, myNextCutoffTime, now, dayWord, dayPossessive, residents, setResidents, staff, setStaff, previewMeals,
+  myNextCutoffAt, myNextCutoffTime, now, dayWord, dayPossessive, residents, setResidents, staff, setStaff, occupied, residentsMax, previewMeals,
   selectedMeal, orderedMeals, onSelectMeal, dishQty, dishPersons, setDishPersons, onSend, sending, mealsCount, draftSavedAt, savingDraft,
 }: {
   myNextCutoffAt: string | null;
@@ -1466,12 +1487,16 @@ function OrderModePanel({
   dayWord: string;
   /** "tomorrow's" or "Wednesday's" — for the send button. */
   dayPossessive: string;
-  /** Residents eating the selected meal (min 1). */
+  /** Residents eating the selected meal (0..residentsMax; 0 skips the meal). */
   residents: number;
   setResidents: (n: number) => void;
   /** Staff eating the selected meal (min 0). Same food as residents. */
   staff: number;
   setStaff: (n: number) => void;
+  /** Occupied residents (current occupancy) — reference + cap basis. */
+  occupied: number;
+  /** Max residents allowed = 120% of occupancy (the 20% ordering cap). */
+  residentsMax: number;
   previewMeals: Array<{
     mealType: MealType;
     label: string;
@@ -1518,24 +1543,29 @@ function OrderModePanel({
               Who's eating {meal?.label ?? "this meal"} {dayWord}?
             </div>
             <div className="mt-0.5 text-xs text-muted-foreground">
-              Quantities below fill in from the total. Each meal has its own count.
+              Occupied: <span className="font-semibold text-foreground">{occupied}</span> residents · order up to{" "}
+              <span className="font-semibold text-foreground">{residentsMax}</span> (120%). Set to 0 to skip this meal.
             </div>
           </div>
           {/* Total = residents + staff — the number the kitchen cooks for. */}
-          <div className="text-xs text-muted-foreground">
-            Total{" "}
-            <span className="font-mono text-sm font-semibold tabular-nums text-foreground">
-              {residents + staff}
-            </span>{" "}
-            ppl
-          </div>
+          {residents + staff === 0 ? (
+            <div className="text-xs font-semibold text-warning">Won't be ordered</div>
+          ) : (
+            <div className="text-xs text-muted-foreground">
+              Total{" "}
+              <span className="font-mono text-sm font-semibold tabular-nums text-foreground">
+                {residents + staff}
+              </span>{" "}
+              ppl
+            </div>
+          )}
         </div>
         <div className="flex flex-wrap items-center gap-x-6 gap-y-2.5">
           <div className="flex items-center gap-2.5">
             <span className="w-[64px] text-xs font-semibold text-muted-foreground">Residents</span>
             <button
               type="button"
-              onClick={() => setResidents(Math.max(1, residents - 1))}
+              onClick={() => setResidents(Math.max(0, residents - 1))}
               aria-label="Fewer residents"
               className="h-[38px] w-[38px] rounded-[10px] border border-border bg-background text-lg text-foreground hover:bg-muted"
             >
@@ -1547,8 +1577,10 @@ function OrderModePanel({
             <button
               type="button"
               onClick={() => setResidents(residents + 1)}
+              disabled={residents >= residentsMax}
               aria-label="More residents"
-              className="h-[38px] w-[38px] rounded-[10px] border border-border bg-background text-lg text-foreground hover:bg-muted"
+              title={residents >= residentsMax ? `Limit reached — max ${residentsMax} (120% of ${occupied} occupied)` : undefined}
+              className="h-[38px] w-[38px] rounded-[10px] border border-border bg-background text-lg text-foreground hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40"
             >
               +
             </button>
@@ -1637,13 +1669,15 @@ function OrderModePanel({
         {isLastMeal ? (
           <button
             type="button"
-            disabled={sending || previewMeals.length === 0}
+            disabled={sending || previewMeals.length === 0 || mealsCount === 0}
             onClick={onSend}
             className="h-[52px] w-full rounded-[12px] bg-success font-display text-[15px] font-bold tracking-[-0.012em] text-white transition-[filter] hover:brightness-105 disabled:opacity-60"
           >
             {sending
               ? "Sending…"
-              : `Place ${dayPossessive} order — all ${mealsCount} meal${mealsCount === 1 ? "" : "s"} ✓`}
+              : mealsCount === 0
+                ? "Set at least one meal to order"
+                : `Place ${dayPossessive} order — all ${mealsCount} meal${mealsCount === 1 ? "" : "s"} ✓`}
           </button>
         ) : (
           <button

@@ -25,6 +25,8 @@ import {
 } from "@/lib/food-api";
 import { useQueryParam } from "@/lib/nav-helpers";
 import { useScopedColumns } from "@/lib/use-scoped-columns";
+import { usePermissions } from "@/lib/use-permissions";
+import { isSuperAdminRole } from "@/lib/permissions";
 import { cn } from "@/lib/utils";
 
 const ALL = "ALL";
@@ -153,6 +155,9 @@ type DayGroup = {
 
 export default function FoodOrders() {
   const [, setLocation] = useLocation();
+  // Data download/export is restricted to Super Admin (+ OPS parity).
+  const { role } = usePermissions();
+  const canExport = isSuperAdminRole(role);
   const paramProperty = useQueryParam("propertyId");
   const paramStatus = useQueryParam("status");
 
@@ -343,21 +348,23 @@ export default function FoodOrders() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="sm" className="h-9" disabled={isLoading || orders.length === 0}>
-                <Download className="mr-1.5 h-4 w-4" /> Export
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem onClick={exportCsv}>
-                <FileText className="mr-2 h-4 w-4" /> Download CSV
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={exportPdf}>
-                <FileDown className="mr-2 h-4 w-4" /> Download PDF
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          {canExport && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="sm" className="h-9" disabled={isLoading || orders.length === 0}>
+                  <Download className="mr-1.5 h-4 w-4" /> Export
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={exportCsv}>
+                  <FileText className="mr-2 h-4 w-4" /> Download CSV
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={exportPdf}>
+                  <FileDown className="mr-2 h-4 w-4" /> Download PDF
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
           <Button
             className="h-9 rounded-[12px] bg-accent font-bold text-white hover:bg-accent/90"
             onClick={() => setLocation("/food/dashboard")}

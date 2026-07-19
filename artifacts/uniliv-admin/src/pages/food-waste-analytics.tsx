@@ -24,6 +24,8 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { useToast } from "@/hooks/use-toast";
 import { apiDownload } from "@/lib/api-fetch";
+import { usePermissions } from "@/lib/use-permissions";
+import { isSuperAdminRole } from "@/lib/permissions";
 import {
   foodApi, foodKeys, MEAL_LABEL,
   type WasteAnalyticsData, type WasteGranularity, type FoodLookups, type City, type Cluster,
@@ -76,6 +78,9 @@ function ChartSkeleton() {
 
 export default function FoodWasteAnalytics() {
   const { toast } = useToast();
+  // Data download/export is restricted to Super Admin (+ OPS parity).
+  const { role } = usePermissions();
+  const canExport = isSuperAdminRole(role);
 
   const today = format(new Date(), "yyyy-MM-dd");
   const ninetyDaysAgo = format(subDays(new Date(), 90), "yyyy-MM-dd");
@@ -186,8 +191,10 @@ export default function FoodWasteAnalytics() {
     }
   };
 
-  // Reusable per-widget download dropdown (CSV / Excel / PDF).
+  // Reusable per-widget download dropdown (CSV / Excel / PDF). Restricted to
+  // Super Admin (+ OPS parity); hidden for everyone else.
   const ExportMenu = ({ widget }: { widget: WidgetKey }) => (
+    !canExport ? null :
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button variant="outline" size="sm" className="h-8 gap-1.5" disabled={downloading === widget}>

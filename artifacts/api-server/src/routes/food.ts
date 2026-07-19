@@ -45,7 +45,7 @@ import { and, eq, or, ilike, sql, desc, asc, gte, lte, lt, inArray, isNull, isNo
 import type { AnyColumn } from "drizzle-orm";
 import { canTransition } from "../lib/order-transitions.js";
 import { z } from "zod";
-import { authenticate } from "../middlewares/auth.js";
+import { authenticate, authorize as requireRoles } from "../middlewares/auth.js";
 import { authorize, authorizeAny } from "../middlewares/authorize.js";
 import { can, type UserRole } from "../lib/permissions.js";
 import { getPagination, buildMeta } from "../lib/paginate.js";
@@ -71,7 +71,7 @@ import { notifyOrderEvent } from "../lib/notification-service.js";
 import { toCsv, toPdf, fmtDate, fmtDateTime, fileDateStamp, sanitizeForFilename } from "../lib/export-service.js";
 // Shared order cut-off enforcement (single source of truth lives in food-ops.ts,
 // alongside resolveCutoff()/atTime()) so /orders and /order-batches stay consistent.
-import { checkOrderCutoff, createDispatchForOrders } from "./food-ops.js";
+import { checkOrderCutoff, createDispatchForOrders, residentsCapForProperty } from "./food-ops.js";
 import { ymdToIstDayStart, todayIstYmd } from "../lib/tz.js";
 
 export const foodRouter: Router = Router();
@@ -877,6 +877,17 @@ foodRouter.put("/orders/:id", authenticate, authorize("FOOD_PLACE_ORDER", "edit"
     const b = req.body || {};
     const update: Record<string, unknown> = { updatedAt: new Date() };
 
+    // No headcount edits to a still-PLACED order once the ordering cut-off has
+    // passed — the unit lead's editing window closes at the cut-off. Orders the
+    // kitchen has already ACCEPTED/DISPATCHED are corrected through the
+    // post-dispatch recompute path below (fewer residents showed up, etc.), which
+    // is deliberately NOT gated on the cut-off; otherwise that path is dead since
+    // dispatch always happens after the cut-off.
+    if ((b.residentsCount != null || b.staffCount != null) && order.status === "PLACED") {
+      const cutoffError = await checkOrderCutoff(order.brand, order.propertyId, order.serviceDate);
+      if (cutoffError) { res.status(422).json({ success: false, error: `This order can no longer be edited — ${cutoffError}` }); return; }
+    }
+
     // People count drives item quantities. Staff eat the same food, so the basis
     // that scales every item is the TOTAL (residents + staff); the residents/staff
     // split is persisted separately (Approach A). Each count defaults to the order's
@@ -891,6 +902,10 @@ foodRouter.put("/orders/:id", authenticate, authorize("FOOD_PLACE_ORDER", "edit"
     if (b.residentsCount != null) {
       residents = Number(b.residentsCount);
       if (!Number.isFinite(residents) || residents < 0) { res.status(400).json({ success: false, error: "residentsCount must be a non-negative number" }); return; }
+      if (residents !== prevResidents) {
+        const { occupancy, cap } = await residentsCapForProperty(order.propertyId);
+        if (residents > cap) { res.status(422).json({ success: false, error: `Residents (${residents}) exceed the ${cap} limit — at most 120% of your ${occupancy} occupied residents.` }); return; }
+      }
     }
     if (b.staffCount != null) {
       staff = Number(b.staffCount);
@@ -1526,10 +1541,14 @@ async function reportsCsvHandler(req: any, res: any) {
     res.send(csv);
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 }
-foodRouter.get("/reports/export", authenticate, authorize("FOOD_REPORTS", "view"), reportsCsvHandler);
-foodRouter.get("/reports/export.csv", authenticate, authorize("FOOD_REPORTS", "view"), reportsCsvHandler);
+// Data download/export is restricted to Super Admin (Data Team role TBD).
+// NOTE: foodRouter is mounted BEFORE foodOpsRouter at the same /food base
+// (routes/index.ts), so these routes shadow the same paths in food-ops.ts —
+// the guard MUST live here on every extension variant, not only the alias.
+foodRouter.get("/reports/export", authenticate, requireRoles("SUPER_ADMIN", "OPS_EXCELLENCE"), reportsCsvHandler);
+foodRouter.get("/reports/export.csv", authenticate, requireRoles("SUPER_ADMIN", "OPS_EXCELLENCE"), reportsCsvHandler);
 
-foodRouter.get("/reports/export.pdf", authenticate, authorize("FOOD_REPORTS", "view"), async (req, res) => {
+foodRouter.get("/reports/export.pdf", authenticate, requireRoles("SUPER_ADMIN", "OPS_EXCELLENCE"), async (req, res) => {
   try {
     const { rows, propertyName, dateRange } = await fetchReportOrdersForExport(req);
     const pdf = await toPdf({ title: "Food Orders Report", headers: REPORT_ORDER_HEADERS, rows, propertyName, dateRange });

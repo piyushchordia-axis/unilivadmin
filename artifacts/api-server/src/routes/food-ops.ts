@@ -43,7 +43,7 @@ import {
 import { and, eq, or, ilike, sql, desc, asc, gte, lte, lt, inArray, notInArray, isNull, isNotNull } from "drizzle-orm";
 import { getObjectUrl, isStorageConfigured } from "@workspace/storage";
 import { canTransition } from "../lib/order-transitions.js";
-import { authenticate } from "../middlewares/auth.js";
+import { authenticate, authorize as requireRoles } from "../middlewares/auth.js";
 import { authorize } from "../middlewares/authorize.js";
 import { getPagination, buildMeta } from "../lib/paginate.js";
 import { isSuperAdmin } from "../lib/authz.js";
@@ -211,6 +211,21 @@ export async function checkOrderCutoff(
     return `Orders can only be placed for the next service day (${d}/${m}/${y}).`;
   }
   return null;
+}
+
+/** 20% ordering cap: the max RESIDENTS a property may order for a meal = 120% of
+ *  its current occupancy (active residents). A property with 0 ACTIVE residents
+ *  has cap 0 — you can't order resident meals for residents you don't have; staff
+ *  are a separate, UNCAPPED population, so such a property orders staff-only. */
+export async function residentsCapForProperty(
+  propertyId: string,
+): Promise<{ occupancy: number; cap: number }> {
+  const [occRow] = await db
+    .select({ c: sql<number>`count(*)::int` })
+    .from(residentsTable)
+    .where(and(eq(residentsTable.propertyId, propertyId), eq(residentsTable.status, "ACTIVE")));
+  const occupancy = Number(occRow?.c ?? 0);
+  return { occupancy, cap: occupancy > 0 ? Math.ceil(occupancy * 1.2) : 0 };
 }
 
 /** Expected delivery time = serviceDate@serviceTime + leadTime (delay baseline). */
@@ -1345,6 +1360,18 @@ foodOpsRouter.post("/order-batches", authenticate, authorize("FOOD_PLACE_ORDER",
       return;
     }
 
+    // 20% ordering cap (validated up-front so we never insert a partial batch).
+    // cap is 0 for a property with no ACTIVE residents → residents must be 0
+    // (staff-only order); staff itself is never capped here.
+    const { occupancy, cap: residentsCap } = await residentsCapForProperty(propertyId);
+    for (const meal of mealsToPlace) {
+      const r = Math.max(0, meal.residentsCount != null ? Number(meal.residentsCount) : persons);
+      if (r > residentsCap) {
+        res.status(422).json({ success: false, error: `Residents for ${meal.mealType} (${r}) exceed the ${residentsCap} limit — at most 120% of your ${occupancy} occupied residents. Add staff separately if needed.` });
+        return;
+      }
+    }
+
     const now = new Date();
     const batchNumber = await nextSeq(`BATCH-${now.getFullYear()}-`, foodOrderBatchesTable.batchNumber, foodOrderBatchesTable);
     const [batch] = await db.insert(foodOrderBatchesTable).values({
@@ -1395,7 +1422,10 @@ foodOpsRouter.post("/order-batches", authenticate, authorize("FOOD_PLACE_ORDER",
         // residentsCount = residents ONLY (Approach A). Preserve the legacy
         // zero-guard (no headcount → first item's basis) but ONLY when the TOTAL
         // is 0 — never fold staff into residentsCount, which would double-count.
-        residentsCount: mealPersons > 0 ? mealResidents : itemRows[0]!.personsCount,
+        // The up-front cap loop validates the residents FALLBACK, not this per-item
+        // value, so clamp it to the cap too — otherwise a total-0 meal with an
+        // unbounded item personsCount would silently bypass the 20% cap.
+        residentsCount: mealPersons > 0 ? mealResidents : Math.min(itemRows[0]!.personsCount, residentsCap),
         staffCount: mealStaff,
         totalQuantity: String(totalQty), status: "PLACED", serviceDate: sd, batchId: batch!.id,
         expectedDeliveryAt: expDelivery, notes: b.notes ?? null, createdById: req.user!.id, updatedAt: now,
@@ -2057,7 +2087,7 @@ async function buildWasteWidgetTable(widget: string, req: any): Promise<{
   };
 }
 
-foodOpsRouter.get("/waste-analytics/export.:fmt", authenticate, authorize("FOOD_REPORTS", "view"), async (req, res) => {
+foodOpsRouter.get("/waste-analytics/export.:fmt", authenticate, requireRoles("SUPER_ADMIN", "OPS_EXCELLENCE"), async (req, res) => {
   try {
     // Normalise fmt: accept csv | xlsx | pdf (xlsx aliases this codebase's xls encoder).
     const fmtRaw = String(req.params["fmt"] ?? "").toLowerCase();
@@ -2625,17 +2655,17 @@ async function serveReportExport(req: any, res: any, fmt: "csv" | "pdf" | "xls")
   }
 }
 
-foodOpsRouter.get("/reports/export.csv", authenticate, authorize("FOOD_REPORTS", "view"), async (req, res) => {
+foodOpsRouter.get("/reports/export.csv", authenticate, requireRoles("SUPER_ADMIN", "OPS_EXCELLENCE"), async (req, res) => {
   try { await serveReportExport(req, res, "csv"); }
   catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-foodOpsRouter.get("/reports/export.pdf", authenticate, authorize("FOOD_REPORTS", "view"), async (req, res) => {
+foodOpsRouter.get("/reports/export.pdf", authenticate, requireRoles("SUPER_ADMIN", "OPS_EXCELLENCE"), async (req, res) => {
   try { await serveReportExport(req, res, "pdf"); }
   catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-foodOpsRouter.get("/reports/export.xls", authenticate, authorize("FOOD_REPORTS", "view"), async (req, res) => {
+foodOpsRouter.get("/reports/export.xls", authenticate, requireRoles("SUPER_ADMIN", "OPS_EXCELLENCE"), async (req, res) => {
   try { await serveReportExport(req, res, "xls"); }
   catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
@@ -2771,7 +2801,7 @@ function reportFilename(fileBase: string, propertyName: string | null, ext: stri
 
 const EXPORT_REPORTS = new Set(["orders", "variance", "waste", "ontime"]);
 
-foodOpsRouter.get("/reports/export.:fmt", authenticate, authorize("FOOD_REPORTS", "view"), async (req, res) => {
+foodOpsRouter.get("/reports/export.:fmt", authenticate, requireRoles("SUPER_ADMIN", "OPS_EXCELLENCE"), async (req, res) => {
   try {
     const fmt = String(req.params["fmt"] ?? "").toLowerCase();
     if (!["csv", "pdf", "xls"].includes(fmt)) {
@@ -3157,7 +3187,7 @@ function guestsFilename(propertyName: string | null, ext: string): string {
   return `active-guests${prop}-${fileDateStamp()}.${ext}`;
 }
 
-foodOpsRouter.get("/guests/export.csv", authenticate, authorize("FOOD_DASHBOARD", "view"), async (req, res) => {
+foodOpsRouter.get("/guests/export.csv", authenticate, requireRoles("SUPER_ADMIN", "OPS_EXCELLENCE"), async (req, res) => {
   try {
     const out = await guestExportRows(req, res); if (!out) return;
     const csv = toCsv({ title: "Active Guests", headers: GUEST_HEADERS, rows: out.rows, propertyName: out.propertyName });
@@ -3167,7 +3197,7 @@ foodOpsRouter.get("/guests/export.csv", authenticate, authorize("FOOD_DASHBOARD"
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-foodOpsRouter.get("/guests/export.pdf", authenticate, authorize("FOOD_DASHBOARD", "view"), async (req, res) => {
+foodOpsRouter.get("/guests/export.pdf", authenticate, requireRoles("SUPER_ADMIN", "OPS_EXCELLENCE"), async (req, res) => {
   try {
     const out = await guestExportRows(req, res); if (!out) return;
     const pdf = await toPdf({ title: "Active Guests", headers: GUEST_HEADERS, rows: out.rows, propertyName: out.propertyName });
@@ -3177,7 +3207,7 @@ foodOpsRouter.get("/guests/export.pdf", authenticate, authorize("FOOD_DASHBOARD"
   } catch (err) { req.log.error(err); res.status(500).json({ success: false, error: "Internal server error" }); }
 });
 
-foodOpsRouter.get("/guests/export.xls", authenticate, authorize("FOOD_DASHBOARD", "view"), async (req, res) => {
+foodOpsRouter.get("/guests/export.xls", authenticate, requireRoles("SUPER_ADMIN", "OPS_EXCELLENCE"), async (req, res) => {
   try {
     const out = await guestExportRows(req, res); if (!out) return;
     const xls = toXls({ title: "Active Guests", headers: GUEST_HEADERS, rows: out.rows, propertyName: out.propertyName });

@@ -21,6 +21,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useAppStore } from "@/lib/store";
 import { useQueryParam } from "@/lib/nav-helpers";
 import { usePermissions } from "@/lib/use-permissions";
+import { isSuperAdminRole } from "@/lib/permissions";
 import { apiDownload } from "@/lib/api-fetch";
 import { foodApi, foodKeys, type GuestRow } from "@/lib/food-api";
 
@@ -49,7 +50,8 @@ export default function FoodGuests() {
   // unreachable.
   const paramProperty = useQueryParam("propertyId");
   const { propertyId: globalProperty, setPropertyId } = useAppStore();
-  const { me } = usePermissions();
+  const { me, role } = usePermissions();
+  const canExport = isSuperAdminRole(role);
   const isSingleProperty = Boolean(me?.propertyId);
   const { toast } = useToast();
   const [, setLocation] = useLocation();
@@ -166,30 +168,32 @@ export default function FoodGuests() {
             )}
           </p>
         </div>
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="outline" disabled={exporting !== null} className="rounded-[10px]">
-              <Download className="mr-2 h-4 w-4" />
-              {exporting ? "Exporting…" : "Download CSV"}
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-48">
-            <DropdownMenuLabel>Download list</DropdownMenuLabel>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={() => handleExport("csv")}>
-              <FileDown className="mr-2 h-4 w-4 text-muted-foreground" />
-              CSV
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => handleExport("xls")}>
-              <FileSpreadsheet className="mr-2 h-4 w-4 text-success" />
-              Excel (.xls)
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => handleExport("pdf")}>
-              <FileText className="mr-2 h-4 w-4 text-destructive" />
-              PDF
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        {canExport && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" disabled={exporting !== null} className="rounded-[10px]">
+                <Download className="mr-2 h-4 w-4" />
+                {exporting ? "Exporting…" : "Download CSV"}
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-48">
+              <DropdownMenuLabel>Download list</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={() => handleExport("csv")}>
+                <FileDown className="mr-2 h-4 w-4 text-muted-foreground" />
+                CSV
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => handleExport("xls")}>
+                <FileSpreadsheet className="mr-2 h-4 w-4 text-success" />
+                Excel (.xls)
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => handleExport("pdf")}>
+                <FileText className="mr-2 h-4 w-4 text-destructive" />
+                PDF
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
       </div>
 
       {/* Property scope (multi-property users) + search */}

@@ -334,10 +334,10 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
   const [mobileOpen, setMobileOpen] = React.useState(false)
 
-  // Desktop sidebar collapse — icon rail (68px) by default, expands to 248px.
-  // Deliberately NOT persisted (matches the design prototype): every page
-  // load starts collapsed; expanding is a within-session choice.
-  const [collapsed, setCollapsed] = React.useState(true)
+  // Desktop sidebar: opens EXPANDED (248px, text menu) by default for
+  // readability; collapsing to the 68px icon rail is a within-session choice.
+  // Deliberately NOT persisted.
+  const [collapsed, setCollapsed] = React.useState(false)
   const toggleCollapsed = React.useCallback(() => setCollapsed((c) => !c), [])
 
   const handleLogout = () => {

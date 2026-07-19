@@ -337,29 +337,32 @@ export default function FoodReports() {
               : "How your properties are doing — people fed, waste and milestones."}
           </p>
         </div>
-        {/* O20 — Export: report → format dropdown */}
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="outline" size="sm" disabled={downloading} className="gap-1.5">
-              <Download className="h-4 w-4" />
-              {downloading ? "Preparing…" : "Download"}
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            {EXPORT_REPORTS.map((r) => (
-              <DropdownMenuSub key={r.key}>
-                <DropdownMenuSubTrigger>{r.label}</DropdownMenuSubTrigger>
-                <DropdownMenuSubContent>
-                  {EXPORT_FORMATS.map((f) => (
-                    <DropdownMenuItem key={f.key} onClick={() => runExport(r.key, f.key)}>
-                      {f.label}
-                    </DropdownMenuItem>
-                  ))}
-                </DropdownMenuSubContent>
-              </DropdownMenuSub>
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
+        {/* O20 — Export: report → format dropdown. Download is restricted to
+            Super Admin (+ OPS parity); everyone else can still view reports. */}
+        {isSuperAdmin && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="sm" disabled={downloading} className="gap-1.5">
+                <Download className="h-4 w-4" />
+                {downloading ? "Preparing…" : "Download"}
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              {EXPORT_REPORTS.map((r) => (
+                <DropdownMenuSub key={r.key}>
+                  <DropdownMenuSubTrigger>{r.label}</DropdownMenuSubTrigger>
+                  <DropdownMenuSubContent>
+                    {EXPORT_FORMATS.map((f) => (
+                      <DropdownMenuItem key={f.key} onClick={() => runExport(r.key, f.key)}>
+                        {f.label}
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuSubContent>
+                </DropdownMenuSub>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
       </div>
 
       {/* Slim filter row: period presets + property/brand scope */}
