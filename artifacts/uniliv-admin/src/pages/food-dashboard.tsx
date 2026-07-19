@@ -998,36 +998,41 @@ export default function FoodDashboard() {
           {selected ? (
             <>
               {/* Meal head — shown in every mode (prototype: "Lunch by 2:00 PM · Not ordered yet") */}
+              {/* On mobile the kebab sits inline at the far right of the title
+                  row and the status pill drops to its own line below; on desktop
+                  (sm+) the pill is inline and the kebab follows it. */}
               <div className="mb-4 flex flex-wrap items-center gap-2.5">
-                <span className="font-display text-[17px] font-bold tracking-[-0.012em]">
+                <span className="order-1 font-display text-[17px] font-bold tracking-[-0.012em]">
                   {MEAL_LABEL[selected.mealType]}
                 </span>
-                <span className="font-mono text-xs text-muted-foreground">{selected.time}</span>
-                <span className="flex-1" />
-                <span
-                  className="rounded-full px-[11px] py-1 text-xs font-bold"
-                  style={{
-                    background: `color-mix(in srgb, ${STATE_TINT[displayState]} 16%, var(--card))`,
-                    color: STATE_TINT[displayState],
-                  }}
-                >
-                  {orderMode
-                    ? "Not ordered yet"
-                    : selected.order == null
-                      ? "Not ordered"
-                      : displayState === "done" && wasteRecorded
-                        ? "Received & confirmed · waste recorded ✓"
-                        : selected.statusLine}
+                <span className="order-2 font-mono text-xs text-muted-foreground">{selected.time}</span>
+                <span className="order-4 basis-full sm:order-3 sm:ml-auto sm:basis-auto">
+                  <span
+                    className="inline-flex rounded-full px-[11px] py-1 text-xs font-bold"
+                    style={{
+                      background: `color-mix(in srgb, ${STATE_TINT[displayState]} 16%, var(--card))`,
+                      color: STATE_TINT[displayState],
+                    }}
+                  >
+                    {orderMode
+                      ? "Not ordered yet"
+                      : selected.order == null
+                        ? "Not ordered"
+                        : displayState === "done" && wasteRecorded
+                          ? "Received & confirmed · waste recorded ✓"
+                          : selected.statusLine}
+                  </span>
                 </span>
-                {/* Order actions collapse into a kebab menu — same on desktop and
-                    mobile — so the status row stays compact. */}
+                {/* Order actions collapse into a kebab menu. Mobile: inline at the
+                    far right of the title row (order-3 + ml-auto). Desktop: after
+                    the status pill (order-4). */}
                 {((!orderMode && selected.order != null && canReadOrders) || canCancelThis) && (
                   <Popover open={actionsOpen} onOpenChange={setActionsOpen}>
                     <PopoverTrigger asChild>
                       <button
                         type="button"
                         aria-label="Order actions"
-                        className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border bg-card text-muted-foreground transition-colors hover:border-accent hover:text-foreground data-[state=open]:border-accent data-[state=open]:text-foreground"
+                        className="order-3 ml-auto inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border bg-card text-muted-foreground transition-colors hover:border-accent hover:text-foreground data-[state=open]:border-accent data-[state=open]:text-foreground sm:order-4 sm:ml-0"
                       >
                         <MoreVertical className="h-4 w-4" />
                       </button>
