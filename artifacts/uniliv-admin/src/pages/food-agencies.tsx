@@ -26,6 +26,14 @@ import {
 const cx = (...c: (string | false | undefined)[]) => c.filter(Boolean).join(" ");
 const labelize = (s: string) => s.replace(/_/g, " ").toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
 
+// Contact-field validators — mirror the backend rules in food.ts (zEmail/zPhone).
+const isValidEmail = (s: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
+const isValidPhone = (s: string) => {
+  if (!/^\+?[0-9\s\-()]+$/.test(s)) return false;
+  const digits = s.replace(/\D/g, "");
+  return digits.length >= 10 && digits.length <= 15;
+};
+
 const VEHICLE_TYPES: VehicleType[] = ["VAN", "BIKE", "TRUCK", "CAR", "TEMPO", "OTHER"];
 
 // Small confirm-delete helper modal (mirrors food-settings).
@@ -71,7 +79,7 @@ export function AgenciesTab() {
 
   const agSave = useMutation({
     mutationFn: () => {
-      const b = { name: agForm.name.trim(), phone: agForm.phone || null, contactName: agForm.contactName || null, email: agForm.email || null, isActive: agForm.isActive };
+      const b = { name: agForm.name.trim(), phone: agForm.phone.trim() || null, contactName: agForm.contactName.trim() || null, email: agForm.email.trim() || null, isActive: agForm.isActive };
       return agEdit ? foodApi.updateAgency(agEdit.id, b) : foodApi.createAgency(b);
     },
     onSuccess: () => { toast({ title: agEdit ? "Agency updated" : "Agency created" }); invalidate(); setAgOpen(false); },
@@ -152,7 +160,12 @@ export function AgenciesTab() {
         open={agOpen}
         onOpenChange={setAgOpen}
         title={agEdit ? "Edit Agency" : "Add Agency"}
-        onSave={() => { if (!agForm.name.trim()) { toast({ title: "Name is required", variant: "destructive" }); return; } agSave.mutate(); }}
+        onSave={() => {
+          if (!agForm.name.trim()) { toast({ title: "Name is required", variant: "destructive" }); return; }
+          if (agForm.email.trim() && !isValidEmail(agForm.email.trim())) { toast({ title: "Enter a valid email address", variant: "destructive" }); return; }
+          if (agForm.phone.trim() && !isValidPhone(agForm.phone.trim())) { toast({ title: "Enter a valid phone number (10–15 digits)", variant: "destructive" }); return; }
+          agSave.mutate();
+        }}
         isSaving={agSave.isPending}
         saveLabel={agEdit ? "Save" : "Create"}
       >
@@ -160,9 +173,33 @@ export function AgenciesTab() {
           <div><Label>Name *</Label><Input value={agForm.name} onChange={(e) => setAgForm({ ...agForm, name: e.target.value })} placeholder="e.g. Swift Logistics" autoFocus /></div>
           <div className="grid grid-cols-2 gap-3">
             <div><Label>Contact name</Label><Input value={agForm.contactName} onChange={(e) => setAgForm({ ...agForm, contactName: e.target.value })} /></div>
-            <div><Label>Phone</Label><Input value={agForm.phone} onChange={(e) => setAgForm({ ...agForm, phone: e.target.value })} className="font-mono" /></div>
+            <div>
+              <Label>Phone</Label>
+              <Input
+                value={agForm.phone}
+                onChange={(e) => setAgForm({ ...agForm, phone: e.target.value })}
+                className={cx("font-mono", agForm.phone.trim() && !isValidPhone(agForm.phone.trim()) && "border-destructive focus-visible:ring-destructive")}
+                inputMode="tel"
+                placeholder="e.g. 9876543210"
+              />
+              {agForm.phone.trim() && !isValidPhone(agForm.phone.trim()) && (
+                <p className="mt-1 text-xs text-destructive">Enter a valid phone number (10–15 digits).</p>
+              )}
+            </div>
           </div>
-          <div><Label>Email</Label><Input type="email" value={agForm.email} onChange={(e) => setAgForm({ ...agForm, email: e.target.value })} /></div>
+          <div>
+            <Label>Email</Label>
+            <Input
+              type="email"
+              value={agForm.email}
+              onChange={(e) => setAgForm({ ...agForm, email: e.target.value })}
+              className={cx(agForm.email.trim() && !isValidEmail(agForm.email.trim()) && "border-destructive focus-visible:ring-destructive")}
+              placeholder="e.g. ops@agency.com"
+            />
+            {agForm.email.trim() && !isValidEmail(agForm.email.trim()) && (
+              <p className="mt-1 text-xs text-destructive">Enter a valid email address.</p>
+            )}
+          </div>
           <div className="flex items-center justify-between border-t pt-3">
             <Label>Active</Label>
             <Switch checked={agForm.isActive} onCheckedChange={(v) => setAgForm({ ...agForm, isActive: v })} />

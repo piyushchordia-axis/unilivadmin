@@ -4,6 +4,11 @@ packages:
   - lib/integrations/*
   - scripts
 
+allowBuilds:
+  core-js: true
+  esbuild: true
+  msgpackr-extract: true
+
 autoInstallPeers: false
 
 catalog:
