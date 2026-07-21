@@ -7,7 +7,7 @@ import {
 } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
-  Select, SelectContent, SelectTrigger, SelectValue,
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { PropertyOptions } from "@/components/property-options";
 import { Button } from "@/components/ui/button";
@@ -1221,6 +1221,101 @@ function TrackColumn({ detail, order }: { detail: OrderDetail | null; order: Foo
   );
 }
 
+/** Additional Food — log a top-up sourced from another property after the order
+ *  is received. Source-property dropdown + the meal's dishes on the place-order
+ *  stepper. Purely a log (no order, no cap, no approval, no notification). */
+function AdditionalFoodDialog({
+  order, open, onOpenChange,
+}: {
+  order: OrderDetail;
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+}) {
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  const { data: properties } = useQuery({
+    queryKey: ["food", "property-options"],
+    queryFn: () => foodApi.propertyOptions(),
+    enabled: open,
+    staleTime: 5 * 60_000,
+  });
+  const [sourceId, setSourceId] = React.useState("");
+  const [qtys, setQtys] = React.useState<Record<string, number>>({});
+  React.useEffect(() => {
+    if (open) { setSourceId(""); setQtys({}); }
+  }, [open]);
+  const total = Object.values(qtys).reduce((s, n) => s + (n || 0), 0);
+  const mut = useMutation({
+    mutationFn: () =>
+      foodApi.addAdditionalFood(order.id, {
+        sourcePropertyId: sourceId,
+        items: order.items
+          .filter((it) => (qtys[it.dishId] ?? 0) > 0)
+          .map((it) => ({ dishId: it.dishId, qty: qtys[it.dishId]! })),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["food", "order"] });
+      qc.invalidateQueries({ queryKey: ["food", "orders"] });
+      toast({ title: "Additional food logged", variant: "success" });
+      onOpenChange(false);
+    },
+    onError: (e: any) => toast({ title: e?.message || "Couldn't log additional food", variant: "destructive" }),
+  });
+  // Food is sourced from ANOTHER property, so exclude this one.
+  const sources = (properties ?? []).filter((p) => p.id !== order.propertyId);
+  const canSubmit = !!sourceId && total > 0 && !mut.isPending;
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>Additional food</DialogTitle>
+          <DialogDescription>
+            Log top-up food arranged from another property for {MEAL_LABEL[order.mealType]}.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4">
+          <div>
+            <label className="mb-1.5 block text-xs font-semibold text-muted-foreground">Source property</label>
+            <Select value={sourceId} onValueChange={setSourceId}>
+              <SelectTrigger><SelectValue placeholder="Where did the food come from?" /></SelectTrigger>
+              <SelectContent>
+                {sources.map((p) => (
+                  <SelectItem key={p.id} value={p.id}>{p.name}{p.city ? ` · ${p.city}` : ""}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="max-h-[46vh] space-y-2 overflow-y-auto pr-1">
+            {order.items.map((it) => {
+              const q = qtys[it.dishId] ?? 0;
+              return (
+                <div key={it.id} className="flex items-center justify-between gap-2 rounded-[10px] border border-border bg-card px-3 py-2">
+                  <div className="min-w-0">
+                    <div className="truncate text-[13px] font-semibold">{it.dishName ?? "Item"}</div>
+                    <div className="text-[11px] uppercase text-muted-foreground">{it.unit}</div>
+                  </div>
+                  <MiniStepper
+                    value={q}
+                    display={String(q)}
+                    onMinus={() => setQtys((s) => ({ ...s, [it.dishId]: Math.max(0, q - 1) }))}
+                    onPlus={() => setQtys((s) => ({ ...s, [it.dishId]: q + 1 }))}
+                  />
+                </div>
+              );
+            })}
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={mut.isPending}>Cancel</Button>
+          <Button onClick={() => mut.mutate()} disabled={!canSubmit}>
+            {mut.isPending ? "Logging…" : "Log additional food"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function ReceiveColumn({
   detail, state, canConfirm, ack, onAck, receivedOf, sentOf, setReceived,
   mismatchCount, reason, setReason, confirmDisabled, onConfirm, confirming, journeyDay,
@@ -1244,12 +1339,29 @@ function ReceiveColumn({
   const delivered = detail?.status === "DELIVERED";
   const atGate = state === "action-confirm" && canConfirm;
   const REASONS = ["Spilled in transit", "Short from kitchen", "Counting mistake"];
+  const [addlOpen, setAddlOpen] = React.useState(false);
+  // Per-dish additional-food totals (top-ups sourced from other properties).
+  const additionalByDish = React.useMemo(() => {
+    const m = new Map<string, number>();
+    for (const req of detail?.additionalFood ?? [])
+      for (const it of req.items) m.set(it.dishId, (m.get(it.dishId) ?? 0) + it.qty);
+    return m;
+  }, [detail?.additionalFood]);
   return (
     <div className="flex flex-col rounded-[12px] border border-border bg-background px-4 py-3.5">
       <ColumnHead
         icon={<Check className="h-[13px] w-[13px]" strokeWidth={2.5} />}
         label="Received"
         tone="var(--success)"
+        right={delivered && canConfirm && detail ? (
+          <button
+            type="button"
+            onClick={() => setAddlOpen(true)}
+            className="inline-flex items-center gap-1 rounded-full border border-border bg-card px-2.5 py-1 text-[11px] font-semibold text-muted-foreground transition-colors hover:border-accent hover:text-foreground"
+          >
+            + Additional Food
+          </button>
+        ) : undefined}
       />
       {delivered || state === "done" || state === "action-waste" ? (
         <>
@@ -1258,18 +1370,38 @@ function ReceiveColumn({
             <span className="text-[13px] font-semibold text-success">Received & confirmed</span>
           </div>
           <div className="flex flex-col">
-            {(detail?.items ?? []).map((i) => (
-              <div key={i.id} className="flex items-center justify-between gap-2 border-b border-dashed border-border py-1.5 last:border-0">
-                <span className="text-[13px]">{i.dishName ?? "Item"}</span>
-                <span className="font-mono text-[12.5px] font-semibold tabular-nums text-muted-foreground">
-                  {fmtQty(num(i.receivedQty ?? i.preparedQty ?? i.orderedQty), i.unit)}
-                </span>
-              </div>
-            ))}
+            {(detail?.items ?? []).map((i) => {
+              const received = num(i.receivedQty ?? i.preparedQty ?? i.orderedQty);
+              const addl = additionalByDish.get(i.dishId) ?? 0;
+              return (
+                <div key={i.id} className="flex items-center justify-between gap-2 border-b border-dashed border-border py-1.5 last:border-0">
+                  <span className="text-[13px]">{i.dishName ?? "Item"}</span>
+                  <span className="font-mono text-[12.5px] font-semibold tabular-nums text-muted-foreground">
+                    {fmtQty(received + addl, i.unit)}
+                    {addl > 0 && (
+                      <span className="ml-1 text-[10px] font-normal text-accent">(+{fmtQty(addl)} extra)</span>
+                    )}
+                  </span>
+                </div>
+              );
+            })}
           </div>
+          {(detail?.additionalFood ?? []).length > 0 && (
+            <div className="mt-2 space-y-1">
+              {detail!.additionalFood!.map((req, idx) => (
+                <div key={req.requestId} className="rounded-[9px] border border-dashed border-border px-2.5 py-1.5 text-[11px] text-muted-foreground">
+                  <span className="font-semibold text-foreground">Additional #{idx + 1}</span>
+                  {req.sourcePropertyName ? ` · from ${req.sourcePropertyName}` : ""}
+                  {" — "}
+                  {req.items.map((it) => `${it.dishName ?? "Item"} ${fmtQty(it.qty)}${it.unit}`).join(", ")}
+                </div>
+              ))}
+            </div>
+          )}
           {detail?.deliveryRemarks && (
             <div className="mt-2 text-xs text-muted-foreground">{detail.deliveryRemarks}</div>
           )}
+          {detail && <AdditionalFoodDialog order={detail} open={addlOpen} onOpenChange={setAddlOpen} />}
         </>
       ) : atGate && !ack ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-2.5 px-2 py-[18px] text-center">
