@@ -105,7 +105,7 @@ export const navGroups: NavGroup[] = [
     // they still gate those inline actions on Food Overview.
     { title: "Reports", href: "/food/reports", icon: BarChart3, module: "FOOD_REPORTS" },
     { title: "Waste Analytics", href: "/food/waste-analytics", icon: Recycle, module: "FOOD_REPORTS", hideFor: ["UNIT_LEAD", "FNB_MANAGER"] },
-    { title: "Settings", href: "/food/settings", icon: SlidersHorizontal, module: "FOOD_SETTINGS", hideFor: ["FNB_MANAGER"] },
+    { title: "Settings", href: "/food/settings", icon: SlidersHorizontal, module: "FOOD_SETTINGS" },
   ]},
   { title: "Audits", items: [
     { title: "Audit Dashboard", href: "/audits/dashboard", icon: Gauge, module: "AUDIT_DASHBOARD" },
